@@ -29,8 +29,7 @@ services:
       - DIFFCD_N_BATCHES=${DIFFCD_N_BATCHES:-25000}
       - DIFFCD_RESOLUTION=${DIFFCD_RESOLUTION:-384}
       - TEXTURE_SIZE=${TEXTURE_SIZE:-2048}
-    stdin_open: true
-    tty: true
+    # stdin_open/tty removed — dashboard is non-interactive
 
 volumes:
   model-cache:
