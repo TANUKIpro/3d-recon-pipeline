@@ -70,7 +70,7 @@
     <!-- Left: Viewport -->
     <section id="viewport-section">
       <!-- Stage 1: Extract Frames -->
-      <div id="stage-panel-1" class="stage-panel">
+      <div id="stage-panel-1" class="stage-panel active">
         <div class="stage-panel-empty">
           <p>Extracted frames will appear here after Stage 1 completes.</p>
         </div>
@@ -97,7 +97,7 @@
       </div>
 
       <!-- Stage 3: SAM2 Segmentation -->
-      <div id="stage-panel-3" class="stage-panel active">
+      <div id="stage-panel-3" class="stage-panel">
         <div id="sam2-container">
           <canvas id="sam2-canvas"></canvas>
           <div id="sam2-placeholder">
@@ -154,49 +154,56 @@
       <div id="config-panel">
         <h2 id="config-title">Configuration</h2>
 
-        <!-- Global: video selection (always visible) -->
-        <div class="config-section config-global">
+        <!-- Stage 1: input + easy controls -->
+        <div class="config-section" data-stages="1">
           <div class="form-group">
-            <label for="video-select">Video</label>
+            <label for="video-select">Input Video</label>
             <select id="video-select">
               <option value="">Loading...</option>
             </select>
             <div id="video-info"></div>
           </div>
-        </div>
-
-        <!-- Stage 1: Frame Interval -->
-        <div class="config-section" data-stages="1">
           <div class="form-group">
             <label for="cfg-frame-interval">Frame Interval</label>
             <input type="number" id="cfg-frame-interval" value="10" min="1" max="100">
           </div>
         </div>
 
-        <!-- Stage 1+2: Max Frames (shared with Pi3X) -->
+        <!-- Stage 1+2: shared advanced controls -->
         <div class="config-section" data-stages="1 2">
-          <div class="form-group">
-            <label for="cfg-max-frames">Max Frames</label>
-            <input type="number" id="cfg-max-frames" value="50" min="5" max="500">
-          </div>
+          <details class="config-advanced">
+            <summary>Advanced (High Impact)</summary>
+            <div class="config-advanced-body">
+              <div class="form-group">
+                <label for="cfg-max-frames">Max Frames</label>
+                <input type="number" id="cfg-max-frames" value="50" min="5" max="500">
+                <div class="config-note">Shared by Extract Frames and Pi3X.</div>
+              </div>
+            </div>
+          </details>
         </div>
 
-        <!-- Stage 2: Pi3X params -->
+        <!-- Stage 2: Pi3X easy controls -->
         <div class="config-section" data-stages="2">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfg-pixel-limit">Pixel Limit</label>
-              <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
-            </div>
-            <div class="form-group">
-              <label for="cfg-conf-threshold">Confidence</label>
-              <input type="number" id="cfg-conf-threshold" value="0.1" min="0" max="1" step="0.01">
-            </div>
-          </div>
           <div class="form-group">
-            <label for="cfg-edge-rtol">Edge RTol</label>
-            <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
+            <label for="cfg-pixel-limit">Pixel Limit</label>
+            <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
           </div>
+          <details class="config-advanced">
+            <summary>Advanced (High Impact)</summary>
+            <div class="config-advanced-body">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-conf-threshold">Confidence</label>
+                  <input type="number" id="cfg-conf-threshold" value="0.1" min="0" max="1" step="0.01">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-edge-rtol">Edge RTol</label>
+                  <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <!-- Stage 3: SAM2 Model -->
@@ -217,22 +224,27 @@
           <div class="config-auto-msg">This stage is fully automatic.</div>
         </div>
 
-        <!-- Stage 5: DiffCD params -->
+        <!-- Stage 5: DiffCD easy controls -->
         <div class="config-section" data-stages="5">
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfg-diffcd-batch">DiffCD Batch</label>
-              <input type="number" id="cfg-diffcd-batch" value="3000" min="100" step="100">
-            </div>
-            <div class="form-group">
-              <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
-              <input type="number" id="cfg-diffcd-nbatches" value="25000" min="1000" step="1000">
-            </div>
-          </div>
           <div class="form-group">
             <label for="cfg-diffcd-res">DiffCD Resolution</label>
             <input type="number" id="cfg-diffcd-res" value="384" min="64" step="64">
           </div>
+          <details class="config-advanced">
+            <summary>Advanced (High Impact)</summary>
+            <div class="config-advanced-body">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-diffcd-batch">DiffCD Batch</label>
+                  <input type="number" id="cfg-diffcd-batch" value="3000" min="100" step="100">
+                </div>
+                <div class="form-group">
+                  <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
+                  <input type="number" id="cfg-diffcd-nbatches" value="25000" min="1000" step="1000">
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <!-- Stage 6: Texture Size -->
