@@ -109,6 +109,44 @@ async def pipeline_videos():
     return JSONResponse({"videos": videos})
 
 
+@app.get("/api/pipeline/video-info")
+async def pipeline_video_info(path: str):
+    """Return metadata (fps, frames, resolution, duration) for a video file."""
+    target = Path(path).resolve()
+    input_dir = Path(INPUT_DIR).resolve()
+    try:
+        target.relative_to(input_dir)
+    except ValueError:
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    def _probe(p: str) -> dict:
+        import cv2
+        cap = cv2.VideoCapture(p)
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            duration = total_frames / fps if fps > 0 else 0
+            return {
+                "fps": round(fps, 2),
+                "total_frames": total_frames,
+                "width": width,
+                "height": height,
+                "duration": round(duration, 2),
+            }
+        finally:
+            cap.release()
+
+    try:
+        info = await asyncio.to_thread(_probe, str(target))
+        return JSONResponse(info)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/api/pipeline/start")
 async def pipeline_start(body: dict | None = None):
     if session.running:

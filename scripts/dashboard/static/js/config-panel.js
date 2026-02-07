@@ -5,6 +5,7 @@
 export class ConfigPanel {
   constructor() {
     this._videoSelect = document.getElementById('video-select');
+    this._videoInfo = document.getElementById('video-info');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
 
@@ -74,6 +75,7 @@ export class ConfigPanel {
         opt.textContent = `${v.name} (${v.size_mb} MB)`;
         this._videoSelect.appendChild(opt);
       }
+      this._onVideoChange();
     } catch (e) {
       this._videoSelect.innerHTML = '<option value="">Error loading videos</option>';
     }
@@ -94,5 +96,35 @@ export class ConfigPanel {
     this._cancelBtn.addEventListener('click', () => {
       if (this.onCancel) this.onCancel();
     });
+
+    this._videoSelect.addEventListener('change', () => this._onVideoChange());
+  }
+
+  async _onVideoChange() {
+    const path = this._videoSelect.value;
+    if (!path) {
+      this._videoInfo.textContent = '';
+      return;
+    }
+    this._videoInfo.textContent = 'Loading...';
+    try {
+      const res = await fetch(`/api/pipeline/video-info?path=${encodeURIComponent(path)}`);
+      if (!res.ok) {
+        this._videoInfo.textContent = 'Failed to load video info';
+        return;
+      }
+      const data = await res.json();
+      if (data.error) {
+        this._videoInfo.textContent = data.error;
+        return;
+      }
+      const mins = Math.floor(data.duration / 60);
+      const secs = (data.duration % 60).toFixed(1);
+      const dur = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+      this._videoInfo.textContent =
+        `${data.width}x${data.height} | ${data.fps} fps | ${data.total_frames} frames | ${dur}`;
+    } catch {
+      this._videoInfo.textContent = 'Failed to load video info';
+    }
   }
 }

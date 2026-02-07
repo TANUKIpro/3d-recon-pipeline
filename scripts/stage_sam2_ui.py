@@ -13,7 +13,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-import gradio as gr
 
 from vram_utils import log_vram
 
@@ -176,6 +175,8 @@ def run_sam2_interactive(
     Returns:
         Path to masks directory.
     """
+    import gradio as gr
+
     if model_type is None:
         model_type = os.environ.get("SAM2_MODEL", "large")
 
