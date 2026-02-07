@@ -128,6 +128,11 @@ def _vector_to_list(vec: np.ndarray) -> list[float]:
     return [float(v) for v in vec]
 
 
+def _safe_normalize_rows(vectors: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    return vectors / np.maximum(norms, 1e-12)
+
+
 def _auto_scale_frame_target(
     requested_frames: int,
     pixel_limit: int,
@@ -537,6 +542,13 @@ def _estimate_camera_plane_transform(
     if mean_down_norm > 1e-10:
         mean_down = mean_down / mean_down_norm
 
+    # Forward-axis sanity check: camera forward should generally point toward
+    # the orbit centroid for turntable capture.
+    to_center = _safe_normalize_rows(centroid[None, :] - centers)
+    forward_plus_score = float(np.mean(np.sum(forwards * to_center, axis=1)))
+    forward_minus_score = float(np.mean(np.sum((-forwards) * to_center, axis=1)))
+    inferred_forward_sign = 1 if forward_plus_score >= forward_minus_score else -1
+
     line_ratio = float(eigvals[1] / max(eigvals[0], 1e-12))
     planar_ratio = float(eigvals[2] / max(eigvals[1], 1e-12))
     radius = float(np.sqrt(max((eigvals[0] + eigvals[1]) * 0.5, 0.0)))
@@ -573,6 +585,11 @@ def _estimate_camera_plane_transform(
         "camera_centroid": _vector_to_list(centroid),
         "mean_camera_forward": _vector_to_list(mean_forward),
         "mean_camera_down": _vector_to_list(mean_down),
+        "forward_to_orbit_center_score_col_z": forward_plus_score,
+        "forward_to_orbit_center_score_neg_col_z": forward_minus_score,
+        "inferred_forward_axis": (
+            "camera +Z (col 2)" if inferred_forward_sign > 0 else "camera -Z (-col 2)"
+        ),
         "normal_sign_score": float(orientation_score),
         "normal_flipped_from_orientation": normal_flipped,
         "normal_sign_policy": (
@@ -889,7 +906,9 @@ def run_pi3x_inference(
             before = alignment_meta.get("camera_plane_normal_before")
             after = alignment_meta.get("camera_plane_normal_after")
             flipped = alignment_meta.get("normal_flipped_from_orientation")
+            inferred_forward_axis = alignment_meta.get("inferred_forward_axis")
             print("Applied camera-plane world alignment:")
+            print(f"  Inferred forward axis: {inferred_forward_axis}")
             print(f"  Normal sign flip (orientation): {flipped}")
             print(f"  Normal before: {before}")
             print(f"  Normal after:  {after}")
