@@ -52,6 +52,7 @@ _ALIGN_MIN_FRAMES = 4
 _ALIGN_MIN_LINE_RATIO = 1e-3
 _ALIGN_MAX_PLANAR_RATIO = 0.35
 _ALIGN_MIN_RADIUS = 1e-4
+_ALIGN_ORIENTATION_SCORE_EPS = 1e-4
 _TARGET_PLANE_NORMAL = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
 ProgressCallback = Callable[[float, str | None], None]
@@ -522,10 +523,47 @@ def _estimate_camera_plane_transform(
 
     major = eigvecs[:, 0]
     normal = eigvecs[:, 2]
+    normal_raw = normal.copy()
+    rotations = camera_poses[:, :3, :3].astype(np.float64)
+    forwards = rotations[:, :, 2]  # OpenCV camera +Z (forward)
+    downs = rotations[:, :, 1]     # OpenCV camera +Y (down)
+
+    mean_forward = forwards.mean(axis=0)
+    mean_down = downs.mean(axis=0)
+    mean_forward_norm = float(np.linalg.norm(mean_forward))
+    mean_down_norm = float(np.linalg.norm(mean_down))
+    if mean_forward_norm > 1e-10:
+        mean_forward = mean_forward / mean_forward_norm
+    if mean_down_norm > 1e-10:
+        mean_down = mean_down / mean_down_norm
 
     line_ratio = float(eigvals[1] / max(eigvals[0], 1e-12))
     planar_ratio = float(eigvals[2] / max(eigvals[1], 1e-12))
     radius = float(np.sqrt(max((eigvals[0] + eigvals[1]) * 0.5, 0.0)))
+
+    forward_dot = float(np.dot(mean_forward, normal)) if mean_forward_norm > 1e-10 else 0.0
+    down_dot = float(np.dot(mean_down, normal)) if mean_down_norm > 1e-10 else 0.0
+
+    # Disambiguate PCA normal sign with camera orientation assumption:
+    # the object is below the camera, so camera forward/down should point
+    # opposite to the chosen +Y plane normal on average.
+    orientation_score = 0.0
+    orientation_weight = 0.0
+    if mean_forward_norm > 1e-10:
+        orientation_score += 0.7 * forward_dot
+        orientation_weight += 0.7
+    if mean_down_norm > 1e-10:
+        orientation_score += 0.3 * down_dot
+        orientation_weight += 0.3
+    if orientation_weight > 0:
+        orientation_score /= orientation_weight
+
+    normal_flipped = False
+    if orientation_weight > 0 and orientation_score > _ALIGN_ORIENTATION_SCORE_EPS:
+        normal = -normal
+        forward_dot = -forward_dot
+        down_dot = -down_dot
+        normal_flipped = True
 
     meta.update({
         "eigenvalues": [float(v) for v in eigvals],
@@ -533,6 +571,16 @@ def _estimate_camera_plane_transform(
         "planar_ratio": planar_ratio,
         "orbit_radius_estimate": radius,
         "camera_centroid": _vector_to_list(centroid),
+        "mean_camera_forward": _vector_to_list(mean_forward),
+        "mean_camera_down": _vector_to_list(mean_down),
+        "normal_sign_score": float(orientation_score),
+        "normal_flipped_from_orientation": normal_flipped,
+        "normal_sign_policy": (
+            "object_below_camera => mean(camera_forward/down · plane_normal) <= 0"
+        ),
+        "forward_dot_plane_normal": float(forward_dot),
+        "down_dot_plane_normal": float(down_dot),
+        "camera_plane_normal_raw": _vector_to_list(normal_raw),
         "camera_plane_normal_before": _vector_to_list(normal),
     })
 
@@ -840,7 +888,9 @@ def run_pi3x_inference(
         if alignment_meta.get("applied"):
             before = alignment_meta.get("camera_plane_normal_before")
             after = alignment_meta.get("camera_plane_normal_after")
+            flipped = alignment_meta.get("normal_flipped_from_orientation")
             print("Applied camera-plane world alignment:")
+            print(f"  Normal sign flip (orientation): {flipped}")
             print(f"  Normal before: {before}")
             print(f"  Normal after:  {after}")
         else:
