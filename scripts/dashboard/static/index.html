@@ -62,14 +62,16 @@
   <main id="main">
     <!-- Left: Viewport -->
     <section id="viewport-section">
-      <div id="viewport-tabs">
-        <button class="tab active" data-tab="sam2">SAM2</button>
-        <button class="tab" data-tab="preview3d">3D Preview</button>
-        <button class="tab" data-tab="gallery">Frames</button>
+      <!-- Stage 1: Extract Frames -->
+      <div id="stage-panel-1" class="stage-panel">
+        <div class="stage-panel-empty">
+          <p>Extracted frames will appear here after Stage 1 completes.</p>
+        </div>
+        <div id="gallery-grid"></div>
       </div>
 
-      <!-- SAM2 Canvas Tab -->
-      <div id="tab-sam2" class="tab-content active">
+      <!-- Stage 2: SAM2 Segmentation -->
+      <div id="stage-panel-2" class="stage-panel active">
         <div id="sam2-container">
           <canvas id="sam2-canvas"></canvas>
           <div id="sam2-placeholder">
@@ -83,22 +85,54 @@
           <span id="sam2-click-info"></span>
           <button id="sam2-confirm" class="btn-primary" disabled>Confirm &amp; Propagate</button>
         </div>
-      </div>
-
-      <!-- 3D Preview Tab -->
-      <div id="tab-preview3d" class="tab-content">
-        <div id="three-container"></div>
-        <div id="preview-toolbar">
-          <select id="preview-file-select">
-            <option value="">Select file to preview...</option>
-          </select>
-          <button id="preview-load">Load</button>
+        <div id="sam2-verification" style="display:none">
+          <div class="sam2-verification-header">
+            <span>Mask verification (10 frames)</span>
+            <div class="sam2-verification-actions">
+              <button id="sam2-redo" class="btn-danger btn-small">Redo</button>
+              <button id="sam2-approve" class="btn-primary btn-small">Approve &amp; Continue</button>
+            </div>
+          </div>
+          <div id="sam2-verification-strip"></div>
         </div>
       </div>
 
-      <!-- Frame Gallery Tab -->
-      <div id="tab-gallery" class="tab-content">
-        <div id="gallery-grid"></div>
+      <!-- Stage 3: Pi3X 3D Reconstruction -->
+      <div id="stage-panel-3" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-3-empty">
+          <p>Pi3X point cloud + camera positions will appear here.</p>
+        </div>
+        <div id="three-container-3" class="three-container"></div>
+        <div id="pi3x-toolbar" style="display:none">
+          <label class="toolbar-check">
+            <input type="checkbox" id="pi3x-cameras-toggle" checked> Show cameras
+          </label>
+          <span id="pi3x-point-count" class="toolbar-info"></span>
+        </div>
+      </div>
+
+      <!-- Stage 4: Denoise -->
+      <div id="stage-panel-4" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-4-empty">
+          <p>Denoised point cloud will appear here after Stage 4 completes.</p>
+        </div>
+        <div id="three-container-4" class="three-container"></div>
+      </div>
+
+      <!-- Stage 5: DiffCD Mesh -->
+      <div id="stage-panel-5" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-5-empty">
+          <p>Mesh will appear here after Stage 5 completes.</p>
+        </div>
+        <div id="three-container-5" class="three-container"></div>
+      </div>
+
+      <!-- Stage 6: Texture Bake -->
+      <div id="stage-panel-6" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-6-empty">
+          <p>Textured mesh will appear here after Stage 6 completes.</p>
+        </div>
+        <div id="three-container-6" class="three-container"></div>
       </div>
     </section>
 
@@ -106,27 +140,50 @@
     <aside id="right-panel">
       <!-- Config Panel -->
       <div id="config-panel">
-        <h2>Configuration</h2>
-        <div class="form-group">
-          <label for="video-select">Video</label>
-          <select id="video-select">
-            <option value="">Loading...</option>
-          </select>
-          <div id="video-info"></div>
+        <h2 id="config-title">Configuration</h2>
+
+        <!-- Global: video selection (always visible) -->
+        <div class="config-section config-global">
+          <div class="form-group">
+            <label for="video-select">Video</label>
+            <select id="video-select">
+              <option value="">Loading...</option>
+            </select>
+            <div id="video-info"></div>
+          </div>
         </div>
-        <div class="form-row">
+
+        <!-- Stage 1: Frame Interval -->
+        <div class="config-section" data-stages="1">
           <div class="form-group">
             <label for="cfg-frame-interval">Frame Interval</label>
             <input type="number" id="cfg-frame-interval" value="10" min="1" max="100">
           </div>
+        </div>
+
+        <!-- Stage 1+3: Max Frames (shared) -->
+        <div class="config-section" data-stages="1 3">
           <div class="form-group">
             <label for="cfg-max-frames">Max Frames</label>
             <input type="number" id="cfg-max-frames" value="50" min="5" max="500">
           </div>
         </div>
 
-        <details class="advanced-config">
-          <summary>Advanced Settings</summary>
+        <!-- Stage 2: SAM2 Model -->
+        <div class="config-section" data-stages="2">
+          <div class="form-group">
+            <label for="cfg-sam2-model">SAM2 Model</label>
+            <select id="cfg-sam2-model">
+              <option value="large" selected>Large</option>
+              <option value="base">Base+</option>
+              <option value="small">Small</option>
+              <option value="tiny">Tiny</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Stage 3: Pi3X params -->
+        <div class="config-section" data-stages="3">
           <div class="form-row">
             <div class="form-group">
               <label for="cfg-pixel-limit">Pixel Limit</label>
@@ -137,21 +194,19 @@
               <input type="number" id="cfg-conf-threshold" value="0.1" min="0" max="1" step="0.01">
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfg-edge-rtol">Edge RTol</label>
-              <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
-            </div>
-            <div class="form-group">
-              <label for="cfg-sam2-model">SAM2 Model</label>
-              <select id="cfg-sam2-model">
-                <option value="large" selected>Large</option>
-                <option value="base">Base+</option>
-                <option value="small">Small</option>
-                <option value="tiny">Tiny</option>
-              </select>
-            </div>
+          <div class="form-group">
+            <label for="cfg-edge-rtol">Edge RTol</label>
+            <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
           </div>
+        </div>
+
+        <!-- Stage 4: no params (fully automatic) -->
+        <div class="config-section" data-stages="4">
+          <div class="config-auto-msg">This stage is fully automatic.</div>
+        </div>
+
+        <!-- Stage 5: DiffCD params -->
+        <div class="config-section" data-stages="5">
           <div class="form-row">
             <div class="form-group">
               <label for="cfg-diffcd-batch">DiffCD Batch</label>
@@ -162,25 +217,30 @@
               <input type="number" id="cfg-diffcd-nbatches" value="25000" min="1000" step="1000">
             </div>
           </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfg-diffcd-res">DiffCD Resolution</label>
-              <input type="number" id="cfg-diffcd-res" value="384" min="64" step="64">
-            </div>
-            <div class="form-group">
-              <label for="cfg-texture-size">Texture Size</label>
-              <select id="cfg-texture-size">
-                <option value="1024">1024</option>
-                <option value="2048" selected>2048</option>
-                <option value="4096">4096</option>
-              </select>
-            </div>
+          <div class="form-group">
+            <label for="cfg-diffcd-res">DiffCD Resolution</label>
+            <input type="number" id="cfg-diffcd-res" value="384" min="64" step="64">
           </div>
-        </details>
+        </div>
 
-        <div class="form-actions">
-          <button id="btn-start" class="btn-primary btn-large">Start Pipeline</button>
-          <button id="btn-cancel" class="btn-danger" disabled>Cancel</button>
+        <!-- Stage 6: Texture Size -->
+        <div class="config-section" data-stages="6">
+          <div class="form-group">
+            <label for="cfg-texture-size">Texture Size</label>
+            <select id="cfg-texture-size">
+              <option value="1024">1024</option>
+              <option value="2048" selected>2048</option>
+              <option value="4096">4096</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Global: action buttons (always visible) -->
+        <div class="config-section config-global">
+          <div class="form-actions">
+            <button id="btn-start" class="btn-primary btn-large">Start Pipeline</button>
+            <button id="btn-cancel" class="btn-danger" disabled>Cancel</button>
+          </div>
         </div>
       </div>
 
