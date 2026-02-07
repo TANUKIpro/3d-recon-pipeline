@@ -494,8 +494,83 @@ def _concat_results(
     return out
 
 
+def _infer_forward_axis_sign_from_results(results: dict) -> tuple[int, dict]:
+    """Infer whether camera forward is +col2 or -col2 from reconstructed points.
+
+    Uses the per-frame reconstructed world points: whichever axis direction
+    places more points in front of each camera is treated as forward.
+    """
+    meta: dict[str, object] = {
+        "source": "points_in_front",
+        "inferred_forward_axis": "camera +Z (col 2)",
+        "selected_sign": 1,
+    }
+
+    if "camera_poses" not in results or "points" not in results:
+        meta["reason"] = "missing_camera_poses_or_points"
+        return 1, meta
+
+    poses = results["camera_poses"][0]
+    points = results["points"][0]
+    if poses.shape[0] == 0 or points.shape[0] == 0:
+        meta["reason"] = "empty_camera_poses_or_points"
+        return 1, meta
+
+    sample_per_frame = 2048
+    mean_dot_plus_list: list[float] = []
+    mean_dot_minus_list: list[float] = []
+    frac_plus_positive_list: list[float] = []
+    frac_minus_positive_list: list[float] = []
+
+    for n in range(min(int(poses.shape[0]), int(points.shape[0]))):
+        pts = points[n].reshape(-1, 3)
+        if pts.shape[0] == 0:
+            continue
+        step = max(int(pts.shape[0] // sample_per_frame), 1)
+        pts = pts[::step][:sample_per_frame]
+
+        cam_center = poses[n, :3, 3]
+        z_axis = poses[n, :3, 2]
+        vec = pts - cam_center[None, :]
+        dot = (vec * z_axis[None, :]).sum(dim=1)
+        if dot.numel() == 0:
+            continue
+
+        mean_dot = float(dot.mean().item())
+        mean_dot_plus_list.append(mean_dot)
+        mean_dot_minus_list.append(-mean_dot)
+        frac_plus_positive_list.append(float((dot > 0).float().mean().item()))
+        frac_minus_positive_list.append(float((dot < 0).float().mean().item()))
+
+    if not mean_dot_plus_list:
+        meta["reason"] = "no_valid_samples"
+        return 1, meta
+
+    score_plus = float(np.mean(mean_dot_plus_list))
+    score_minus = float(np.mean(mean_dot_minus_list))
+    frac_plus = float(np.mean(frac_plus_positive_list))
+    frac_minus = float(np.mean(frac_minus_positive_list))
+    sign = 1 if score_plus >= score_minus else -1
+
+    meta.update({
+        "n_frames_evaluated": int(len(mean_dot_plus_list)),
+        "sample_per_frame": sample_per_frame,
+        "score_col_z": score_plus,
+        "score_neg_col_z": score_minus,
+        "positive_fraction_col_z": frac_plus,
+        "positive_fraction_neg_col_z": frac_minus,
+        "selected_sign": sign,
+        "inferred_forward_axis": (
+            "camera +Z (col 2)" if sign > 0 else "camera -Z (-col 2)"
+        ),
+    })
+    return sign, meta
+
+
 def _estimate_camera_plane_transform(
     camera_poses: np.ndarray,
+    forward_axis_sign: int = 1,
+    forward_axis_meta: dict | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None, dict]:
     """Estimate world alignment from camera orbit plane via PCA.
 
@@ -530,7 +605,9 @@ def _estimate_camera_plane_transform(
     normal = eigvecs[:, 2]
     normal_raw = normal.copy()
     rotations = camera_poses[:, :3, :3].astype(np.float64)
-    forwards = rotations[:, :, 2]  # OpenCV camera +Z (forward)
+    col2 = rotations[:, :, 2]
+    sign = 1 if int(forward_axis_sign) >= 0 else -1
+    forwards = col2 * sign
     downs = rotations[:, :, 1]     # OpenCV camera +Y (down)
 
     mean_forward = forwards.mean(axis=0)
@@ -545,9 +622,8 @@ def _estimate_camera_plane_transform(
     # Forward-axis sanity check: camera forward should generally point toward
     # the orbit centroid for turntable capture.
     to_center = _safe_normalize_rows(centroid[None, :] - centers)
-    forward_plus_score = float(np.mean(np.sum(forwards * to_center, axis=1)))
-    forward_minus_score = float(np.mean(np.sum((-forwards) * to_center, axis=1)))
-    inferred_forward_sign = 1 if forward_plus_score >= forward_minus_score else -1
+    forward_plus_score = float(np.mean(np.sum(col2 * to_center, axis=1)))
+    forward_minus_score = float(np.mean(np.sum((-col2) * to_center, axis=1)))
 
     line_ratio = float(eigvals[1] / max(eigvals[0], 1e-12))
     planar_ratio = float(eigvals[2] / max(eigvals[1], 1e-12))
@@ -588,8 +664,12 @@ def _estimate_camera_plane_transform(
         "forward_to_orbit_center_score_col_z": forward_plus_score,
         "forward_to_orbit_center_score_neg_col_z": forward_minus_score,
         "inferred_forward_axis": (
-            "camera +Z (col 2)" if inferred_forward_sign > 0 else "camera -Z (-col 2)"
+            "camera +Z (col 2)" if sign > 0 else "camera -Z (-col 2)"
         ),
+        "forward_axis_source": (
+            "points_in_front" if forward_axis_meta is not None else "default"
+        ),
+        "forward_axis_inference": forward_axis_meta or {},
         "normal_sign_score": float(orientation_score),
         "normal_flipped_from_orientation": normal_flipped,
         "normal_sign_policy": (
@@ -665,8 +745,13 @@ def _align_results_to_camera_plane(results: dict) -> tuple[dict, dict]:
             "target_plane_normal": _vector_to_list(_TARGET_PLANE_NORMAL),
         }
 
+    forward_axis_sign, forward_axis_meta = _infer_forward_axis_sign_from_results(results)
     poses_np = results["camera_poses"][0].detach().cpu().numpy()
-    R, t, meta = _estimate_camera_plane_transform(poses_np)
+    R, t, meta = _estimate_camera_plane_transform(
+        poses_np,
+        forward_axis_sign=forward_axis_sign,
+        forward_axis_meta=forward_axis_meta,
+    )
     if R is None or t is None:
         return results, meta
 
