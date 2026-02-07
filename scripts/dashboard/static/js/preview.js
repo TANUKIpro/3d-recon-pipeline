@@ -218,7 +218,14 @@ export class PreviewPanel {
           return { matrix: flat, frame_index: (data.frame_indices || [])[i] ?? i };
         });
 
-        cameraOverlay.create(THREE, stage.sceneRoot, poseArray);
+        let forwardSign = this._forwardSignFromAlignment(data.alignment);
+        if (forwardSign == null) {
+          const targetCenter = stage.centerOffset || new THREE.Vector3(0, 0, 0);
+          forwardSign = this._inferForwardSignFromTarget(poseArray, targetCenter);
+        }
+        console.info('Camera overlay forwardSign:', forwardSign, data.alignment?.inferred_forward_axis || 'heuristic');
+
+        cameraOverlay.create(THREE, stage.sceneRoot, poseArray, { forwardSign });
 
         // Apply same centering offset as point cloud
         if (stage.centerOffset) {
@@ -238,6 +245,46 @@ export class PreviewPanel {
     } catch (e) {
       console.error('Failed to load camera poses:', e);
     }
+  }
+
+  _forwardSignFromAlignment(alignment) {
+    if (!alignment || typeof alignment !== 'object') return null;
+    const axis = String(alignment.inferred_forward_axis || '').toLowerCase();
+    if (axis.includes('-z') || axis.includes('-col 2')) return -1;
+    if (axis.includes('+z') || axis.includes('+col 2') || axis.includes('col 2')) return 1;
+    return null;
+  }
+
+  _inferForwardSignFromTarget(poseArray, targetCenter) {
+    if (!poseArray || poseArray.length === 0) return 1;
+    const mat = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const basisX = new THREE.Vector3();
+    const basisY = new THREE.Vector3();
+    const basisZ = new THREE.Vector3();
+    const toTarget = new THREE.Vector3();
+    const center = targetCenter ? targetCenter.clone() : new THREE.Vector3(0, 0, 0);
+
+    let scorePlus = 0;
+    let scoreMinus = 0;
+    let used = 0;
+    for (const pose of poseArray) {
+      mat.fromArray(pose.matrix);
+      position.setFromMatrixPosition(mat);
+      toTarget.copy(center).sub(position);
+      const len = toTarget.length();
+      if (len < 1e-6) continue;
+      toTarget.divideScalar(len);
+
+      mat.extractBasis(basisX, basisY, basisZ);
+      basisZ.normalize();
+      scorePlus += basisZ.dot(toTarget);
+      scoreMinus += basisZ.clone().negate().dot(toTarget);
+      used += 1;
+    }
+
+    if (used === 0) return 1;
+    return scoreMinus > scorePlus ? -1 : 1;
   }
 
   /**
