@@ -69,7 +69,13 @@ config.onStart = async (cfg) => {
       alert('Start failed: ' + data.error);
       config.setRunning(false);
       setStatus('idle', 'Idle');
+      return;
     }
+    if (data.object_name) {
+      config.setObjectName(data.object_name);
+      log.append('stdout', `Target object: ${data.object_name}\n`);
+    }
+    config.refreshObjects();
   } catch (e) {
     alert('Start failed: ' + e.message);
     config.setRunning(false);
@@ -90,6 +96,9 @@ config.onCancel = async () => {
 ws.on('status', (msg) => {
   pipelineUI.updateAll(msg);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
+  if (msg.object_name) {
+    config.setObjectName(msg.object_name);
+  }
   if (msg.running) {
     config.setRunning(true);
     setStatus('running', 'Running');
@@ -185,6 +194,7 @@ ws.on('pi3x_preview_ready', () => {
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
+  config.refreshObjects();
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
@@ -193,6 +203,7 @@ ws.on('pipeline_complete', (msg) => {
 ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
+  config.refreshObjects();
   setStatus('error', 'Error');
   pipelineUI.stageFailed(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());

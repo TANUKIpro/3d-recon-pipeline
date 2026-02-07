@@ -44,6 +44,7 @@ class PipelineConfig:
 
     video_path: str = ""
     output_dir: str = "/data/output"
+    object_name: str = ""
     frame_interval: int = 10
     max_frames: int = 50
     pixel_limit: int = 255_000
@@ -194,6 +195,9 @@ class PipelineSession:
             "current_stage": int(self.current_stage),
             "running": self.running,
             "cancelled": self.cancelled,
+            "object_name": self.config.object_name,
+            "video_path": self.config.video_path,
+            "output_dir": self.config.output_dir,
             "elapsed": (time.time() - self.pipeline_start_time)
             if self.pipeline_start_time
             else None,
