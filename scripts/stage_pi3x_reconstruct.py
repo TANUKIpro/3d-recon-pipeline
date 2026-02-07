@@ -24,53 +24,64 @@ from vram_utils import (
 # Estimated Pi3X model weight size on GPU (encoder + decoder + heads)
 _ESTIMATED_MODEL_MB = 5500
 
-# (effective_free_vram_mb_lower, pixel_limit, max_frames)
+# OOM retry: shrink resolution instead of chunking (preserves cross-frame attention)
+_OOM_REDUCTION_FACTOR = 0.65   # multiply pixel_limit by this on each OOM retry
+_MIN_PIXEL_LIMIT = 50_000      # floor (~224x224)
+_MAX_OOM_RETRIES = 3           # max resolution-reduction retries
+
+# (effective_free_vram_mb_lower, frame_pixel_budget)
+# budget = N_frames * pixel_limit; auto-scale divides by actual N
 _VRAM_PROFILES = [
-    (14000, 255000, 50),
-    (12000, 200000, 35),
-    (10000, 150000, 20),
-    ( 8000, 120000, 15),
-    (    0,  80000, 10),
+    (14000, 12_750_000),  # 50f*255K, or 85f*150K
+    (12000, 10_000_000),  # 50f*200K, or 67f*150K
+    (10000,  7_500_000),  # 50f*150K, or 75f*100K
+    ( 8000,  4_800_000),  # 40f*120K, or 60f*80K
+    (    0,  2_400_000),  # 30f*80K,  or 48f*50K
 ]
 
 
-def _auto_scale_params(
-    pixel_limit: int, max_frames: int
-) -> tuple[int, int]:
-    """Scale down pixel_limit/max_frames based on available VRAM.
+def _auto_scale_params(pixel_limit: int, num_frames: int) -> int:
+    """Scale down pixel_limit based on available VRAM and frame count.
+
+    Uses frame-pixel budgets: each VRAM profile specifies a total budget
+    (N * pixel_limit), which is divided by the actual frame count.  This
+    ensures that more frames automatically get lower per-frame resolution,
+    keeping total activation memory within VRAM limits.
 
     Subtracts estimated model weight size from free VRAM before profile
     selection, since this function is called before model loading.
-    Only reduces values (never increases beyond the caller's request).
+    Only reduces the value (never increases beyond the caller's request).
     """
     free = get_free_vram_mb()
     if free is None:
-        return pixel_limit, max_frames
+        return pixel_limit
 
     effective_free = free - _ESTIMATED_MODEL_MB
     print(
         f"VRAM auto-scale: {free}MB free, "
-        f"{effective_free}MB effective (minus ~{_ESTIMATED_MODEL_MB}MB model)"
+        f"{effective_free}MB effective (minus ~{_ESTIMATED_MODEL_MB}MB model), "
+        f"{num_frames} frames"
     )
 
-    for threshold, prof_pixel, prof_frames in _VRAM_PROFILES:
+    for threshold, budget in _VRAM_PROFILES:
         if effective_free >= threshold:
-            new_pixel = min(pixel_limit, prof_pixel)
-            new_frames = min(max_frames, prof_frames)
-            if new_pixel != pixel_limit or new_frames != max_frames:
+            budget_pixel = budget // max(num_frames, 1)
+            new_pixel = min(pixel_limit, budget_pixel)
+            if new_pixel != pixel_limit:
                 print(
-                    f"VRAM auto-scale: effective {effective_free}MB → "
-                    f"PIXEL_LIMIT {pixel_limit}→{new_pixel}, "
-                    f"MAX_FRAMES {max_frames}→{new_frames}"
+                    f"VRAM auto-scale: effective {effective_free}MB, "
+                    f"budget {budget} / {num_frames} frames → "
+                    f"PIXEL_LIMIT {pixel_limit}→{new_pixel}"
                 )
             else:
                 print(
-                    f"VRAM auto-scale: effective {effective_free}MB → "
+                    f"VRAM auto-scale: effective {effective_free}MB, "
+                    f"budget {budget} / {num_frames} frames → "
                     f"no adjustment needed"
                 )
-            return new_pixel, new_frames
+            return new_pixel
 
-    return pixel_limit, max_frames
+    return pixel_limit
 
 
 def _run_inference_memory_efficient(
@@ -361,8 +372,6 @@ def run_pi3x_inference(
     if edge_rtol is None:
         edge_rtol = float(os.environ.get("EDGE_RTOL", "0.03"))
 
-    pixel_limit, max_frames = _auto_scale_params(pixel_limit, max_frames)
-
     from pi3.utils.basic import load_images_as_tensor, write_ply
     from pi3.models.pi3x import Pi3X
     from pi3.utils.geometry import depth_edge
@@ -370,37 +379,68 @@ def run_pi3x_inference(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # --- Load frames ---
-    log_vram("before Pi3X load")
-    imgs = load_images_as_tensor(
-        str(frames_dir), interval=1, PIXEL_LIMIT=pixel_limit,
-    )
-
-    if imgs.numel() == 0 or imgs.shape[0] < 2:
+    # --- Count frames before auto-scale (need N for budget calculation) ---
+    frame_files = sorted(Path(frames_dir).glob("*.jpg"))
+    num_frames = len(frame_files)
+    if num_frames < 2:
         raise RuntimeError("Need at least 2 frames for reconstruction.")
-    if imgs.shape[0] > max_frames:
-        print(f"Limiting to {max_frames} frames (from {imgs.shape[0]})")
-        imgs = imgs[:max_frames]
 
-    N, _, H, W = imgs.shape
-    print(f"Pi3X input: {N} frames, {H}x{W} pixels")
+    # --- VRAM-aware pixel_limit (frame-count aware) ---
+    pixel_limit = _auto_scale_params(pixel_limit, num_frames)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    imgs = imgs.to(device)
-
-    # --- Load and run model ---
-    print("Loading Pi3X model...")
-    model = Pi3X.from_pretrained("yyfz233/Pi3X").to(device).eval()
-    log_vram("after Pi3X load")
-
-    print(f"Running Pi3X inference on {N} frames...")
     if device.type == "cuda":
         capability = torch.cuda.get_device_capability()[0]
         dtype = torch.bfloat16 if capability >= 8 else torch.float16
     else:
         dtype = None
 
-    results = _run_inference_memory_efficient(model, imgs, device, dtype)
+    # --- Load model once (outside retry loop) ---
+    log_vram("before Pi3X load")
+    print("Loading Pi3X model...")
+    model = Pi3X.from_pretrained("yyfz233/Pi3X").to(device).eval()
+    log_vram("after Pi3X load")
+
+    # --- OOM retry loop: reduce resolution instead of chunking ---
+    current_pixel_limit = pixel_limit
+    for attempt in range(_MAX_OOM_RETRIES + 1):
+        imgs = load_images_as_tensor(
+            str(frames_dir), interval=1, PIXEL_LIMIT=current_pixel_limit,
+        )
+        if imgs.numel() == 0 or imgs.shape[0] < 2:
+            raise RuntimeError("Need at least 2 frames for reconstruction.")
+
+        N, _, H, W = imgs.shape
+        print(f"Pi3X input: {N} frames, {H}x{W} pixels (pixel_limit={current_pixel_limit})")
+        imgs = imgs.to(device)
+
+        print(f"Running Pi3X inference on {N} frames...")
+        try:
+            model.to(device)
+            results = _run_inference_memory_efficient(model, imgs, device, dtype)
+            break  # success
+        except torch.cuda.OutOfMemoryError:
+            del imgs
+            model.cpu()
+            torch.cuda.empty_cache()
+
+            if attempt >= _MAX_OOM_RETRIES:
+                raise RuntimeError(
+                    f"CUDA OOM after {_MAX_OOM_RETRIES} resolution reductions "
+                    f"(final pixel_limit={current_pixel_limit}). "
+                    f"Not enough VRAM for {num_frames} frames."
+                )
+
+            new_limit = max(
+                int(current_pixel_limit * _OOM_REDUCTION_FACTOR),
+                _MIN_PIXEL_LIMIT,
+            )
+            print(
+                f"CUDA OOM at pixel_limit={current_pixel_limit}. "
+                f"Reducing resolution: {current_pixel_limit}→{new_limit} "
+                f"(attempt {attempt + 1}/{_MAX_OOM_RETRIES})"
+            )
+            current_pixel_limit = new_limit
 
     print("Pi3X inference complete")
     log_vram("after Pi3X inference")
