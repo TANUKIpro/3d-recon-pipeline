@@ -14,7 +14,44 @@ import cv2
 import numpy as np
 import torch
 
-from vram_utils import cleanup_pytorch_vram, log_vram
+from vram_utils import cleanup_pytorch_vram, get_free_vram_mb, log_vram
+
+# (free_vram_mb_lower, pixel_limit, max_frames)
+_VRAM_PROFILES = [
+    (14000, 255000, 50),
+    (12000, 200000, 35),
+    (10000, 150000, 20),
+    ( 8000, 120000, 15),
+    (    0,  80000, 10),
+]
+
+
+def _auto_scale_params(
+    pixel_limit: int, max_frames: int
+) -> tuple[int, int]:
+    """Scale down pixel_limit/max_frames based on available VRAM.
+
+    Only reduces values (never increases beyond the caller's request).
+    """
+    free = get_free_vram_mb()
+    if free is None:
+        return pixel_limit, max_frames
+
+    for threshold, prof_pixel, prof_frames in _VRAM_PROFILES:
+        if free >= threshold:
+            new_pixel = min(pixel_limit, prof_pixel)
+            new_frames = min(max_frames, prof_frames)
+            if new_pixel != pixel_limit or new_frames != max_frames:
+                print(
+                    f"VRAM auto-scale: {free}MB free → "
+                    f"PIXEL_LIMIT {pixel_limit}→{new_pixel}, "
+                    f"MAX_FRAMES {max_frames}→{new_frames}"
+                )
+            else:
+                print(f"VRAM auto-scale: {free}MB free → no adjustment needed")
+            return new_pixel, new_frames
+
+    return pixel_limit, max_frames
 
 
 def run_pi3x(
@@ -48,6 +85,8 @@ def run_pi3x(
         conf_threshold = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.1"))
     if edge_rtol is None:
         edge_rtol = float(os.environ.get("EDGE_RTOL", "0.03"))
+
+    pixel_limit, max_frames = _auto_scale_params(pixel_limit, max_frames)
 
     from pi3.utils.basic import load_images_as_tensor, write_ply
     from pi3.models.pi3x import Pi3X

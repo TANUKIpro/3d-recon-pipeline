@@ -312,7 +312,25 @@ def run_sam2_interactive(
     print("SAM2 segmentation complete, shutting down UI...")
     demo.close()
 
-    return session.mask_dir
+    # --- Full VRAM cleanup ---
+    # Save return value before destroying session
+    mask_dir_result = session.mask_dir
+
+    # Ensure model is released (idempotent)
+    session.release_model()
+
+    # Break closure references that Gradio may still hold
+    del handle_click, clear_clicks, propagate_and_finish
+    del session
+
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    log_vram("after SAM2 full cleanup")
+
+    return mask_dir_result
 
 
 if __name__ == "__main__":
