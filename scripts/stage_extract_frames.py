@@ -6,8 +6,21 @@ Adapted from im2pc/host/pi3x_sam2_cli.py::extract_frames().
 import os
 import subprocess
 from pathlib import Path
+from typing import Callable
 
 import cv2
+
+ProgressCallback = Callable[[float, str | None], None]
+
+
+def _emit_progress(
+    progress_cb: ProgressCallback | None,
+    progress: float,
+    detail: str | None = None,
+) -> None:
+    if progress_cb is None:
+        return
+    progress_cb(max(0.0, min(100.0, float(progress))), detail)
 
 
 def _detect_rotation(cap: cv2.VideoCapture, video_path: str) -> int:
@@ -69,6 +82,7 @@ def extract_frames(
     output_dir: str,
     frame_interval: int | None = None,
     max_frames: int | None = None,
+    progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Extract frames from a video at regular intervals.
 
@@ -100,6 +114,7 @@ def extract_frames(
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
     print(f"Video: {total_frames} frames, {fps:.1f} fps")
+    _emit_progress(progress_cb, 2.0, "Inspecting video metadata")
 
     # Detect and handle rotation metadata
     rotation = _detect_rotation(cap, str(video_path))
@@ -109,6 +124,11 @@ def extract_frames(
 
     frame_idx = 0
     saved_idx = 0
+    expected_reads = total_frames
+    if frame_interval > 0 and max_frames > 0:
+        expected_reads = min(total_frames, (max_frames - 1) * frame_interval + 1)
+    expected_reads = max(expected_reads, 1)
+    emit_every = max(1, expected_reads // 40)
 
     while True:
         ret, frame = cap.read()
@@ -121,10 +141,26 @@ def extract_frames(
             cv2.imwrite(str(frame_path), frame)
             saved_idx += 1
             if saved_idx >= max_frames:
+                reads = frame_idx + 1
+                pct = min(99.0, (reads / expected_reads) * 100.0)
+                _emit_progress(
+                    progress_cb,
+                    pct,
+                    f"Extracting frames ({saved_idx}/{max_frames})",
+                )
                 break
+        reads = frame_idx + 1
+        if reads % emit_every == 0 or reads >= expected_reads:
+            pct = min(99.0, (reads / expected_reads) * 100.0)
+            _emit_progress(
+                progress_cb,
+                pct,
+                f"Extracting frames ({saved_idx}/{max_frames})",
+            )
         frame_idx += 1
 
     cap.release()
+    _emit_progress(progress_cb, 100.0, f"Extracted {saved_idx} frames")
     print(f"Extracted {saved_idx} frames to {frames_dir}")
     return frames_dir
 
