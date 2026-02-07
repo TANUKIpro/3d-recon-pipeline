@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>im2pc-pipeline Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header id="header">
+    <div class="header-left">
+      <h1>im2pc-pipeline</h1>
+      <span class="header-subtitle">RGB Video → Textured 3D Mesh</span>
+    </div>
+    <div class="header-right">
+      <span id="vram-badge" class="badge" title="GPU VRAM">VRAM: --</span>
+      <span id="status-badge" class="badge badge-idle">Idle</span>
+    </div>
+  </header>
+
+  <!-- Stage Progress Bar -->
+  <nav id="stage-bar">
+    <div class="stage-pill" data-stage="1">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Extract Frames</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector"></div>
+    <div class="stage-pill" data-stage="2">
+      <span class="stage-dot"></span>
+      <span class="stage-label">SAM2</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector"></div>
+    <div class="stage-pill" data-stage="3">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Pi3X</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector"></div>
+    <div class="stage-pill" data-stage="4">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Denoise</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector"></div>
+    <div class="stage-pill" data-stage="5">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Mesh</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector"></div>
+    <div class="stage-pill" data-stage="6">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Texture</span>
+      <span class="stage-time"></span>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main id="main">
+    <!-- Left: Viewport -->
+    <section id="viewport-section">
+      <div id="viewport-tabs">
+        <button class="tab active" data-tab="sam2">SAM2</button>
+        <button class="tab" data-tab="preview3d">3D Preview</button>
+        <button class="tab" data-tab="gallery">Frames</button>
+      </div>
+
+      <!-- SAM2 Canvas Tab -->
+      <div id="tab-sam2" class="tab-content active">
+        <div id="sam2-container">
+          <canvas id="sam2-canvas"></canvas>
+          <div id="sam2-placeholder">
+            <p>SAM2 canvas will activate when Stage 2 begins.</p>
+            <p>Click on the object to segment it.</p>
+          </div>
+        </div>
+        <div id="sam2-toolbar">
+          <button id="sam2-undo" disabled>Undo</button>
+          <button id="sam2-clear" disabled>Clear</button>
+          <span id="sam2-click-info"></span>
+          <button id="sam2-confirm" class="btn-primary" disabled>Confirm &amp; Propagate</button>
+        </div>
+      </div>
+
+      <!-- 3D Preview Tab -->
+      <div id="tab-preview3d" class="tab-content">
+        <div id="three-container"></div>
+        <div id="preview-toolbar">
+          <select id="preview-file-select">
+            <option value="">Select file to preview...</option>
+          </select>
+          <button id="preview-load">Load</button>
+        </div>
+      </div>
+
+      <!-- Frame Gallery Tab -->
+      <div id="tab-gallery" class="tab-content">
+        <div id="gallery-grid"></div>
+      </div>
+    </section>
+
+    <!-- Right: Config + Log -->
+    <aside id="right-panel">
+      <!-- Config Panel -->
+      <div id="config-panel">
+        <h2>Configuration</h2>
+        <div class="form-group">
+          <label for="video-select">Video</label>
+          <select id="video-select">
+            <option value="">Loading...</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="cfg-frame-interval">Frame Interval</label>
+            <input type="number" id="cfg-frame-interval" value="10" min="1" max="100">
+          </div>
+          <div class="form-group">
+            <label for="cfg-max-frames">Max Frames</label>
+            <input type="number" id="cfg-max-frames" value="50" min="5" max="500">
+          </div>
+        </div>
+
+        <details class="advanced-config">
+          <summary>Advanced Settings</summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cfg-pixel-limit">Pixel Limit</label>
+              <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
+            </div>
+            <div class="form-group">
+              <label for="cfg-conf-threshold">Confidence</label>
+              <input type="number" id="cfg-conf-threshold" value="0.1" min="0" max="1" step="0.01">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cfg-edge-rtol">Edge RTol</label>
+              <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
+            </div>
+            <div class="form-group">
+              <label for="cfg-sam2-model">SAM2 Model</label>
+              <select id="cfg-sam2-model">
+                <option value="large" selected>Large</option>
+                <option value="base">Base+</option>
+                <option value="small">Small</option>
+                <option value="tiny">Tiny</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cfg-diffcd-batch">DiffCD Batch</label>
+              <input type="number" id="cfg-diffcd-batch" value="3000" min="100" step="100">
+            </div>
+            <div class="form-group">
+              <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
+              <input type="number" id="cfg-diffcd-nbatches" value="25000" min="1000" step="1000">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="cfg-diffcd-res">DiffCD Resolution</label>
+              <input type="number" id="cfg-diffcd-res" value="384" min="64" step="64">
+            </div>
+            <div class="form-group">
+              <label for="cfg-texture-size">Texture Size</label>
+              <select id="cfg-texture-size">
+                <option value="1024">1024</option>
+                <option value="2048" selected>2048</option>
+                <option value="4096">4096</option>
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <div class="form-actions">
+          <button id="btn-start" class="btn-primary btn-large">Start Pipeline</button>
+          <button id="btn-cancel" class="btn-danger" disabled>Cancel</button>
+        </div>
+      </div>
+
+      <!-- Log Viewer -->
+      <div id="log-panel">
+        <div id="log-header">
+          <h2>Log</h2>
+          <button id="log-clear" class="btn-small">Clear</button>
+        </div>
+        <div id="log-container">
+          <pre id="log-content"></pre>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Scripts -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

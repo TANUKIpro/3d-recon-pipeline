@@ -13,7 +13,7 @@ SAM2 によるインタラクティブ物体セグメンテーション、Pi3X �
   │    動画から等間隔にフレームを JPEG 抽出
   │
   ├─ Stage 2: SAM2 セグメンテーション (GPU)
-  │    Gradio UI で対象物体をクリック → 全フレームにマスク伝播
+  │    Web ダッシュボードで対象物体をクリック → 全フレームにマスク伝播
   │
   ├─ Stage 3: Pi3X 3D再構成 (GPU)
   │    全フレーム一括推論 → トリプルフィルタ (信頼度 + 深度エッジ + SAM2マスク)
@@ -51,56 +51,83 @@ docker compose build
 # 3. 入力動画を配置
 cp /path/to/video.mp4 data/input/
 
-# 4. パイプライン実行
-./run.sh data/input/video.mp4
+# 4. Web ダッシュボード起動
+docker compose up
 ```
 
-Stage 2 で Gradio UI が起動するので、ブラウザで http://localhost:7860 を開き、対象物体をクリックして「Confirm & Propagate」を押す。残りのステージは自動で進行する。
+ブラウザで **http://localhost:7860** を開くと Web ダッシュボードが表示される。
+
+1. **Video** ドロップダウンで動画を選択
+2. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
+3. **Start Pipeline** をクリック
+4. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
+5. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
+6. ログ・進捗・3Dプレビューをリアルタイムで確認
 
 ## 使い方
 
-### 基本実行
+### Web ダッシュボード (推奨)
 
 ```bash
-# run.sh 経由 (推奨)
-./run.sh data/input/video.mp4
+# ダッシュボード起動
+docker compose up
 
-# docker compose 直接
-docker compose run --rm --service-ports \
-  pipeline /app/scripts/pipeline.py /data/input/video.mp4
+# バックグラウンド起動
+docker compose up -d
+
+# ログ確認 (バックグラウンド時)
+docker compose logs -f
+
+# 停止
+docker compose down
 ```
 
-### パラメータ変更
+ブラウザで http://localhost:7860 を開き、GUI から全操作を行う。
 
-環境変数で各ステージの挙動を制御できる:
+**ダッシュボード機能:**
+
+- **動画選択**: `/data/input/` に配置した動画ファイルを自動検出
+- **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
+- **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
+- **進捗バー**: 6ステージの状態をリアルタイム表示 (pending → running → complete)
+- **ログビューア**: WebSocket 経由でリアルタイムストリーミング
+- **3D プレビュー**: three.js による点群・メッシュのインタラクティブ表示 (回転・ズーム)
+- **フレームギャラリー**: 抽出フレーム・マスクのサムネイル一覧
+
+### CLI 実行 (後方互換)
+
+従来の CLI パイプラインも引き続き利用可能:
 
 ```bash
+# ENTRYPOINT を上書きして CLI モードで実行
 docker compose run --rm --service-ports \
+  --entrypoint python3 \
+  pipeline /app/scripts/pipeline.py /data/input/video.mp4
+
+# パラメータ指定
+docker compose run --rm --service-ports \
+  --entrypoint python3 \
   -e MAX_FRAMES=20 \
   -e PIXEL_LIMIT=150000 \
-  -e SAM2_MODEL=small \
-  -e DIFFCD_RESOLUTION=384 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4
-```
 
-### 途中再開
-
-中断後にステージ N から再開:
-
-```bash
+# 途中再開 (ステージ N から)
 docker compose run --rm --service-ports \
+  --entrypoint python3 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4 --skip-to 4
 ```
+
+> **注意**: CLI モードでは Stage 2 で Gradio UI が起動する (従来と同じ動作)。
 
 ### 個別ステージ実行
 
 ```bash
 # フレーム抽出のみ
-docker compose run --rm pipeline \
+docker compose run --rm --entrypoint python3 pipeline \
   /app/scripts/stage_extract_frames.py /data/input/video.mp4 /data/output
 
 # デノイズのみ
-docker compose run --rm pipeline \
+docker compose run --rm --entrypoint python3 pipeline \
   /app/scripts/stage_denoise.py /data/output/object.ply /data/output
 ```
 
@@ -162,6 +189,30 @@ data/output/
 
 ## アーキテクチャ
 
+### Web ダッシュボード
+
+```
+┌─ Browser (localhost:7860) ─────────────────────────────┐
+│  Vanilla HTML/CSS/JS (ビルドツール不要)                   │
+│  WebSocket ←→ ログ・進捗リアルタイム配信                   │
+│  REST API  ←→ パイプライン制御 / SAM2 / プレビュー        │
+│  HTML5 Canvas ← SAM2 クリック操作                        │
+│  three.js (CDN) ← 3D プレビュー                          │
+└────────────────────────────────────────────────────────┘
+         ↕ HTTP / WebSocket (port 7860)
+┌─ Docker Container ─────────────────────────────────────┐
+│  FastAPI + Uvicorn                                      │
+│  ├─ /api/pipeline/*  パイプライン制御                     │
+│  ├─ /api/sam2/*      SAM2 操作 (click → mask PNG)       │
+│  ├─ /api/preview/*   出力ファイルサービング                │
+│  ├─ /ws              WebSocket (ログ + 進捗)             │
+│  └─ /                静的ファイル (index.html)            │
+│                                                          │
+│  Pipeline Runner (asyncio.to_thread で各ステージ実行)     │
+│  └─ 既存 stage_*.py をそのまま import して呼び出し         │
+└────────────────────────────────────────────────────────┘
+```
+
 ### トリプルフィルタ (Stage 3)
 
 Pi3X は全画像に対して推論し、3段階のフィルタで対象物体の点群を抽出する:
@@ -197,7 +248,7 @@ RTX 4090 Laptop (16GB) での実測値:
 nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 ├── Python 3.11 + system deps (ffmpeg, OpenGL)
 ├── PyTorch 2.5+ (CUDA 12.1 wheels)
-├── Python deps (numpy<2.0, opencv, gradio, scipy, trimesh, xatlas, ...)
+├── Python deps (numpy<2.0, opencv, fastapi, uvicorn, scipy, trimesh, xatlas, ...)
 ├── wandb + scikit-image (DiffCD 依存)
 ├── SAM2 (editable install, SAM2_BUILD_CUDA=0)
 ├── Pi3X (PYTHONPATH 経由)
@@ -212,20 +263,28 @@ nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 ### Pi3X で OOM が発生する
 
-`MAX_FRAMES` と `PIXEL_LIMIT` を下げる:
+`MAX_FRAMES` と `PIXEL_LIMIT` を下げる。ダッシュボードの Advanced Settings で変更するか、CLI の場合:
 
 ```bash
 docker compose run --rm --service-ports \
+  --entrypoint python3 \
   -e MAX_FRAMES=15 -e PIXEL_LIMIT=120000 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4
 ```
 
-### SAM2 の Gradio UI に接続できない
+### ダッシュボードに接続できない
 
-`--service-ports` フラグを忘れていないか確認。`run.sh` には含まれている。
+`docker compose up` でコンテナが正常起動しているか確認:
 
 ```bash
-docker compose run --rm --service-ports pipeline ...
+docker compose logs --tail 20
+# "Uvicorn running on http://0.0.0.0:7860" が表示されていれば OK
+```
+
+ポート 7860 が他のプロセスで使用されていないか確認:
+
+```bash
+lsof -i :7860
 ```
 
 ### DiffCD が遅い / 解像度を上げたい

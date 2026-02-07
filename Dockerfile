@@ -27,7 +27,9 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
     "numpy>=1.24.0,<2.0" \
     einops timm \
-    "gradio>=4.0" \
+    "fastapi>=0.104.0" \
+    "uvicorn[standard]>=0.24.0" \
+    python-multipart \
     "opencv-python-headless>=4.8.0" \
     "plyfile>=1.0.0" \
     "scipy>=1.10.0" \
@@ -79,5 +81,5 @@ ENV PYTHONPATH="/opt/pi3:/opt/sam2:${PYTHONPATH}"
 
 EXPOSE 7860
 
-ENTRYPOINT ["python3"]
-CMD ["/app/scripts/pipeline.py", "--help"]
+ENTRYPOINT ["python3", "-m", "uvicorn"]
+CMD ["scripts.dashboard.app:app", "--host", "0.0.0.0", "--port", "7860"]
