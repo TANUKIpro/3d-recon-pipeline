@@ -1,6 +1,6 @@
 /**
  * Main dashboard controller — wires WebSocket, pipeline UI, SAM2 canvas,
- * config panel, log viewer, and 3D preview together.
+ * config panel, log viewer, 3D preview, and stage-panel switching together.
  */
 
 import { WsManager } from './ws.js';
@@ -9,6 +9,9 @@ import { SAM2Canvas } from './sam2-canvas.js';
 import { ConfigPanel } from './config-panel.js';
 import { LogViewer } from './log-viewer.js';
 import { PreviewPanel } from './preview.js';
+import { StageController } from './stage-controller.js';
+import { SAM2Verification } from './sam2-verification.js';
+import { CameraOverlay } from './camera-overlay.js';
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -18,32 +21,27 @@ const sam2 = new SAM2Canvas();
 const config = new ConfigPanel();
 const log = new LogViewer();
 const preview = new PreviewPanel();
+const stageCtrl = new StageController();
+const sam2Verify = new SAM2Verification();
+const cameraOverlay = new CameraOverlay();
 
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 
-// ── Tab switching ────────────────────────────────────────────
+// ── Stage-activated event: lazy-init 3D ─────────────────────
 
-const tabs = document.querySelectorAll('#viewport-tabs .tab');
-const tabContents = document.querySelectorAll('.tab-content');
+document.addEventListener('stage-activated', async (e) => {
+  const stage = e.detail.stage;
 
-tabs.forEach(tab => {
-  tab.addEventListener('click', () => {
-    const target = tab.dataset.tab;
-    tabs.forEach(t => t.classList.remove('active'));
-    tabContents.forEach(tc => tc.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(`tab-${target}`).classList.add('active');
+  // Config panel: show stage-specific params
+  config.setActiveStage(stage);
 
-    // Lazy-init 3D scene when tab is first shown
-    if (target === 'preview3d') {
-      preview.init3D();
-      preview.refreshFileList();
+  // For 3D stages (3-6), activate the renderer if scene is initialized
+  if (stage >= 3 && stage <= 6) {
+    if (preview._stages?.[stage]?.initialized) {
+      preview.activateStage(stage);
     }
-    if (target === 'gallery') {
-      preview.loadGallery();
-    }
-  });
+  }
 });
 
 // ── Config panel callbacks ───────────────────────────────────
@@ -52,6 +50,7 @@ config.onStart = async (cfg) => {
   try {
     config.setRunning(true);
     pipelineUI.reset();
+    sam2Verify.hide();
     setStatus('running', 'Running');
 
     const res = await fetch('/api/pipeline/start', {
@@ -91,6 +90,8 @@ ws.on('status', (msg) => {
 });
 
 ws.on('stage_start', (msg) => {
+  stageCtrl.activateStage(msg.stage);
+  stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
   log.append('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`);
 });
@@ -99,17 +100,29 @@ ws.on('stage_complete', (msg) => {
   pipelineUI.stageComplete(msg.stage, msg.elapsed);
   if (msg.error) {
     pipelineUI.stageFailed(msg.stage);
+    stageCtrl.setStageState(msg.stage, 'failed');
+    return;
+  }
+  stageCtrl.setStageState(msg.stage, 'complete');
+
+  // Auto-load results per stage
+  if (msg.stage === 1) {
+    // Show gallery placeholder hidden, load frames
+    const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
+    if (empty) empty.classList.add('hidden');
+    preview.loadGallery();
+  } else if (msg.stage === 3) {
+    preview.loadPi3xResults(cameraOverlay);
+  } else if (msg.stage >= 4 && msg.stage <= 6) {
+    preview.loadStageResult(msg.stage);
   }
 });
 
 ws.on('sam2_ready', (msg) => {
   pipelineUI.stageInteractive(2);
   sam2.activate(msg.frame_count, msg.width, msg.height);
-  // Auto-switch to SAM2 tab
-  tabs.forEach(t => t.classList.remove('active'));
-  tabContents.forEach(tc => tc.classList.remove('active'));
-  document.querySelector('[data-tab="sam2"]').classList.add('active');
-  document.getElementById('tab-sam2').classList.add('active');
+  sam2Verify.hide();
+  stageCtrl.activateStage(2);
   log.append('stdout', `SAM2 ready: ${msg.frame_count} frames (${msg.width}x${msg.height})\n`);
   log.append('stdout', 'Click on the object to segment. Right-click for negative points.\n');
 });
@@ -123,19 +136,24 @@ ws.on('sam2_propagate_progress', (msg) => {
   log.append('stdout', `  Propagating frame ${msg.frame}/${msg.total}\n`);
 });
 
+ws.on('sam2_verification_ready', (msg) => {
+  sam2Verify.show(msg.frame_count);
+  log.append('stdout', 'Mask propagation complete. Please verify the results.\n');
+});
+
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
+  config.setActiveStage(null);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
-  // Refresh preview file list
-  preview.refreshFileList();
-  preview.loadGallery();
 });
 
 ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
+  config.setActiveStage(null);
   setStatus('error', 'Error');
   pipelineUI.stageFailed(msg.stage);
+  stageCtrl.setStageState(msg.stage, 'failed');
   log.append('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`);
 });
 

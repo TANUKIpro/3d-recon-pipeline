@@ -4,6 +4,10 @@
 
 export class ConfigPanel {
   constructor() {
+    this._panel = document.getElementById('config-panel');
+    this._title = document.getElementById('config-title');
+    this._sections = document.querySelectorAll('.config-section[data-stages]');
+
     this._videoSelect = document.getElementById('video-select');
     this._videoInfo = document.getElementById('video-info');
     this._startBtn = document.getElementById('btn-start');
@@ -37,6 +41,26 @@ export class ConfigPanel {
     for (const inp of Object.values(this._inputs)) {
       inp.disabled = running;
     }
+  }
+
+  setActiveStage(stage) {
+    if (stage === null) {
+      this._panel.classList.remove('stage-filtered');
+      this._sections.forEach(s => s.classList.remove('stage-visible'));
+      this._title.innerHTML = 'Configuration';
+      return;
+    }
+
+    this._panel.classList.add('stage-filtered');
+    const stageStr = String(stage);
+    const names = { 1:'Extract Frames', 2:'SAM2', 3:'Pi3X', 4:'Denoise', 5:'DiffCD Mesh', 6:'Texture Bake' };
+
+    this._sections.forEach(s => {
+      const stages = s.dataset.stages.split(/\s+/);
+      s.classList.toggle('stage-visible', stages.includes(stageStr));
+    });
+
+    this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${names[stage] || 'Stage '+stage}</span>`;
   }
 
   getConfig() {
