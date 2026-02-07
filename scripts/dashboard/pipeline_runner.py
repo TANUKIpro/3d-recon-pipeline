@@ -87,6 +87,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         session.poses_path = str(Path(output_dir) / "camera_poses.json")
         session.pi3x_cache_path = str(Path(output_dir) / "pi3x_cache.npz")
 
+        # Pi3X preview approval — pause for user to review 3D preview
+        await broadcast(session, {"type": "pi3x_preview_ready"})
+        session.pi3x_approve_event.clear()
+        await session.pi3x_approve_event.wait()
+
         _check_cancelled(session)
 
         # ── Stage 3: SAM2 Interactive Segmentation ────────────────

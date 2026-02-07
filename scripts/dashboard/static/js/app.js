@@ -151,6 +151,24 @@ ws.on('sam2_verification_ready', (msg) => {
   log.append('stdout', 'Mask propagation complete. Please verify the results.\n');
 });
 
+ws.on('pi3x_preview_ready', () => {
+  pipelineUI.stageInteractive(2);
+  stageCtrl.activateStage(2);
+  const btn = document.getElementById('pi3x-approve');
+  if (btn) {
+    btn.style.display = 'inline-block';
+    btn.disabled = false;
+    btn.textContent = 'Approve & Continue';
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = 'Proceeding...';
+      await fetch('/api/pi3x/approve', { method: 'POST' });
+      btn.style.display = 'none';
+    };
+  }
+  log.append('stdout', 'Pi3X complete. Review the 3D preview and click "Approve & Continue".\n');
+});
+
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);

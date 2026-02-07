@@ -30,9 +30,9 @@ export class CameraOverlay {
       const pose = poses[i];
       const mat4 = new THREE.Matrix4();
 
-      // Pi3X outputs world-to-camera (extrinsic), invert to get camera-to-world
+      // Pi3X outputs camera-to-world (c2w) — use directly
       mat4.fromArray(pose.matrix);
-      const camToWorld = mat4.clone().invert();
+      const camToWorld = mat4;
 
       // Extract camera position
       const position = new THREE.Vector3();
