@@ -209,7 +209,7 @@ export class PreviewPanel {
         const data = await res.json();
 
         // Convert {poses: [[4x4], ...], frame_indices: [...]} → [{matrix: flat16, frame_index}]
-        const poseArray = (data.poses || []).map((mat4x4, i) => {
+        const rawPoseArray = (data.poses || []).map((mat4x4, i) => {
           // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
           const flat = new Array(16);
           for (let r = 0; r < 4; r++)
@@ -218,12 +218,40 @@ export class PreviewPanel {
           return { matrix: flat, frame_index: (data.frame_indices || [])[i] ?? i };
         });
 
-        let forwardSign = this._forwardSignFromAlignment(data.alignment);
+        const normalized = this._normalizePoseConvention(rawPoseArray);
+        const poseArray = normalized.poseArray;
+
+        const alignmentSign = this._forwardSignFromAlignment(data.alignment);
+        let forwardSign = alignmentSign;
+        let forwardSignSource = data.alignment?.inferred_forward_axis || 'alignment';
+        if (forwardSign == null) {
+          forwardSign = normalized.forwardSign;
+          forwardSignSource = `orbit-${normalized.convention}`;
+        } else if (
+          normalized.used >= 3 &&
+          normalized.confidence >= 0.15 &&
+          forwardSign !== normalized.forwardSign
+        ) {
+          // Guard against stale/misdetected metadata from older outputs.
+          forwardSign = normalized.forwardSign;
+          forwardSignSource = `orbit-override(${normalized.convention})`;
+        }
+
         if (forwardSign == null) {
           const targetCenter = stage.centerOffset || new THREE.Vector3(0, 0, 0);
           forwardSign = this._inferForwardSignFromTarget(poseArray, targetCenter);
+          forwardSignSource = 'target-center-fallback';
         }
-        console.info('Camera overlay forwardSign:', forwardSign, data.alignment?.inferred_forward_axis || 'heuristic');
+
+        console.info(
+          'Camera overlay pose convention:',
+          normalized.convention,
+          'confidence:',
+          normalized.confidence.toFixed(3),
+          'frames:',
+          normalized.used,
+        );
+        console.info('Camera overlay forwardSign:', forwardSign, forwardSignSource);
 
         cameraOverlay.create(THREE, stage.sceneRoot, poseArray, { forwardSign });
 
@@ -255,8 +283,83 @@ export class PreviewPanel {
     return null;
   }
 
-  _inferForwardSignFromTarget(poseArray, targetCenter) {
-    if (!poseArray || poseArray.length === 0) return 1;
+  _normalizePoseConvention(poseArray) {
+    if (!poseArray || poseArray.length === 0) {
+      return {
+        poseArray: [],
+        convention: 'c2w',
+        forwardSign: 1,
+        confidence: 0,
+        used: 0,
+      };
+    }
+
+    const c2wEval = this._evaluateForwardFromOrbitCenter(poseArray);
+    const w2cAsC2w = this._invertPoseArray(poseArray);
+    const w2cEval = this._evaluateForwardFromOrbitCenter(w2cAsC2w);
+
+    // Prefer c2w unless w2c interpretation is meaningfully more consistent.
+    const chooseW2C = (w2cEval.confidence - c2wEval.confidence) > 0.05;
+    if (chooseW2C) {
+      return {
+        poseArray: w2cAsC2w,
+        convention: 'w2c->c2w',
+        forwardSign: w2cEval.forwardSign,
+        confidence: w2cEval.confidence,
+        used: w2cEval.used,
+      };
+    }
+
+    return {
+      poseArray,
+      convention: 'c2w',
+      forwardSign: c2wEval.forwardSign,
+      confidence: c2wEval.confidence,
+      used: c2wEval.used,
+    };
+  }
+
+  _invertPoseArray(poseArray) {
+    const mat = new THREE.Matrix4();
+    const inv = new THREE.Matrix4();
+    return poseArray.map((pose) => {
+      mat.fromArray(pose.matrix);
+      inv.copy(mat).invert();
+      return { matrix: inv.toArray(), frame_index: pose.frame_index };
+    });
+  }
+
+  _evaluateForwardFromOrbitCenter(poseArray) {
+    const center = this._computePoseCentroid(poseArray);
+    if (!center) {
+      return { forwardSign: 1, confidence: 0, used: 0 };
+    }
+    return this._scoreForwardTowardTarget(poseArray, center);
+  }
+
+  _computePoseCentroid(poseArray) {
+    if (!poseArray || poseArray.length === 0) return null;
+    const mat = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    let used = 0;
+
+    for (const pose of poseArray) {
+      mat.fromArray(pose.matrix);
+      position.setFromMatrixPosition(mat);
+      center.add(position);
+      used += 1;
+    }
+
+    if (used === 0) return null;
+    return center.divideScalar(used);
+  }
+
+  _scoreForwardTowardTarget(poseArray, targetCenter) {
+    if (!poseArray || poseArray.length === 0) {
+      return { forwardSign: 1, confidence: 0, used: 0 };
+    }
+
     const mat = new THREE.Matrix4();
     const position = new THREE.Vector3();
     const basisX = new THREE.Vector3();
@@ -265,8 +368,7 @@ export class PreviewPanel {
     const toTarget = new THREE.Vector3();
     const center = targetCenter ? targetCenter.clone() : new THREE.Vector3(0, 0, 0);
 
-    let scorePlus = 0;
-    let scoreMinus = 0;
+    let score = 0;
     let used = 0;
     for (const pose of poseArray) {
       mat.fromArray(pose.matrix);
@@ -278,13 +380,24 @@ export class PreviewPanel {
 
       mat.extractBasis(basisX, basisY, basisZ);
       basisZ.normalize();
-      scorePlus += basisZ.dot(toTarget);
-      scoreMinus += basisZ.clone().negate().dot(toTarget);
+      score += basisZ.dot(toTarget);
       used += 1;
     }
 
-    if (used === 0) return 1;
-    return scoreMinus > scorePlus ? -1 : 1;
+    if (used === 0) {
+      return { forwardSign: 1, confidence: 0, used: 0 };
+    }
+
+    const avg = score / used;
+    return {
+      forwardSign: avg < 0 ? -1 : 1,
+      confidence: Math.abs(avg),
+      used,
+    };
+  }
+
+  _inferForwardSignFromTarget(poseArray, targetCenter) {
+    return this._scoreForwardTowardTarget(poseArray, targetCenter).forwardSign;
   }
 
   /**
