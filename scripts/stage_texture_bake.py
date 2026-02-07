@@ -8,11 +8,25 @@ Adapted from im2pc/host/extract_intrinsics.py and im2pc/host/texture_mesh.py.
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
 from plyfile import PlyData
+
+ProgressCallback = Callable[[float, str | None], None]
+
+
+def _emit_progress(
+    progress_cb: ProgressCallback | None,
+    progress: float,
+    detail: str | None = None,
+) -> None:
+    if progress_cb is None:
+        return
+    progress_cb(max(0.0, min(100.0, float(progress))), detail)
 
 
 # ---------------------------------------------------------------------------
@@ -28,13 +42,43 @@ def _load_point_cloud(path: str) -> tuple[np.ndarray, np.ndarray]:
     return points, colors
 
 
-def _load_poses(path: str) -> np.ndarray:
+def _load_poses(path: str) -> tuple[np.ndarray, list[int]]:
     with open(path) as f:
-        return np.array(json.load(f)["poses"], dtype=np.float64)
+        data = json.load(f)
+    poses = np.array(data["poses"], dtype=np.float64)
+    frame_indices = data.get("frame_indices")
+    if frame_indices is None:
+        frame_indices = list(range(len(poses)))
+    else:
+        frame_indices = [int(i) for i in frame_indices]
+    if len(frame_indices) != len(poses):
+        print(
+            f"Warning: poses={len(poses)} but frame_indices={len(frame_indices)}. "
+            "Using positional indices."
+        )
+        frame_indices = list(range(len(poses)))
+    return poses, frame_indices
+
+
+def _resolve_indexed_file(base_dir: str, idx: int, suffix: str) -> Path:
+    """Resolve by numbered filename first, then by sorted positional index."""
+    path = Path(base_dir) / f"{idx:05d}{suffix}"
+    if path.is_file():
+        return path
+
+    files = _list_indexed_files(base_dir, suffix)
+    if 0 <= idx < len(files):
+        return Path(files[idx])
+    raise FileNotFoundError(f"Indexed file not found: {base_dir} idx={idx} suffix={suffix}")
+
+
+@lru_cache(maxsize=16)
+def _list_indexed_files(base_dir: str, suffix: str) -> tuple[str, ...]:
+    return tuple(str(p) for p in sorted(Path(base_dir).glob(f"*{suffix}")))
 
 
 def _load_frame(frames_dir: str, idx: int) -> np.ndarray:
-    path = Path(frames_dir) / f"{idx:05d}.jpg"
+    path = _resolve_indexed_file(frames_dir, idx, ".jpg")
     img = cv2.imread(str(path))
     if img is None:
         raise FileNotFoundError(f"Frame not found: {path}")
@@ -42,7 +86,7 @@ def _load_frame(frames_dir: str, idx: int) -> np.ndarray:
 
 
 def _load_mask(masks_dir: str, idx: int) -> np.ndarray:
-    path = Path(masks_dir) / f"{idx:05d}.png"
+    path = _resolve_indexed_file(masks_dir, idx, ".png")
     mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if mask is None:
         raise FileNotFoundError(f"Mask not found: {path}")
@@ -72,8 +116,9 @@ def _project_points(pts, c2w, K, img_w, img_h):
 
 
 def _estimate_intrinsics(
-    points, colors, poses, frames_dir, masks_dir, img_w, img_h,
+    points, colors, poses, pose_frame_indices, frames_dir, masks_dir, img_w, img_h,
     num_eval_frames=10, subsample_points=50000,
+    progress_cb: ProgressCallback | None = None,
 ) -> dict:
     """Estimate camera intrinsics via grid search + Nelder-Mead."""
     from scipy.optimize import minimize
@@ -87,17 +132,21 @@ def _estimate_intrinsics(
         pts_sub, col_sub = points, colors
 
     n_frames = len(poses)
-    frame_indices = np.linspace(0, n_frames - 1, num_eval_frames, dtype=int).tolist()
-    print(f"  Evaluating {len(frame_indices)} frames, {len(pts_sub)} points")
+    eval_pose_indices = np.linspace(0, n_frames - 1, num_eval_frames, dtype=int).tolist()
+    print(f"  Evaluating {len(eval_pose_indices)} frames, {len(pts_sub)} points")
 
     cx_init, cy_init = img_w / 2.0, img_h / 2.0
 
     def color_score(K):
         total_err, total_cnt = 0.0, 0
-        for idx in frame_indices:
-            frame = _load_frame(frames_dir, idx)
-            mask = _load_mask(masks_dir, idx)
-            uv, valid, _ = _project_points(pts_sub, poses[idx], K, img_w, img_h)
+        for pose_idx in eval_pose_indices:
+            src_idx = int(pose_frame_indices[pose_idx])
+            try:
+                frame = _load_frame(frames_dir, src_idx)
+                mask = _load_mask(masks_dir, src_idx)
+            except FileNotFoundError:
+                continue
+            uv, valid, _ = _project_points(pts_sub, poses[pose_idx], K, img_w, img_h)
             if uv.shape[0] == 0:
                 continue
             ui, vi = uv[:, 0].astype(np.int32), uv[:, 1].astype(np.int32)
@@ -112,11 +161,19 @@ def _estimate_intrinsics(
     # Grid search
     best_score, best_fov = -np.inf, 60
     print("  Grid search over FOV...")
-    for fov in range(35, 85, 2):
+    fov_values = list(range(35, 85, 2))
+    for idx, fov in enumerate(fov_values):
         fx = img_w / (2.0 * np.tan(np.radians(fov) / 2.0))
         score = color_score(_make_K(fx, fx, cx_init, cy_init))
         if score > best_score:
             best_score, best_fov = score, fov
+        if idx % 2 == 0 or idx == len(fov_values) - 1:
+            ratio = (idx + 1) / len(fov_values)
+            _emit_progress(
+                progress_cb,
+                ratio * 70.0,
+                f"Estimating intrinsics (grid search {idx + 1}/{len(fov_values)})",
+            )
 
     print(f"  Best FOV: {best_fov}° (score={best_score:.6f})")
 
@@ -134,6 +191,7 @@ def _estimate_intrinsics(
     result = minimize(objective, [fx_init, fx_init, cx_init, cy_init],
                       method="Nelder-Mead",
                       options={"maxiter": 500, "xatol": 0.5, "fatol": 1e-7, "adaptive": True})
+    _emit_progress(progress_cb, 100.0, "Intrinsics optimization complete")
 
     fx, fy, cx, cy = result.x
     print(f"  Optimized: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
@@ -178,6 +236,7 @@ def bake_texture(
     mask_dir: str,
     output_dir: str,
     tex_size: int | None = None,
+    progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Full texture baking pipeline: intrinsics → UV atlas → bake → export.
 
@@ -199,6 +258,7 @@ def bake_texture(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    _emit_progress(progress_cb, 4.0, "Loading mesh")
 
     # --- Load mesh ---
     print("Loading mesh...")
@@ -210,14 +270,18 @@ def bake_texture(
     print(f"  {len(vertices)} verts, {len(faces)} faces")
 
     # --- Load camera data ---
-    poses = _load_poses(poses_path)
+    poses, pose_frame_indices = _load_poses(poses_path)
 
-    # Determine image size from first frame
-    first_frame = cv2.imread(str(Path(frames_dir) / "00000.jpg"))
-    if first_frame is None:
-        raise FileNotFoundError("Cannot load first frame")
+    if len(poses) == 0:
+        raise RuntimeError("No poses found in camera_poses.json")
+
+    # Determine image size from first pose-linked frame.
+    first_frame = _load_frame(frames_dir, int(pose_frame_indices[0]))
     img_h, img_w = first_frame.shape[:2]
-    print(f"  Image size: {img_w}x{img_h}, {len(poses)} poses")
+    print(
+        f"  Image size: {img_w}x{img_h}, {len(poses)} poses "
+        f"(frame range: {min(pose_frame_indices)}..{max(pose_frame_indices)})"
+    )
 
     # --- Estimate intrinsics ---
     # Load denoised PLY for intrinsics estimation (original colored point cloud)
@@ -230,11 +294,22 @@ def bake_texture(
         pc_points, pc_colors = _load_point_cloud(str(object_ply))
 
     print("Estimating camera intrinsics...")
+    _emit_progress(progress_cb, 15.0, "Estimating camera intrinsics")
+    _intrinsics_progress_last = {"value": 15.0}
+
+    def _intrinsics_progress(local_progress: float, detail: str | None = None) -> None:
+        stage_progress = 15.0 + (max(0.0, min(100.0, local_progress)) * 0.35)
+        if stage_progress - _intrinsics_progress_last["value"] >= 0.5:
+            _emit_progress(progress_cb, stage_progress, detail)
+            _intrinsics_progress_last["value"] = stage_progress
+
     intrinsics = _estimate_intrinsics(
-        pc_points, pc_colors, poses, frames_dir, mask_dir, img_w, img_h,
+        pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
+        progress_cb=_intrinsics_progress,
     )
     K = np.array(intrinsics["K"], dtype=np.float64)
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
+    _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
 
     # Save intrinsics
     with open(output_path / "intrinsics.json", "w") as f_out:
@@ -242,6 +317,7 @@ def bake_texture(
 
     # --- UV Atlas ---
     print("Generating UV atlas...")
+    _emit_progress(progress_cb, 58.0, "Generating UV atlas")
     vmapping, new_faces, uvs = xatlas.parametrize(
         vertices.astype(np.float32), faces.astype(np.uint32)
     )
@@ -258,9 +334,11 @@ def bake_texture(
 
     # --- Build texel mapping ---
     print(f"Building texel mapping ({tex_size}x{tex_size})...")
+    _emit_progress(progress_cb, 62.0, "Building texel mapping")
     face_id_buf = np.full((tex_size, tex_size), -1, dtype=np.int32)
     uv_scaled = uvs * tex_size
 
+    emit_every_face = max(1, len(new_faces) // 40)
     for fi in range(len(new_faces)):
         i0, i1, i2 = new_faces[fi]
         pts = np.array([
@@ -269,6 +347,13 @@ def bake_texture(
             [uv_scaled[i2, 0], uv_scaled[i2, 1]],
         ], dtype=np.int32).reshape(3, 1, 2)
         cv2.fillConvexPoly(face_id_buf, pts, int(fi))
+        if fi % emit_every_face == 0 or fi == len(new_faces) - 1:
+            ratio = (fi + 1) / max(len(new_faces), 1)
+            _emit_progress(
+                progress_cb,
+                62.0 + ratio * 10.0,
+                f"Building texel mapping ({fi + 1}/{len(new_faces)} faces)",
+            )
 
     valid_texels = face_id_buf >= 0
     ys, xs = np.where(valid_texels)
@@ -299,20 +384,23 @@ def bake_texture(
     # --- Multi-view texture projection ---
     color_sum = np.zeros((n_valid, 3), dtype=np.float64)
     weight_sum = np.zeros(n_valid, dtype=np.float64)
+    _emit_progress(progress_cb, 72.0, "Projecting textures from input views")
 
+    emit_every_view = max(1, len(poses) // 40)
     for vidx in range(len(poses)):
+        src_idx = int(pose_frame_indices[vidx])
         c2w = poses[vidx]
         cam_pos = c2w[:3, 3]
 
-        frame = cv2.imread(str(Path(frames_dir) / f"{vidx:05d}.jpg"))
-        if frame is None:
+        try:
+            frame = _load_frame(frames_dir, src_idx)
+        except FileNotFoundError:
             continue
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float64) / 255.0
 
-        mask = cv2.imread(str(Path(mask_dir) / f"{vidx:05d}.png"), cv2.IMREAD_GRAYSCALE)
-        if mask is None:
+        try:
+            mask_bool = _load_mask(mask_dir, src_idx)
+        except FileNotFoundError:
             continue
-        mask_bool = mask > 127
 
         # View direction
         view_dirs = cam_pos - pos3d
@@ -347,6 +435,13 @@ def bake_texture(
 
         if vidx % 5 == 0:
             print(f"  View {vidx+1}/{len(poses)}: {n_ok} texels")
+        if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
+            ratio = (vidx + 1) / max(len(poses), 1)
+            _emit_progress(
+                progress_cb,
+                72.0 + ratio * 20.0,
+                f"Projecting textures ({vidx + 1}/{len(poses)} views)",
+            )
 
     # Normalize
     has_color = weight_sum > 0
@@ -360,11 +455,12 @@ def bake_texture(
 
     # --- Seam padding ---
     print("Padding seams...")
+    _emit_progress(progress_cb, 92.0, "Padding UV seams")
     valid_pad = (face_id_buf >= 0) & (np.sum(texture, axis=2) > 0)
     result_tex = texture.copy()
     kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.float32)
 
-    for _ in range(8):
+    for iter_idx in range(8):
         empty = ~valid_pad
         if not np.any(empty):
             break
@@ -375,6 +471,11 @@ def bake_texture(
             if np.any(fill):
                 result_tex[:, :, c][fill] = ns[fill] / nc[fill]
                 valid_pad[fill] = True
+        _emit_progress(
+            progress_cb,
+            92.0 + ((iter_idx + 1) / 8.0) * 5.0,
+            f"Padding seams ({iter_idx + 1}/8)",
+        )
 
     # --- Export OBJ + MTL + PNG ---
     basename = "textured_mesh"
@@ -387,6 +488,7 @@ def bake_texture(
     tex_bgr = cv2.cvtColor(tex_u8, cv2.COLOR_RGB2BGR)[::-1]
     cv2.imwrite(str(tex_path), tex_bgr)
     print(f"Saved: {tex_path}")
+    _emit_progress(progress_cb, 98.0, "Exporting textured mesh")
 
     # MTL
     with open(mtl_path, "w") as f_out:
@@ -407,6 +509,7 @@ def bake_texture(
             a, b, c = face + 1
             f_out.write(f"f {a}/{a} {b}/{b} {c}/{c}\n")
     print(f"Saved: {obj_path}")
+    _emit_progress(progress_cb, 100.0, "Texture stage complete")
 
     return obj_path
 

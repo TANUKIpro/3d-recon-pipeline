@@ -138,7 +138,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `FRAME_INTERVAL` | `10` | N フレームごとに1枚抽出 |
-| `MAX_FRAMES` | `50` | 抽出フレーム数の上限 |
+| `MAX_FRAMES` | `50` | 抽出フレーム数の上限 (Pi3X入力でも上限として使用) |
 
 ### SAM2 セグメンテーション (Stage 2)
 
@@ -150,9 +150,10 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (リサイズ閾値) |
+| `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (必要時のみリサイズ) |
 | `CONFIDENCE_THRESHOLD` | `0.1` | 信頼度フィルタ閾値 |
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
+| `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
 
 ### DiffCD メッシュ再構成 (Stage 5)
 
@@ -180,7 +181,7 @@ data/output/
 ├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
 ├── object_denoised.ply    # デノイズ済み点群
 ├── object.ply             # Pi3Xトリプルフィルタ済み点群
-├── camera_poses.json      # カメラ外部パラメータ (4x4行列)
+├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
 ├── intrinsics.json        # 推定カメラ内部パラメータ
 ├── frames/                # 抽出フレーム画像 (JPEG)
 ├── masks/                 # SAM2セグメンテーションマスク (PNG)
@@ -229,6 +230,12 @@ DiffCD (JAX) と SAM2/Pi3X (PyTorch) は GPU コンテキストが競合する�
 
 RTX 4090 (16GB) で全ステージを動作させるため、各 GPU ステージ終了時にモデルを明示的に解放し `torch.cuda.empty_cache()` でメモリを回収する。
 
+Pi3X は OOM 時に以下の順で自動フォールバックする:
+
+1. まず Pi3X 入力フレーム数を削減 (解像度は維持)
+2. 次に `PIXEL_LIMIT` を縮小
+3. 最後にチャンク推論へフォールバック
+
 ## VRAM とパフォーマンス
 
 RTX 4090 Laptop (16GB) での実測値:
@@ -240,7 +247,9 @@ RTX 4090 Laptop (16GB) での実測値:
 | DiffCD (res=384, 25Kバッチ) | ~10 GB | ~10分 |
 | デノイズ / テクスチャ | CPU のみ | ~1分 |
 
-> **注意**: デフォルト設定 (`MAX_FRAMES=50`, `PIXEL_LIMIT=255000`) では RTX 4090 16GB で OOM が発生する場合がある。16GB GPU では `MAX_FRAMES=20 PIXEL_LIMIT=150000` を推奨。
+> **注意**: 16GB GPU で品質を優先する場合、まず `MAX_FRAMES` を下げて `PIXEL_LIMIT` は高めに維持する。  
+> 例: `MAX_FRAMES=20~28, PIXEL_LIMIT=220000~255000`。  
+> さらに不足する場合のみ `PIXEL_LIMIT` を段階的に下げる。
 
 ## Docker イメージ構成
 
@@ -263,12 +272,12 @@ nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 ### Pi3X で OOM が発生する
 
-`MAX_FRAMES` と `PIXEL_LIMIT` を下げる。ダッシュボードの Advanced Settings で変更するか、CLI の場合:
+まず `MAX_FRAMES` を下げ、`PIXEL_LIMIT` はできるだけ維持する。ダッシュボードの Advanced Settings で変更するか、CLI の場合:
 
 ```bash
 docker compose run --rm --service-ports \
   --entrypoint python3 \
-  -e MAX_FRAMES=15 -e PIXEL_LIMIT=120000 \
+  -e MAX_FRAMES=20 -e PIXEL_LIMIT=240000 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4
 ```
 
