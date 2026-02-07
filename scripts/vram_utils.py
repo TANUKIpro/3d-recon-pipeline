@@ -93,6 +93,22 @@ def prepare_for_jax():
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.8"
 
 
+def offload_module(module, target: str = "cpu") -> None:
+    """Move a torch.nn.Module (or iterable of modules) to *target* device.
+
+    Accepts a single module or an iterable (ModuleList, list, etc.).
+    After moving, calls ``torch.cuda.empty_cache()`` to release freed VRAM.
+    """
+    import torch
+
+    modules = [module] if hasattr(module, "parameters") else list(module)
+    for m in modules:
+        m.to(target)
+
+    if target == "cpu" and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def log_vram(stage_name: str = ""):
     """Log current GPU memory usage via nvidia-smi."""
     try:
