@@ -45,6 +45,9 @@ document.addEventListener('stage-activated', async (e) => {
   }
 });
 
+// Align initial config view with default stage tab.
+stageCtrl.activateStage(stageCtrl.activeStage);
+
 // ── Config panel callbacks ───────────────────────────────────
 
 config.onStart = async (cfg) => {

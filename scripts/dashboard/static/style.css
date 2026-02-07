@@ -372,6 +372,10 @@ html, body {
 
 #config-panel h2 { font-size: 14px; margin-bottom: 10px; font-weight: 600; }
 
+.config-section {
+  margin-bottom: 8px;
+}
+
 /* ── Config Section Stage Filtering ──────────────────────── */
 .config-section[data-stages] {
   transition: opacity 0.15s;
@@ -400,6 +404,52 @@ html, body {
   color: var(--accent);
   font-weight: 400;
   font-size: 12px;
+}
+
+.config-advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(22, 33, 62, 0.45);
+  overflow: hidden;
+}
+
+.config-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 8px 10px;
+  user-select: none;
+}
+
+.config-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-advanced > summary::after {
+  content: "+";
+  float: right;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.config-advanced[open] > summary::after {
+  content: "-";
+}
+
+.config-advanced-body {
+  padding: 6px 10px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.config-note {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
 }
 
 .form-group { margin-bottom: 8px; }
