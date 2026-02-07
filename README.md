@@ -153,7 +153,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (必要時のみリサイズ) |
 | `CONFIDENCE_THRESHOLD` | `0.1` | 信頼度フィルタ閾値 |
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
-| `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列 (`0` で無効) |
+| `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
 
 ### DiffCD メッシュ再構成 (Stage 5)
 
