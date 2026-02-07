@@ -487,15 +487,45 @@ export class PreviewPanel {
       geometry.boundingBox.getCenter(center);
       geometry.translate(-center.x, -center.y, -center.z);
       stage.centerOffset = center;
+      // Recompute bounds after centering so the camera fit uses the updated box.
+      geometry.computeBoundingBox();
 
       let obj;
       if (geometry.index && geometry.index.count > 0) {
         // Mesh
+        // Fallback shading for meshes without baked normals/textures.
+        if (!geometry.hasAttribute('normal')) {
+          geometry.computeVertexNormals();
+        }
+
+        const hasColor = geometry.hasAttribute('color');
         const meshMat = new THREE.MeshStandardMaterial({
-          vertexColors: geometry.hasAttribute('color'),
+          vertexColors: hasColor,
+          color: hasColor ? undefined : 0xb3b3b3,
+          roughness: 0.9,
+          metalness: 0.02,
           side: THREE.DoubleSide,
         });
-        obj = new THREE.Mesh(geometry, meshMat);
+
+        const mesh = new THREE.Mesh(geometry, meshMat);
+
+        // Lightweight edge overlay to reveal silhouette when no texture is present.
+        let overlay = null;
+        try {
+          const edges = new THREE.EdgesGeometry(geometry, 25);
+          const lineMat = new THREE.LineBasicMaterial({
+            color: 0x101820,
+            transparent: true,
+            opacity: 0.35,
+          });
+          overlay = new THREE.LineSegments(edges, lineMat);
+        } catch (edgeErr) {
+          console.warn('Edge overlay skipped:', edgeErr);
+        }
+
+        obj = new THREE.Group();
+        obj.add(mesh);
+        if (overlay) obj.add(overlay);
       } else {
         // Point cloud
         const materialParams = {
