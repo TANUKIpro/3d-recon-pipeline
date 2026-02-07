@@ -24,13 +24,16 @@ from vram_utils import (
 # Estimated Pi3X model weight size on GPU (encoder + decoder + heads)
 _ESTIMATED_MODEL_MB = 5500
 
-# OOM retry: shrink resolution instead of chunking (preserves cross-frame attention)
-_OOM_REDUCTION_FACTOR = 0.65   # multiply pixel_limit by this on each OOM retry
-_MIN_PIXEL_LIMIT = 50_000      # floor (~224x224)
-_MAX_OOM_RETRIES = 3           # max resolution-reduction retries
+# OOM strategy: keep image detail first, then reduce resolution as a last resort.
+_OOM_FRAME_REDUCTION_FACTOR = 0.80
+_OOM_REDUCTION_FACTOR = 0.70
+_MIN_INFER_FRAMES = 12
+_MIN_PIXEL_LIMIT = 50_000
+_MAX_OOM_RETRIES = 7
+_USE_CHUNK_FALLBACK = True
 
 # (effective_free_vram_mb_lower, frame_pixel_budget)
-# budget = N_frames * pixel_limit; auto-scale divides by actual N
+# budget = N_frames * pixel_limit
 _VRAM_PROFILES = [
     (14000, 12_750_000),  # 50f*255K, or 85f*150K
     (12000, 10_000_000),  # 50f*200K, or 67f*150K
@@ -39,49 +42,104 @@ _VRAM_PROFILES = [
     (    0,  2_400_000),  # 30f*80K,  or 48f*50K
 ]
 
+# Clamp per-chunk similarity scale to avoid catastrophic drift.
+_CHUNK_SCALE_MIN = 0.85
+_CHUNK_SCALE_MAX = 1.15
 
-def _auto_scale_params(pixel_limit: int, num_frames: int) -> int:
-    """Scale down pixel_limit based on available VRAM and frame count.
 
-    Uses frame-pixel budgets: each VRAM profile specifies a total budget
-    (N * pixel_limit), which is divided by the actual frame count.  This
-    ensures that more frames automatically get lower per-frame resolution,
-    keeping total activation memory within VRAM limits.
+def _auto_scale_frame_target(
+    requested_frames: int,
+    pixel_limit: int,
+) -> int:
+    """Scale down frame count from VRAM budget while preserving pixel detail.
 
     Subtracts estimated model weight size from free VRAM before profile
     selection, since this function is called before model loading.
-    Only reduces the value (never increases beyond the caller's request).
+    Only reduces the frame count (never increases beyond caller's request).
     """
     free = get_free_vram_mb()
     if free is None:
-        return pixel_limit
+        return requested_frames
 
     effective_free = free - _ESTIMATED_MODEL_MB
     print(
         f"VRAM auto-scale: {free}MB free, "
         f"{effective_free}MB effective (minus ~{_ESTIMATED_MODEL_MB}MB model), "
-        f"{num_frames} frames"
+        f"requested {requested_frames} frames @ pixel_limit={pixel_limit}"
     )
 
     for threshold, budget in _VRAM_PROFILES:
         if effective_free >= threshold:
-            budget_pixel = budget // max(num_frames, 1)
-            new_pixel = min(pixel_limit, budget_pixel)
-            if new_pixel != pixel_limit:
+            safe_frames = max(2, budget // max(pixel_limit, 1))
+            new_frames = min(requested_frames, safe_frames)
+            if new_frames != requested_frames:
                 print(
                     f"VRAM auto-scale: effective {effective_free}MB, "
-                    f"budget {budget} / {num_frames} frames → "
-                    f"PIXEL_LIMIT {pixel_limit}→{new_pixel}"
+                    f"budget {budget} / pixel_limit {pixel_limit} → "
+                    f"frames {requested_frames}→{new_frames}"
                 )
             else:
                 print(
                     f"VRAM auto-scale: effective {effective_free}MB, "
-                    f"budget {budget} / {num_frames} frames → "
+                    f"budget {budget} / pixel_limit {pixel_limit} → "
                     f"no adjustment needed"
                 )
-            return new_pixel
+            return new_frames
 
-    return pixel_limit
+    return requested_frames
+
+
+def _pick_frame_subset(
+    frame_files: list[Path],
+    target_frames: int,
+) -> tuple[list[Path], list[int]]:
+    """Pick evenly distributed frames and return (paths, source_indices)."""
+    n_total = len(frame_files)
+    if target_frames >= n_total:
+        indices = list(range(n_total))
+    else:
+        # Even temporal coverage with deterministic selection.
+        indices = [int(i) for i in np.linspace(0, n_total - 1, num=target_frames, dtype=np.int64)]
+    return [frame_files[i] for i in indices], indices
+
+
+def _load_images_from_paths(frame_paths: list[Path], pixel_limit: int) -> torch.Tensor:
+    """Load selected JPEGs as float tensor (N,3,H,W), matching Pi3 resize policy."""
+    if not frame_paths:
+        return torch.zeros((0, 3, 0, 0), dtype=torch.float32)
+
+    first = cv2.imread(str(frame_paths[0]))
+    if first is None:
+        raise RuntimeError(f"Failed to read frame: {frame_paths[0]}")
+
+    first = cv2.cvtColor(first, cv2.COLOR_BGR2RGB)
+    h, w = first.shape[:2]
+    scale = min((pixel_limit / max(h * w, 1)) ** 0.5, 1.0)
+    if scale < 1.0:
+        new_h = max(int(h * scale) // 14 * 14, 14)
+        new_w = max(int(w * scale) // 14 * 14, 14)
+    else:
+        new_h, new_w = h, w
+
+    imgs = []
+    for path in frame_paths:
+        img = cv2.imread(str(path))
+        if img is None:
+            raise RuntimeError(f"Failed to read frame: {path}")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if scale < 1.0:
+            img = cv2.resize(img, (new_w, new_h))
+        imgs.append(torch.from_numpy(img).permute(2, 0, 1).float() / 255.0)
+
+    return torch.stack(imgs, dim=0)
+
+
+def _frame_id_from_path(path: Path, fallback: int) -> int:
+    """Resolve original frame index from filename stem, with safe fallback."""
+    try:
+        return int(path.stem)
+    except ValueError:
+        return int(fallback)
 
 
 def _run_inference_memory_efficient(
@@ -223,8 +281,15 @@ def _merge_chunk_results(
         ref_poses = merged["camera_poses"][0, ref_ovlp_idx, :3, 3].cpu().numpy()
         cur_poses = cur["camera_poses"][0, cur_ovlp_idx, :3, 3].cpu().numpy()
 
-        # Procrustes: find R, t, s such that s*R@cur + t ≈ ref
+        # Procrustes: find s*R@cur + t ≈ ref (scale can be noisy across chunks)
         R, t, s = _procrustes(cur_poses, ref_poses)
+        s_clamped = float(np.clip(s, _CHUNK_SCALE_MIN, _CHUNK_SCALE_MAX))
+        if abs(s_clamped - s) > 1e-6:
+            print(
+                f"  Warning: chunk {i} scale {s:.3f} out of range, "
+                f"clamped to {s_clamped:.3f}"
+            )
+        s = s_clamped
 
         # Transform current chunk's world-space points and poses
         cur_aligned = _apply_rigid_transform(cur, R, t, s)
@@ -372,21 +437,21 @@ def run_pi3x_inference(
     if edge_rtol is None:
         edge_rtol = float(os.environ.get("EDGE_RTOL", "0.03"))
 
-    from pi3.utils.basic import load_images_as_tensor, write_ply
+    from pi3.utils.basic import write_ply
     from pi3.models.pi3x import Pi3X
     from pi3.utils.geometry import depth_edge
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # --- Count frames before auto-scale (need N for budget calculation) ---
+    # --- Count frames and apply frame budget before inference ---
     frame_files = sorted(Path(frames_dir).glob("*.jpg"))
     num_frames = len(frame_files)
     if num_frames < 2:
         raise RuntimeError("Need at least 2 frames for reconstruction.")
 
-    # --- VRAM-aware pixel_limit (frame-count aware) ---
-    pixel_limit = _auto_scale_params(pixel_limit, num_frames)
+    target_frames = min(max_frames, num_frames)
+    target_frames = _auto_scale_frame_target(target_frames, pixel_limit)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
@@ -401,17 +466,33 @@ def run_pi3x_inference(
     model = Pi3X.from_pretrained("yyfz233/Pi3X").to(device).eval()
     log_vram("after Pi3X load")
 
-    # --- OOM retry loop: reduce resolution instead of chunking ---
+    # --- OOM retry loop: reduce frame count first, resolution second ---
+    current_target_frames = max(2, target_frames)
     current_pixel_limit = pixel_limit
-    for attempt in range(_MAX_OOM_RETRIES + 1):
-        imgs = load_images_as_tensor(
-            str(frames_dir), interval=1, PIXEL_LIMIT=current_pixel_limit,
+    selected_files = frame_files
+    selected_source_indices = list(range(num_frames))
+    selected_frame_ids = list(range(num_frames))
+    used_chunk_fallback = False
+    retry_count = 0
+
+    while True:
+        selected_files, selected_source_indices = _pick_frame_subset(
+            frame_files, current_target_frames
         )
+        selected_frame_ids = [
+            _frame_id_from_path(p, src_idx)
+            for p, src_idx in zip(selected_files, selected_source_indices)
+        ]
+
+        imgs = _load_images_from_paths(selected_files, current_pixel_limit)
         if imgs.numel() == 0 or imgs.shape[0] < 2:
             raise RuntimeError("Need at least 2 frames for reconstruction.")
 
         N, _, H, W = imgs.shape
-        print(f"Pi3X input: {N} frames, {H}x{W} pixels (pixel_limit={current_pixel_limit})")
+        print(
+            f"Pi3X input: {N}/{num_frames} frames, {H}x{W} "
+            f"(pixel_limit={current_pixel_limit})"
+        )
         imgs = imgs.to(device)
 
         print(f"Running Pi3X inference on {N} frames...")
@@ -420,29 +501,75 @@ def run_pi3x_inference(
             results = _run_inference_memory_efficient(model, imgs, device, dtype)
             break  # success
         except torch.cuda.OutOfMemoryError:
-            del imgs
             model.cpu()
             torch.cuda.empty_cache()
-
-            if attempt >= _MAX_OOM_RETRIES:
+            retry_count += 1
+            if retry_count > _MAX_OOM_RETRIES:
+                del imgs
                 raise RuntimeError(
-                    f"CUDA OOM after {_MAX_OOM_RETRIES} resolution reductions "
-                    f"(final pixel_limit={current_pixel_limit}). "
-                    f"Not enough VRAM for {num_frames} frames."
+                    f"CUDA OOM after {retry_count} retries "
+                    f"(frames={current_target_frames}, pixel_limit={current_pixel_limit})."
                 )
 
-            new_limit = max(
-                int(current_pixel_limit * _OOM_REDUCTION_FACTOR),
-                _MIN_PIXEL_LIMIT,
+            reduced = False
+
+            if current_target_frames > _MIN_INFER_FRAMES:
+                new_target = max(
+                    _MIN_INFER_FRAMES,
+                    int(current_target_frames * _OOM_FRAME_REDUCTION_FACTOR),
+                )
+                if new_target < current_target_frames:
+                    print(
+                        f"CUDA OOM: reducing frame count {current_target_frames}→{new_target} "
+                        f"(retry {retry_count}/{_MAX_OOM_RETRIES})"
+                    )
+                    current_target_frames = new_target
+                    reduced = True
+
+            if not reduced and current_pixel_limit > _MIN_PIXEL_LIMIT:
+                new_limit = max(
+                    int(current_pixel_limit * _OOM_REDUCTION_FACTOR),
+                    _MIN_PIXEL_LIMIT,
+                )
+                if new_limit < current_pixel_limit:
+                    print(
+                        f"CUDA OOM: reducing resolution {current_pixel_limit}→{new_limit} "
+                        f"(retry {retry_count}/{_MAX_OOM_RETRIES})"
+                    )
+                    current_pixel_limit = new_limit
+                    reduced = True
+
+            if reduced:
+                del imgs
+                continue
+
+            if _USE_CHUNK_FALLBACK and N > 12 and not used_chunk_fallback:
+                chunk_size = max(10, min(20, N))
+                overlap = max(3, min(6, chunk_size // 3))
+                print(
+                    f"CUDA OOM persists, trying chunk fallback "
+                    f"(chunk_size={chunk_size}, overlap={overlap})"
+                )
+                model.to(device)
+                try:
+                    results = _run_inference_chunked(
+                        model, imgs, device, dtype, chunk_size=chunk_size, overlap=overlap
+                    )
+                except torch.cuda.OutOfMemoryError as e:
+                    del imgs
+                    raise RuntimeError("CUDA OOM even with chunk fallback.") from e
+                used_chunk_fallback = True
+                break
+
+            del imgs
+            raise RuntimeError(
+                "CUDA OOM and no further fallback available "
+                f"(frames={current_target_frames}, pixel_limit={current_pixel_limit})."
             )
-            print(
-                f"CUDA OOM at pixel_limit={current_pixel_limit}. "
-                f"Reducing resolution: {current_pixel_limit}→{new_limit} "
-                f"(attempt {attempt + 1}/{_MAX_OOM_RETRIES})"
-            )
-            current_pixel_limit = new_limit
 
     print("Pi3X inference complete")
+    if used_chunk_fallback:
+        print("Warning: Chunk fallback was used. Verify pose consistency in Pi3X preview.")
     log_vram("after Pi3X inference")
 
     # --- Release model before filtering ---
@@ -480,9 +607,15 @@ def run_pi3x_inference(
     # --- Save camera poses ---
     poses = results["camera_poses"][0].cpu().numpy()
     poses_path = output_path / "camera_poses.json"
+    frame_indices_used = selected_frame_ids[:N]
+    source_indices_used = selected_source_indices[:N]
     with open(poses_path, "w") as f:
         json.dump(
-            {"poses": [pose.tolist() for pose in poses], "frame_indices": list(range(N))},
+            {
+                "poses": [pose.tolist() for pose in poses],
+                "frame_indices": frame_indices_used,
+                "source_indices": source_indices_used,
+            },
             f, indent=2,
         )
     print(f"Saved camera poses: {poses_path}")
@@ -494,6 +627,8 @@ def run_pi3x_inference(
         points=results["points"][0].cpu().half().numpy(),
         conf_edge_mask=conf_edge_mask[0].cpu().numpy(),
         colors=imgs.permute(0, 2, 3, 1).cpu().numpy(),
+        frame_indices=np.array(frame_indices_used, dtype=np.int32),
+        source_indices=np.array(source_indices_used, dtype=np.int32),
         N=np.array(N),
         H=np.array(H),
         W=np.array(W),
@@ -535,20 +670,48 @@ def apply_sam2_masks(
     N = int(cache["N"])
     H = int(cache["H"])
     W = int(cache["W"])
+    if "frame_indices" in cache.files:
+        frame_indices = cache["frame_indices"].astype(np.int64).tolist()
+    elif "source_indices" in cache.files:
+        frame_indices = cache["source_indices"].astype(np.int64).tolist()
+    else:
+        frame_indices = list(range(N))
+    if len(frame_indices) != N:
+        print(
+            f"Warning: cache frame_indices length {len(frame_indices)} != N={N}. "
+            "Falling back to 0..N-1."
+        )
+        frame_indices = list(range(N))
 
     # Load SAM2 masks
     mask_files = sorted(mask_dir.glob("*.png"))
-    if len(mask_files) != N:
-        print(f"Warning: {len(mask_files)} masks vs {N} frames. Using min.")
+    if len(mask_files) < N:
+        print(f"Warning: {len(mask_files)} masks available for {N} Pi3X frames.")
 
     sam2_masks = []
-    for i in range(N):
-        if i < len(mask_files):
-            mask_img = cv2.imread(str(mask_files[i]), cv2.IMREAD_GRAYSCALE)
-            mask_resized = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
-            sam2_masks.append(mask_resized > 127)
-        else:
+    missing_masks = 0
+    for frame_idx in frame_indices:
+        mask_path = mask_dir / f"{int(frame_idx):05d}.png"
+        if not mask_path.exists() and 0 <= int(frame_idx) < len(mask_files):
+            # Backward-compat fallback: treat as positional index.
+            mask_path = mask_files[int(frame_idx)]
+
+        if not mask_path.exists():
+            missing_masks += 1
             sam2_masks.append(np.zeros((H, W), dtype=bool))
+            continue
+
+        mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        if mask_img is None:
+            missing_masks += 1
+            sam2_masks.append(np.zeros((H, W), dtype=bool))
+            continue
+
+        mask_resized = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
+        sam2_masks.append(mask_resized > 127)
+
+    if missing_masks > 0:
+        print(f"Warning: {missing_masks}/{N} masks missing or unreadable.")
 
     sam2_mask = np.stack(sam2_masks)
     final_mask = conf_edge_mask & sam2_mask
