@@ -198,10 +198,19 @@ async def pipeline_cancel():
     if not session.running:
         return JSONResponse({"error": "No pipeline running"}, status_code=409)
     session.cancelled = True
-    # If waiting for SAM2 confirmation or approval, unblock it
+    # If waiting for SAM2 or Pi3X confirmation/approval, unblock it
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
+    session.pi3x_approve_event.set()
     return JSONResponse({"status": "cancelling"})
+
+
+# ── Pi3X API ──────────────────────────────────────────────────────
+
+@app.post("/api/pi3x/approve")
+async def pi3x_approve():
+    session.pi3x_approve_event.set()
+    return JSONResponse({"status": "approved"})
 
 
 # ── SAM2 API ──────────────────────────────────────────────────────

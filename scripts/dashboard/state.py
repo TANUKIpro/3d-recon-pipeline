@@ -91,6 +91,9 @@ class PipelineSession:
     sam2_width: int = 0
     sam2_height: int = 0
 
+    # Pi3X preview approval
+    pi3x_approve_event: asyncio.Event = field(default_factory=asyncio.Event)
+
     # Pipeline task handle
     _task: asyncio.Task | None = field(default=None, repr=False)
 
@@ -118,6 +121,7 @@ class PipelineSession:
         self.sam2_confirm_event = asyncio.Event()
         self.sam2_approve_event = asyncio.Event()
         self.sam2_approved = False
+        self.pi3x_approve_event = asyncio.Event()
         self.sam2_frame_count = 0
         self._task = None
         self.frames_dir = None
