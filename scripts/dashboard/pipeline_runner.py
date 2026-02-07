@@ -7,9 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+# Add scripts/ directory to path so stage modules can be imported by bare name
+_SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 from scripts.dashboard.state import (
     STAGE_LABELS,

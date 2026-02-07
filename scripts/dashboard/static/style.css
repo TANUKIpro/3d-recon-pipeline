@@ -267,6 +267,13 @@ html, body {
   font-weight: 500;
 }
 
+#video-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  min-height: 16px;
+}
+
 .form-row { display: flex; gap: 8px; }
 .form-row .form-group { flex: 1; }
 
