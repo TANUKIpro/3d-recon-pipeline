@@ -123,6 +123,7 @@ async def pipeline_video_info(path: str):
 
     def _probe(p: str) -> dict:
         import cv2
+        from stage_extract_frames import _detect_rotation
         cap = cv2.VideoCapture(p)
         try:
             fps = cap.get(cv2.CAP_PROP_FPS) or 0
@@ -130,12 +131,17 @@ async def pipeline_video_info(path: str):
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
             duration = total_frames / fps if fps > 0 else 0
+            rotation = _detect_rotation(cap, p)
+            # Swap width/height for 90°/270° rotation
+            if rotation in (90, 270):
+                width, height = height, width
             return {
                 "fps": round(fps, 2),
                 "total_frames": total_frames,
                 "width": width,
                 "height": height,
                 "duration": round(duration, 2),
+                "rotation": rotation,
             }
         finally:
             cap.release()
@@ -192,8 +198,9 @@ async def pipeline_cancel():
     if not session.running:
         return JSONResponse({"error": "No pipeline running"}, status_code=409)
     session.cancelled = True
-    # If waiting for SAM2 confirmation, unblock it
+    # If waiting for SAM2 confirmation or approval, unblock it
     session.sam2_confirm_event.set()
+    session.sam2_approve_event.set()
     return JSONResponse({"status": "cancelling"})
 
 
@@ -234,6 +241,20 @@ async def sam2_confirm():
     return JSONResponse({"status": "confirming"})
 
 
+@app.post("/api/sam2/approve")
+async def sam2_approve():
+    session.sam2_approved = True
+    session.sam2_approve_event.set()
+    return JSONResponse({"status": "approved"})
+
+
+@app.post("/api/sam2/redo")
+async def sam2_redo():
+    session.sam2_approved = False
+    session.sam2_approve_event.set()
+    return JSONResponse({"status": "redo"})
+
+
 @app.get("/api/sam2/frame/{idx}")
 async def sam2_frame(idx: int):
     if not sam2_service.initialized:
@@ -243,6 +264,44 @@ async def sam2_frame(idx: int):
         return Response(content=jpeg_bytes, media_type="image/jpeg")
     except IndexError as e:
         return JSONResponse({"error": str(e)}, status_code=404)
+
+
+@app.get("/api/verification/frame/{idx}")
+async def verification_frame(idx: int):
+    """Composite frame + green mask overlay at 40% opacity for verification."""
+    out = Path(session.config.output_dir or OUTPUT_DIR)
+    frame_path = out / "frames" / f"{idx:05d}.jpg"
+    mask_path = out / "masks" / f"{idx:05d}.png"
+
+    if not frame_path.is_file():
+        return JSONResponse({"error": f"Frame {idx} not found"}, status_code=404)
+
+    def _composite(fp: str, mp: str) -> bytes:
+        import cv2
+        import numpy as np
+        frame = cv2.imread(fp)
+        if frame is None:
+            raise FileNotFoundError(f"Cannot read frame: {fp}")
+        if Path(mp).is_file():
+            mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+            if mask is not None:
+                # Resize mask to match frame if needed
+                if mask.shape[:2] != frame.shape[:2]:
+                    mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
+                # Green overlay at 40% opacity where mask > 0
+                overlay = frame.copy()
+                overlay[mask > 0] = (
+                    overlay[mask > 0] * 0.6 + np.array([0, 180, 0], dtype=np.float64) * 0.4
+                ).astype(np.uint8)
+                frame = overlay
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes()
+
+    try:
+        jpeg_bytes = await asyncio.to_thread(_composite, str(frame_path), str(mask_path))
+        return Response(content=jpeg_bytes, media_type="image/jpeg")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/api/sam2/mask/{idx}")

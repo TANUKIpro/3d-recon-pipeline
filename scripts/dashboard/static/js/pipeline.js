@@ -63,7 +63,9 @@ export class PipelineUI {
   _setStageState(stage, status, elapsed) {
     const pill = this._pills[stage - 1];
     if (!pill) return;
+    const isSelected = pill.classList.contains('selected');
     pill.className = 'stage-pill';
+    if (isSelected) pill.classList.add('selected');
     if (status && status !== 'pending') {
       pill.classList.add(status);
     }

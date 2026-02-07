@@ -85,6 +85,8 @@ class PipelineSession:
 
     # SAM2 interactive handshake
     sam2_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
+    sam2_approve_event: asyncio.Event = field(default_factory=asyncio.Event)
+    sam2_approved: bool = False
     sam2_frame_count: int = 0
     sam2_width: int = 0
     sam2_height: int = 0
@@ -112,6 +114,8 @@ class PipelineSession:
         self.cancelled = False
         self.pipeline_start_time = None
         self.sam2_confirm_event = asyncio.Event()
+        self.sam2_approve_event = asyncio.Event()
+        self.sam2_approved = False
         self.sam2_frame_count = 0
         self._task = None
         self.frames_dir = None

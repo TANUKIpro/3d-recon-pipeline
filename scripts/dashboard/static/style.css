@@ -302,11 +302,21 @@ html, body {
   font-family: var(--font);
 }
 
+/* ── Frame Count Header ──────────────────────────────────── */
+.frame-count-header {
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 /* ── Gallery ──────────────────────────────────────────────── */
 #gallery-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(5, 1fr);
   gap: 4px;
   padding: 8px;
   overflow-y: auto;
@@ -314,8 +324,8 @@ html, body {
 }
 
 .gallery-thumb {
-  aspect-ratio: 16/9;
-  object-fit: cover;
+  width: 100%;
+  height: auto;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: transform 0.15s;

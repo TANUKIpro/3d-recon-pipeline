@@ -4,9 +4,64 @@ Adapted from im2pc/host/pi3x_sam2_cli.py::extract_frames().
 """
 
 import os
+import subprocess
 from pathlib import Path
 
 import cv2
+
+
+def _detect_rotation(cap: cv2.VideoCapture, video_path: str) -> int:
+    """Detect video rotation metadata in degrees (0, 90, 180, 270).
+
+    Checks cv2 properties first, falls back to ffprobe.
+    """
+    # Check if OpenCV already auto-rotates
+    try:
+        auto_orient = cap.get(cv2.CAP_PROP_ORIENTATION_AUTO)
+        if auto_orient == 1.0:
+            return 0  # OpenCV handles rotation automatically
+    except Exception:
+        pass
+
+    # Try cv2 orientation metadata property
+    try:
+        rotation = int(cap.get(cv2.CAP_PROP_ORIENTATION_META))
+        if rotation in (90, 180, 270):
+            return rotation
+    except Exception:
+        pass
+
+    # Fallback: ffprobe
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet",
+                "-select_streams", "v:0",
+                "-show_entries", "stream_tags=rotate",
+                "-of", "csv=p=0",
+                video_path,
+            ],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            angle = int(result.stdout.strip())
+            if angle in (90, 180, 270):
+                return angle
+    except Exception:
+        pass
+
+    return 0
+
+
+def _rotation_to_cv2_code(rotation: int):
+    """Convert rotation degrees to cv2.rotate code, or None if no rotation needed."""
+    if rotation == 90:
+        return cv2.ROTATE_90_CLOCKWISE
+    elif rotation == 180:
+        return cv2.ROTATE_180
+    elif rotation == 270:
+        return cv2.ROTATE_90_COUNTERCLOCKWISE
+    return None
 
 
 def extract_frames(
@@ -46,6 +101,12 @@ def extract_frames(
     fps = cap.get(cv2.CAP_PROP_FPS)
     print(f"Video: {total_frames} frames, {fps:.1f} fps")
 
+    # Detect and handle rotation metadata
+    rotation = _detect_rotation(cap, str(video_path))
+    rotate_code = _rotation_to_cv2_code(rotation)
+    if rotation:
+        print(f"Detected rotation: {rotation}\u00b0 \u2014 will correct frames")
+
     frame_idx = 0
     saved_idx = 0
 
@@ -54,6 +115,8 @@ def extract_frames(
         if not ret:
             break
         if frame_idx % frame_interval == 0:
+            if rotate_code is not None:
+                frame = cv2.rotate(frame, rotate_code)
             frame_path = frames_dir / f"{saved_idx:05d}.jpg"
             cv2.imwrite(str(frame_path), frame)
             saved_idx += 1

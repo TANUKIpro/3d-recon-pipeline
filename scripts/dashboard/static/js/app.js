@@ -51,6 +51,7 @@ config.onStart = async (cfg) => {
     config.setRunning(true);
     pipelineUI.reset();
     sam2Verify.hide();
+    _extractedFrameCount = 0;
     setStatus('running', 'Running');
 
     const res = await fetch('/api/pipeline/start', {
@@ -96,6 +97,12 @@ ws.on('stage_start', (msg) => {
   log.append('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`);
 });
 
+let _extractedFrameCount = 0;
+
+ws.on('extract_frames_result', (msg) => {
+  _extractedFrameCount = msg.frame_count || 0;
+});
+
 ws.on('stage_complete', (msg) => {
   pipelineUI.stageComplete(msg.stage, msg.elapsed);
   if (msg.error) {
@@ -110,7 +117,7 @@ ws.on('stage_complete', (msg) => {
     // Show gallery placeholder hidden, load frames
     const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
     if (empty) empty.classList.add('hidden');
-    preview.loadGallery();
+    preview.loadGallery(_extractedFrameCount);
   } else if (msg.stage === 3) {
     preview.loadPi3xResults(cameraOverlay);
   } else if (msg.stage >= 4 && msg.stage <= 6) {
