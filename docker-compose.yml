@@ -1,0 +1,35 @@
+services:
+  pipeline:
+    build: .
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/data
+      - model-cache:/root/.cache
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - XLA_PYTHON_CLIENT_PREALLOCATE=false
+      - XLA_PYTHON_CLIENT_MEM_FRACTION=0.8
+      # Pipeline parameters (overridable)
+      - FRAME_INTERVAL=${FRAME_INTERVAL:-10}
+      - MAX_FRAMES=${MAX_FRAMES:-50}
+      - PIXEL_LIMIT=${PIXEL_LIMIT:-255000}
+      - CONFIDENCE_THRESHOLD=${CONFIDENCE_THRESHOLD:-0.1}
+      - EDGE_RTOL=${EDGE_RTOL:-0.03}
+      - SAM2_MODEL=${SAM2_MODEL:-large}
+      - DIFFCD_BATCH_SIZE=${DIFFCD_BATCH_SIZE:-3000}
+      - DIFFCD_N_BATCHES=${DIFFCD_N_BATCHES:-25000}
+      - DIFFCD_RESOLUTION=${DIFFCD_RESOLUTION:-384}
+      - TEXTURE_SIZE=${TEXTURE_SIZE:-2048}
+    stdin_open: true
+    tty: true
+
+volumes:
+  model-cache:
