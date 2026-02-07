@@ -88,7 +88,8 @@ export class CameraOverlay {
 
   /**
    * Create a single wireframe frustum pyramid.
-   * Frustum: apex at origin, base extends in -Z direction (camera looks down -Z).
+   * Frustum in OpenCV camera local axes:
+   * apex at origin, base extends in +Z direction (camera looks down +Z).
    */
   _createFrustum(THREE, index, total) {
     const size = 0.03;
@@ -101,11 +102,11 @@ export class CameraOverlay {
     const vertices = new Float32Array([
       // Apex (camera position / local origin)
       0, 0, 0,
-      // Base corners (in -Z direction = camera forward)
-      -halfW, -halfH, -depth,
-       halfW, -halfH, -depth,
-       halfW,  halfH, -depth,
-      -halfW,  halfH, -depth,
+      // Base corners (in +Z direction = OpenCV camera forward)
+      -halfW, -halfH, depth,
+       halfW, -halfH, depth,
+       halfW,  halfH, depth,
+      -halfW,  halfH, depth,
     ]);
 
     // 8 line segments: 4 from apex to corners, 4 around base
