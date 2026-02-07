@@ -70,13 +70,16 @@ class SAM2Session:
         self.inference_state = None
 
     def _load_model(self):
-        """Load SAM2 model."""
+        """Load SAM2 model (always large)."""
         from sam2.build_sam import build_sam2_video_predictor_hf
 
-        config = SAM2_MODEL_CONFIGS[self.model_type]
+        config = SAM2_MODEL_CONFIGS["large"]
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        print(f"Loading SAM2 ({self.model_type}) on {device}...")
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"Loading SAM2 (large) on {device}...")
         log_vram("before SAM2 load")
 
         self.predictor = build_sam2_video_predictor_hf(
@@ -85,6 +88,17 @@ class SAM2Session:
         )
         print("SAM2 loaded")
         log_vram("after SAM2 load")
+
+    def _init_inference_state(self):
+        """Initialize inference state for video frames."""
+        with torch.inference_mode():
+            self.inference_state = self.predictor.init_state(
+                video_path=str(self.frames_dir),
+                offload_video_to_cpu=True,
+                offload_state_to_cpu=True,
+            )
+        print("SAM2 inference state initialized")
+        log_vram("after inference state init")
 
     def release_model(self):
         """Release SAM2 model and free VRAM."""
@@ -101,20 +115,50 @@ class SAM2Session:
         log_vram("after SAM2 release")
 
 
-def _create_click_visualization(
+def _create_mask_overlay(
     frame: np.ndarray,
+    mask: np.ndarray | None,
     points: list[tuple[float, float]],
     labels: list[int],
+    alpha: float = 0.45,
 ) -> np.ndarray:
-    """Draw click points on frame image."""
-    vis = frame.copy()
+    """Draw segmentation mask overlay and click points on frame."""
+    vis = frame.copy().astype(np.float32)
+    color = np.array([30, 144, 255], dtype=np.float32)  # Dodger blue
+    if mask is not None and mask.any():
+        vis[mask] = vis[mask] * (1 - alpha) + color * alpha
+    vis = np.clip(vis, 0, 255).astype(np.uint8)
+
     h, w = vis.shape[:2]
     for (nx, ny), label in zip(points, labels):
         px, py = int(nx * w), int(ny * h)
-        color = (0, 255, 0) if label == 1 else (255, 0, 0)
-        cv2.circle(vis, (px, py), 8, color, -1)
+        c = (0, 255, 0) if label == 1 else (255, 0, 0)
+        cv2.circle(vis, (px, py), 8, c, -1)
         cv2.circle(vis, (px, py), 10, (255, 255, 255), 2)
     return vis
+
+
+def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
+    """Run SAM2 inference on frame 0 with all accumulated click points."""
+    points_px = [
+        [p[0] * session.img_w, p[1] * session.img_h]
+        for p in session.click_points
+    ]
+    points_np = np.array(points_px, dtype=np.float32)
+    labels_np = np.array(session.click_labels, dtype=np.int32)
+
+    with torch.inference_mode():
+        _, _, masks_out = session.predictor.add_new_points_or_box(
+            inference_state=session.inference_state,
+            frame_idx=0,
+            obj_id=1,
+            points=points_np,
+            labels=labels_np,
+            clear_old_points=True,
+            normalize_coords=False,
+        )
+    mask = (masks_out[0] > 0).cpu().numpy().squeeze()
+    return mask
 
 
 def run_sam2_interactive(
@@ -137,32 +181,23 @@ def run_sam2_interactive(
 
     session = SAM2Session(frames_dir, output_dir, model_type)
 
-    def on_click(image, evt: gr.SelectData):
-        """Handle left-click (positive point)."""
+    # Pre-load model and initialize inference state before UI
+    session._load_model()
+    session._init_inference_state()
+
+    def handle_click(image, evt: gr.SelectData, is_negative: bool):
+        """Handle click: accumulate point, run SAM2 inference, show overlay."""
         x, y = evt.index[0], evt.index[1]
         norm_x = x / session.img_w
         norm_y = y / session.img_h
         session.click_points.append((norm_x, norm_y))
-        session.click_labels.append(1)
+        session.click_labels.append(0 if is_negative else 1)
 
-        vis = _create_click_visualization(
-            session.first_frame, session.click_points, session.click_labels
-        )
-        pos = sum(1 for l in session.click_labels if l == 1)
-        neg = sum(1 for l in session.click_labels if l == 0)
-        status = f"Points: {pos} positive, {neg} negative"
-        return vis, status
+        mask = _run_single_frame_inference(session)
 
-    def on_click_negative(image, evt: gr.SelectData):
-        """Handle click in negative mode."""
-        x, y = evt.index[0], evt.index[1]
-        norm_x = x / session.img_w
-        norm_y = y / session.img_h
-        session.click_points.append((norm_x, norm_y))
-        session.click_labels.append(0)
-
-        vis = _create_click_visualization(
-            session.first_frame, session.click_points, session.click_labels
+        vis = _create_mask_overlay(
+            session.first_frame, mask,
+            session.click_points, session.click_labels,
         )
         pos = sum(1 for l in session.click_labels if l == 1)
         neg = sum(1 for l in session.click_labels if l == 0)
@@ -172,52 +207,17 @@ def run_sam2_interactive(
     def clear_clicks():
         session.click_points.clear()
         session.click_labels.clear()
+        session.predictor.reset_state(session.inference_state)
         return session.first_frame, "Clicks cleared"
 
-    def handle_click(image, evt: gr.SelectData, is_negative: bool):
-        if is_negative:
-            return on_click_negative(image, evt)
-        return on_click(image, evt)
-
     def propagate_and_finish(progress=gr.Progress()):
-        """Load SAM2, propagate masks, then signal completion."""
+        """Propagate masks to all frames, then signal completion."""
         if not session.click_points:
             return "Add at least one click point first"
 
         try:
-            progress(0, desc="Loading SAM2 model...")
-            session._load_model()
-
-            progress(0.1, desc="Initializing video...")
+            progress(0.3, desc="Propagating masks...")
             with torch.inference_mode():
-                session.inference_state = session.predictor.init_state(
-                    video_path=str(session.frames_dir),
-                    offload_video_to_cpu=True,
-                )
-
-                # Convert normalized coords to pixel coords for SAM2
-                points_px = [
-                    [p[0] * session.img_w, p[1] * session.img_h]
-                    for p in session.click_points
-                ]
-                points_np = np.array(points_px, dtype=np.float32)
-                labels_np = np.array(session.click_labels, dtype=np.int32)
-
-                progress(0.2, desc="Adding prompt...")
-                _, _, masks_out = session.predictor.add_new_points_or_box(
-                    inference_state=session.inference_state,
-                    frame_idx=0,
-                    obj_id=1,
-                    points=points_np,
-                    labels=labels_np,
-                    clear_old_points=True,
-                    normalize_coords=False,
-                )
-
-                prompt_mask = (masks_out[0] > 0).cpu().numpy().squeeze()
-                prompt_pixels = int(prompt_mask.sum())
-
-                progress(0.3, desc="Propagating masks...")
                 num_frames = session.inference_state["num_frames"]
                 for frame_idx, _, masks_tensor in session.predictor.propagate_in_video(
                     session.inference_state
@@ -234,7 +234,6 @@ def run_sam2_interactive(
             progress(1.0, desc="Done!")
             msg = (
                 f"Propagated masks to {num_frames} frames\n"
-                f"Prompt mask: {prompt_pixels:,} pixels\n"
                 f"Masks saved to: {session.mask_dir}\n\n"
                 "Pipeline will continue automatically..."
             )
@@ -258,6 +257,7 @@ def run_sam2_interactive(
         gr.Markdown(
             "1. Click on the object to segment (green=include)\n"
             "2. Toggle 'Negative mode' and click to exclude regions (red)\n"
+            "   → Segmentation preview updates on each click\n"
             "3. Click **Confirm & Propagate** to process all frames"
         )
 
