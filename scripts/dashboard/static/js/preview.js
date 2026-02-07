@@ -94,11 +94,17 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
+    // OpenCV (Y-down, Z-forward) → OpenGL (Y-up, Z-backward)
+    // rotation.x = PI flips both Y and Z axes
+    const sceneRoot = new THREE.Group();
+    sceneRoot.rotation.x = Math.PI;
+    scene.add(sceneRoot);
+
     // Show container
     container.classList.add('visible');
 
     this._stages[stageNum] = {
-      scene, camera, controls, container,
+      scene, sceneRoot, camera, controls, container,
       currentObject: null,
       initialized: true,
     };
@@ -212,7 +218,7 @@ export class PreviewPanel {
           return { matrix: flat, frame_index: (data.frame_indices || [])[i] ?? i };
         });
 
-        cameraOverlay.create(THREE, stage.scene, poseArray);
+        cameraOverlay.create(THREE, stage.sceneRoot, poseArray);
 
         // Apply same centering offset as point cloud
         if (stage.centerOffset) {
@@ -271,7 +277,7 @@ export class PreviewPanel {
 
     // Remove previous object
     if (stage.currentObject) {
-      stage.scene.remove(stage.currentObject);
+      stage.sceneRoot.remove(stage.currentObject);
       stage.currentObject = null;
     }
 
@@ -309,7 +315,7 @@ export class PreviewPanel {
       }
 
       stage.currentObject = obj;
-      stage.scene.add(obj);
+      stage.sceneRoot.add(obj);
       this._fitCamera(stage, geometry.boundingBox);
     } catch (e) {
       console.error(`Failed to load PLY (stage ${stageNum}):`, e);
@@ -324,7 +330,7 @@ export class PreviewPanel {
     if (!stage) return;
 
     if (stage.currentObject) {
-      stage.scene.remove(stage.currentObject);
+      stage.sceneRoot.remove(stage.currentObject);
       stage.currentObject = null;
     }
 
@@ -356,7 +362,7 @@ export class PreviewPanel {
       object.position.sub(center);
 
       stage.currentObject = object;
-      stage.scene.add(object);
+      stage.sceneRoot.add(object);
       this._fitCamera(stage, box);
     } catch (e) {
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);

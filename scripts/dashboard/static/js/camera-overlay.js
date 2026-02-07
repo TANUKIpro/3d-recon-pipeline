@@ -8,18 +8,20 @@
 export class CameraOverlay {
   constructor() {
     this._group = null;
+    this._parent = null;
     this._THREE = null;
   }
 
   /**
    * Create camera frustum markers from pose matrices.
    * @param {object} THREE - three.js module
-   * @param {THREE.Scene} scene - target scene
+   * @param {THREE.Object3D} parent - target parent (scene or group)
    * @param {Array} poses - array of {matrix: number[16], frame_index: number}
    */
-  create(THREE, scene, poses) {
+  create(THREE, parent, poses) {
     this._THREE = THREE;
-    this.remove(scene);
+    this._parent = parent;
+    this.remove();
 
     this._group = new THREE.Group();
     this._group.name = 'camera-frustums';
@@ -48,15 +50,15 @@ export class CameraOverlay {
       this._group.add(frustum);
     }
 
-    scene.add(this._group);
+    parent.add(this._group);
   }
 
   /**
-   * Remove all frustum objects from scene.
+   * Remove all frustum objects from parent.
    */
-  remove(scene) {
-    if (this._group) {
-      scene.remove(this._group);
+  remove() {
+    if (this._group && this._parent) {
+      this._parent.remove(this._group);
       this._group.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
         if (obj.material) obj.material.dispose();
