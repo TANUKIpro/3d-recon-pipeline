@@ -17,6 +17,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - XLA_PYTHON_CLIENT_PREALLOCATE=false
       - XLA_PYTHON_CLIENT_MEM_FRACTION=0.8
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       # Pipeline parameters (overridable)
       - FRAME_INTERVAL=${FRAME_INTERVAL:-10}
       - MAX_FRAMES=${MAX_FRAMES:-50}

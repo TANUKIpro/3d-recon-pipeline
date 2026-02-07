@@ -20,7 +20,7 @@ from pathlib import Path
 # Add scripts directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from vram_utils import cleanup_pytorch_vram, log_vram
+from vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
 
 
 def main():
@@ -80,6 +80,10 @@ Examples:
         mask_dir = str(run_sam2_interactive(frames_dir, output_dir))
         cleanup_pytorch_vram()
         print(f"  → {mask_dir}")
+
+    # VRAM gate: ensure sufficient free VRAM before Pi3X (only after SAM2 ran)
+    if skip_to <= 2:
+        ensure_vram_available(min_free_mb=12000, stage_name="before Pi3X")
 
     # =====================================================================
     # Stage 3: Pi3X 3D Reconstruction

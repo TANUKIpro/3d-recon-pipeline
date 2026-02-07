@@ -49,9 +49,11 @@ RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=0 pip install --no-build-isolation -e .
 
-# --- Layer 5: Pi3 (sys.path usage) ---
+# --- Layer 5: Pi3 (sys.path usage, pinned for API compat with stage offloading) ---
+ARG PI3_COMMIT=08d7288aaf4b0c08c8498bea7bafedc4672bb006
 RUN git clone https://github.com/yyfz/Pi3.git /opt/pi3 \
     && cd /opt/pi3 \
+    && git checkout ${PI3_COMMIT} \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
 
 # --- Layer 6: DiffCD (clone + patches) ---
