@@ -17,8 +17,10 @@ export class CameraOverlay {
    * @param {object} THREE - three.js module
    * @param {THREE.Object3D} parent - target parent (scene or group)
    * @param {Array} poses - array of {matrix: number[16], frame_index: number}
+   * @param {object} [options]
+   * @param {number} [options.forwardSign=1] - +1: camera +Z forward, -1: camera -Z forward
    */
-  create(THREE, parent, poses) {
+  create(THREE, parent, poses, options = {}) {
     this._THREE = THREE;
     this._parent = parent;
     this.remove();
@@ -27,6 +29,7 @@ export class CameraOverlay {
     this._group.name = 'camera-frustums';
 
     const count = poses.length;
+    const forwardSign = options.forwardSign === -1 ? -1 : 1;
 
     for (let i = 0; i < count; i++) {
       const pose = poses[i];
@@ -43,7 +46,7 @@ export class CameraOverlay {
       camToWorld.decompose(position, quaternion, scale);
 
       // Create frustum wireframe
-      const frustum = this._createFrustum(THREE, i, count);
+      const frustum = this._createFrustum(THREE, i, count, forwardSign);
       frustum.position.copy(position);
       frustum.quaternion.copy(quaternion);
 
@@ -88,12 +91,14 @@ export class CameraOverlay {
 
   /**
    * Create a single wireframe frustum pyramid.
-   * Frustum: apex at origin, base extends in -Z direction (camera looks down -Z).
+   * Frustum in camera local axes:
+   * apex at origin, base extends in forwardSign * Z direction.
    */
-  _createFrustum(THREE, index, total) {
+  _createFrustum(THREE, index, total, forwardSign = 1) {
     const size = 0.03;
     const aspect = 1.5;
     const depth = size * 2;
+    const z = depth * (forwardSign === -1 ? -1 : 1);
     const halfW = size * aspect * 0.5;
     const halfH = size * 0.5;
 
@@ -101,11 +106,11 @@ export class CameraOverlay {
     const vertices = new Float32Array([
       // Apex (camera position / local origin)
       0, 0, 0,
-      // Base corners (in -Z direction = camera forward)
-      -halfW, -halfH, -depth,
-       halfW, -halfH, -depth,
-       halfW,  halfH, -depth,
-      -halfW,  halfH, -depth,
+      // Base corners (camera forward direction)
+      -halfW, -halfH, z,
+       halfW, -halfH, z,
+       halfW,  halfH, z,
+      -halfW,  halfH, z,
     ]);
 
     // 8 line segments: 4 from apex to corners, 4 around base

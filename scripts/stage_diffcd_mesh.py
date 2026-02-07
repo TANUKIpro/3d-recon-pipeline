@@ -7,14 +7,57 @@ Based on im2pc/colab_diffcd.md and tmp/DiffCD.ipynb patterns.
 """
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import trimesh
 
 from vram_utils import prepare_for_jax, log_vram
+
+ProgressCallback = Callable[[float, str | None], None]
+_TQDM_PERCENT_RE = re.compile(r"(\d{1,3})%\|")
+_ITER_FRACTION_RE = re.compile(
+    r"(?:batch|iter|step|epoch)[^\d]{0,16}(\d+)\s*/\s*(\d+)",
+    re.IGNORECASE,
+)
+_GENERIC_FRACTION_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
+
+
+def _emit_progress(
+    progress_cb: ProgressCallback | None,
+    progress: float,
+    detail: str | None = None,
+) -> None:
+    if progress_cb is None:
+        return
+    progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _parse_progress_ratio(line: str) -> float | None:
+    """Parse DiffCD training progress from a log line."""
+    m = _TQDM_PERCENT_RE.search(line)
+    if m:
+        pct = max(0, min(100, int(m.group(1))))
+        return pct / 100.0
+
+    m = _ITER_FRACTION_RE.search(line)
+    if not m:
+        m = _GENERIC_FRACTION_RE.search(line)
+    if not m:
+        return None
+
+    current = int(m.group(1))
+    total = int(m.group(2))
+    if total <= 0:
+        return None
+    ratio = current / total
+    if ratio < 0 or ratio > 1.5:
+        return None
+    return min(1.0, max(0.0, ratio))
 
 
 def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_000) -> Path:
@@ -64,7 +107,11 @@ def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_
     return Path(npy_path)
 
 
-def run_diffcd(denoised_ply: str, output_dir: str) -> Path:
+def run_diffcd(
+    denoised_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
     """Run DiffCD mesh reconstruction as a subprocess.
 
     Args:
@@ -86,10 +133,13 @@ def run_diffcd(denoised_ply: str, output_dir: str) -> Path:
     # Step 1: Convert PLY to NPY
     npy_path = output_path / "object_points.npy"
     print("=== DiffCD: Preparing point cloud ===")
+    _emit_progress(progress_cb, 5.0, "Preparing point cloud for DiffCD")
     _downsample_to_npy(denoised_ply, str(npy_path))
+    _emit_progress(progress_cb, 15.0, "Point cloud prepared")
 
     # Step 2: Run DiffCD as subprocess
     print("\n=== DiffCD: Running implicit surface fitting ===")
+    _emit_progress(progress_cb, 20.0, "Running DiffCD fitting")
     prepare_for_jax()
     log_vram("before DiffCD")
 
@@ -109,15 +159,37 @@ def run_diffcd(denoised_ply: str, output_dir: str) -> Path:
         "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.8",
     }
 
-    result = subprocess.run(
-        cmd, env=env, cwd="/opt/diffcd",
-        stdout=sys.stdout, stderr=sys.stderr,
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        cwd="/opt/diffcd",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    last_reported = 20.0
+    if process.stdout is not None:
+        for line in process.stdout:
+            print(line, end="")
+            ratio = _parse_progress_ratio(line)
+            if ratio is None:
+                continue
+            stage_pct = 20.0 + ratio * 65.0
+            if stage_pct - last_reported >= 0.5:
+                _emit_progress(
+                    progress_cb,
+                    stage_pct,
+                    f"DiffCD fitting ({int(ratio * 100)}%)",
+                )
+                last_reported = stage_pct
 
-    if result.returncode != 0:
-        raise RuntimeError(f"DiffCD failed with return code {result.returncode}")
+    return_code = process.wait()
+    if return_code != 0:
+        raise RuntimeError(f"DiffCD failed with return code {return_code}")
 
     log_vram("after DiffCD")
+    _emit_progress(progress_cb, 87.0, "Collecting DiffCD outputs")
 
     # Step 3: Find output mesh
     # DiffCD puts output in a timestamped subdir: {out}/experiment.../meshes/mesh_N.ply
@@ -135,6 +207,7 @@ def run_diffcd(denoised_ply: str, output_dir: str) -> Path:
 
     # Step 4: Post-process (Laplacian smoothing)
     print("Applying Laplacian smoothing...")
+    _emit_progress(progress_cb, 94.0, "Applying mesh smoothing")
     mesh = trimesh.load(str(raw_mesh_path))
     print(f"  Vertices: {len(mesh.vertices):,}, Faces: {len(mesh.faces):,}")
 
@@ -144,6 +217,7 @@ def run_diffcd(denoised_ply: str, output_dir: str) -> Path:
     mesh_smooth.export(str(final_path))
     print(f"Saved: {final_path}")
     print(f"  Vertices: {len(mesh_smooth.vertices):,}, Faces: {len(mesh_smooth.faces):,}")
+    _emit_progress(progress_cb, 100.0, "DiffCD stage complete")
 
     return final_path
 

@@ -67,6 +67,8 @@ class StageInfo:
     start_time: float | None = None
     elapsed: float | None = None
     error: str | None = None
+    progress: float = 0.0
+    detail: str | None = None
 
 
 @dataclass
@@ -138,16 +140,22 @@ class PipelineSession:
             s.start_time = None
             s.elapsed = None
             s.error = None
+            s.progress = 0.0
+            s.detail = None
 
     def stage_start(self, stage: PipelineStage) -> None:
         self.current_stage = stage
         info = self.stages[int(stage)]
         info.status = StageStatus.RUNNING
         info.start_time = time.time()
+        info.progress = 0.0
+        info.detail = None
 
     def stage_complete(self, stage: PipelineStage) -> None:
         info = self.stages[int(stage)]
         info.status = StageStatus.COMPLETE
+        info.progress = 100.0
+        info.detail = None
         if info.start_time is not None:
             info.elapsed = time.time() - info.start_time
 
@@ -155,12 +163,31 @@ class PipelineSession:
         info = self.stages[int(stage)]
         info.status = StageStatus.FAILED
         info.error = error
+        info.detail = error
         if info.start_time is not None:
             info.elapsed = time.time() - info.start_time
 
     def stage_interactive(self, stage: PipelineStage) -> None:
         info = self.stages[int(stage)]
         info.status = StageStatus.INTERACTIVE
+
+    def stage_progress(
+        self,
+        stage: PipelineStage,
+        progress: float | None = None,
+        detail: str | None = None,
+    ) -> None:
+        info = self.stages[int(stage)]
+        if progress is not None:
+            info.progress = max(0.0, min(100.0, float(progress)))
+        if detail is not None:
+            info.detail = detail
+
+    def overall_progress(self) -> float:
+        total = 0.0
+        for stage_id in range(1, 7):
+            total += self.stages[stage_id].progress
+        return round(total / 6.0, 1)
 
     def to_status_dict(self) -> dict:
         return {
@@ -176,7 +203,10 @@ class PipelineSession:
                     "label": STAGE_LABELS.get(k, ""),
                     "elapsed": v.elapsed,
                     "error": v.error,
+                    "progress": round(v.progress, 1),
+                    "detail": v.detail,
                 }
                 for k, v in self.stages.items()
             },
+            "overall_progress": self.overall_progress(),
         }

@@ -20,7 +20,6 @@ if _SCRIPTS_DIR not in sys.path:
 from scripts.dashboard.state import (
     STAGE_LABELS,
     PipelineStage,
-    StageStatus,
 )
 
 if TYPE_CHECKING:
@@ -39,6 +38,23 @@ async def broadcast(session: PipelineSession, msg: dict) -> None:
             stale.append(i)
     for i in reversed(stale):
         session.ws_clients.pop(i)
+
+
+async def _broadcast_stage_progress(
+    session: PipelineSession,
+    stage: PipelineStage,
+    progress: float | None = None,
+    detail: str | None = None,
+) -> None:
+    session.stage_progress(stage, progress=progress, detail=detail)
+    info = session.stages[int(stage)]
+    await broadcast(session, {
+        "type": "stage_progress",
+        "stage": int(stage),
+        "progress": round(info.progress, 1),
+        "detail": info.detail,
+        "overall_progress": session.overall_progress(),
+    })
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
@@ -88,6 +104,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         session.pi3x_cache_path = str(Path(output_dir) / "pi3x_cache.npz")
 
         # Pi3X preview approval — pause for user to review 3D preview
+        await _broadcast_stage_progress(
+            session,
+            PipelineStage.PI3X_RECONSTRUCT,
+            detail="Waiting for preview approval",
+        )
         await broadcast(session, {"type": "pi3x_preview_ready"})
         session.pi3x_approve_event.clear()
         await session.pi3x_approve_event.wait()
@@ -101,6 +122,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "stage": int(PipelineStage.SAM2_SEGMENT),
             "label": STAGE_LABELS[PipelineStage.SAM2_SEGMENT],
         })
+        await _broadcast_stage_progress(
+            session,
+            PipelineStage.SAM2_SEGMENT,
+            progress=5.0,
+            detail="Initializing SAM2 model",
+        )
 
         # SAM2 interact → propagate → verify loop (supports redo)
         while True:
@@ -118,6 +145,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
             # Signal frontend: SAM2 is ready for interaction
             session.stage_interactive(PipelineStage.SAM2_SEGMENT)
+            await _broadcast_stage_progress(
+                session,
+                PipelineStage.SAM2_SEGMENT,
+                progress=20.0,
+                detail="Waiting for interactive clicks",
+            )
             await broadcast(session, {
                 "type": "sam2_ready",
                 "frame_count": meta["frame_count"],
@@ -132,19 +165,49 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             _check_cancelled(session)
 
             # Propagate masks
+            await _broadcast_stage_progress(
+                session,
+                PipelineStage.SAM2_SEGMENT,
+                progress=30.0,
+                detail="Propagating masks",
+            )
             await broadcast(session, {"type": "sam2_propagating"})
 
             loop = asyncio.get_event_loop()
 
             def _propagate_cb(frame_idx: int, total: int) -> None:
-                asyncio.run_coroutine_threadsafe(
-                    broadcast(session, {
-                        "type": "sam2_propagate_progress",
-                        "frame": frame_idx + 1,
-                        "total": total,
-                    }),
-                    loop,
-                )
+                total = max(total, 1)
+                ratio = (frame_idx + 1) / total
+                progress = 30.0 + ratio * 40.0
+                detail = f"Propagating masks ({frame_idx + 1}/{total})"
+
+                def _push() -> None:
+                    session.stage_progress(
+                        PipelineStage.SAM2_SEGMENT,
+                        progress=progress,
+                        detail=detail,
+                    )
+                    overall = session.overall_progress()
+                    asyncio.create_task(
+                        broadcast(session, {
+                            "type": "sam2_propagate_progress",
+                            "frame": frame_idx + 1,
+                            "total": total,
+                            "progress": round(progress, 1),
+                            "overall_progress": overall,
+                        })
+                    )
+                    asyncio.create_task(
+                        broadcast(session, {
+                            "type": "stage_progress",
+                            "stage": int(PipelineStage.SAM2_SEGMENT),
+                            "progress": round(progress, 1),
+                            "detail": detail,
+                            "overall_progress": overall,
+                        })
+                    )
+
+                loop.call_soon_threadsafe(_push)
 
             mask_dir = await asyncio.to_thread(
                 sam2_service.propagate_and_save, _propagate_cb
@@ -159,6 +222,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             session.sam2_approved = False
 
             # Signal frontend: verification strip ready
+            await _broadcast_stage_progress(
+                session,
+                PipelineStage.SAM2_SEGMENT,
+                progress=72.0,
+                detail="Waiting for mask verification",
+            )
             await broadcast(session, {
                 "type": "sam2_verification_ready",
                 "frame_count": meta["frame_count"],
@@ -172,13 +241,43 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             if session.sam2_approved:
                 break
             # User chose redo — loop back to re-init SAM2
+            await _broadcast_stage_progress(
+                session,
+                PipelineStage.SAM2_SEGMENT,
+                progress=15.0,
+                detail="Redoing SAM2 interaction",
+            )
 
         # Apply SAM2 masks to Pi3X cache
+        loop = asyncio.get_event_loop()
+
+        def _mask_progress_cb(progress: float, detail: str | None = None) -> None:
+            mapped_progress = 72.0 + (max(0.0, min(100.0, progress)) * 0.28)
+
+            def _push() -> None:
+                session.stage_progress(
+                    PipelineStage.SAM2_SEGMENT,
+                    progress=mapped_progress,
+                    detail=detail,
+                )
+                asyncio.create_task(
+                    broadcast(session, {
+                        "type": "stage_progress",
+                        "stage": int(PipelineStage.SAM2_SEGMENT),
+                        "progress": round(mapped_progress, 1),
+                        "detail": detail,
+                        "overall_progress": session.overall_progress(),
+                    })
+                )
+
+            loop.call_soon_threadsafe(_push)
+
         await asyncio.to_thread(
             _stage_apply_masks,
             session.pi3x_cache_path,
             session.mask_dir,
             output_dir,
+            progress_cb=_mask_progress_cb,
         )
         session.ply_path = str(Path(output_dir) / "object.ply")
 
@@ -187,6 +286,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "type": "stage_complete",
             "stage": int(PipelineStage.SAM2_SEGMENT),
             "elapsed": session.stages[int(PipelineStage.SAM2_SEGMENT)].elapsed,
+            "overall_progress": session.overall_progress(),
         })
 
         _check_cancelled(session)
@@ -235,6 +335,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         await broadcast(session, {
             "type": "pipeline_complete",
             "elapsed": round(elapsed, 1),
+            "overall_progress": 100.0,
         })
 
     except _CancelledError:
@@ -279,8 +380,26 @@ async def _run_stage(
         "stage": int(stage),
         "label": STAGE_LABELS[stage],
     })
+    await _broadcast_stage_progress(session, stage, progress=0.0, detail="Starting")
+    loop = asyncio.get_running_loop()
+
+    def _progress_cb(progress: float, detail: str | None = None) -> None:
+        def _push() -> None:
+            session.stage_progress(stage, progress=progress, detail=detail)
+            asyncio.create_task(
+                broadcast(session, {
+                    "type": "stage_progress",
+                    "stage": int(stage),
+                    "progress": round(session.stages[int(stage)].progress, 1),
+                    "detail": session.stages[int(stage)].detail,
+                    "overall_progress": session.overall_progress(),
+                })
+            )
+
+        loop.call_soon_threadsafe(_push)
+
     try:
-        await asyncio.to_thread(fn, *args)
+        await asyncio.to_thread(fn, *args, progress_cb=_progress_cb)
     except Exception as e:
         session.stage_failed(stage, str(e))
         await broadcast(session, {
@@ -288,6 +407,7 @@ async def _run_stage(
             "stage": int(stage),
             "elapsed": session.stages[int(stage)].elapsed,
             "error": str(e),
+            "overall_progress": session.overall_progress(),
         })
         raise
     session.stage_complete(stage)
@@ -295,20 +415,34 @@ async def _run_stage(
         "type": "stage_complete",
         "stage": int(stage),
         "elapsed": session.stages[int(stage)].elapsed,
+        "overall_progress": session.overall_progress(),
     })
 
 
 # ── Stage wrappers (call existing functions) ──────────────────────
 
-def _stage_extract_frames(video_path: str, output_dir: str, frame_interval: int, max_frames: int) -> None:
+def _stage_extract_frames(
+    video_path: str,
+    output_dir: str,
+    frame_interval: int,
+    max_frames: int,
+    progress_cb=None,
+) -> None:
     from stage_extract_frames import extract_frames
-    extract_frames(video_path, output_dir, frame_interval=frame_interval, max_frames=max_frames)
+    extract_frames(
+        video_path,
+        output_dir,
+        frame_interval=frame_interval,
+        max_frames=max_frames,
+        progress_cb=progress_cb,
+    )
 
 
 def _stage_pi3x_inference(
     frames_dir: str, output_dir: str,
     pixel_limit: int, max_frames: int,
     conf_threshold: float, edge_rtol: float,
+    progress_cb=None,
 ) -> None:
     from stage_pi3x_reconstruct import run_pi3x_inference
     from vram_utils import cleanup_pytorch_vram
@@ -318,31 +452,46 @@ def _stage_pi3x_inference(
         max_frames=max_frames,
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
+        progress_cb=progress_cb,
     )
     cleanup_pytorch_vram()
 
 
-def _stage_apply_masks(cache_path: str, mask_dir: str, output_dir: str) -> None:
+def _stage_apply_masks(
+    cache_path: str,
+    mask_dir: str,
+    output_dir: str,
+    progress_cb=None,
+) -> None:
     from stage_pi3x_reconstruct import apply_sam2_masks
-    apply_sam2_masks(cache_path, mask_dir, output_dir)
+    apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
 
 
-def _stage_denoise(ply_path: str, output_dir: str) -> None:
+def _stage_denoise(ply_path: str, output_dir: str, progress_cb=None) -> None:
     from stage_denoise import denoise
-    denoise(ply_path, output_dir)
+    denoise(ply_path, output_dir, progress_cb=progress_cb)
 
 
-def _stage_diffcd(denoised_ply: str, output_dir: str) -> None:
+def _stage_diffcd(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
     from stage_diffcd_mesh import run_diffcd
-    run_diffcd(denoised_ply, output_dir)
+    run_diffcd(denoised_ply, output_dir, progress_cb=progress_cb)
 
 
 def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
+    progress_cb=None,
 ) -> None:
     from stage_texture_bake import bake_texture
-    bake_texture(mesh_ply, poses_path, frames_dir, mask_dir, output_dir, tex_size=texture_size)
+    bake_texture(
+        mesh_ply,
+        poses_path,
+        frames_dir,
+        mask_dir,
+        output_dir,
+        tex_size=texture_size,
+        progress_cb=progress_cb,
+    )
 
 
 def _vram_gate() -> None:
