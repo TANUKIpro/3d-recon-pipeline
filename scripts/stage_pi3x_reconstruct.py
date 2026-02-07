@@ -47,6 +47,13 @@ _VRAM_PROFILES = [
 _CHUNK_SCALE_MIN = 0.85
 _CHUNK_SCALE_MAX = 1.15
 
+# Camera-orbit plane alignment (Stage 2 output coordinate normalization)
+_ALIGN_MIN_FRAMES = 4
+_ALIGN_MIN_LINE_RATIO = 1e-3
+_ALIGN_MAX_PLANAR_RATIO = 0.35
+_ALIGN_MIN_RADIUS = 1e-4
+_TARGET_PLANE_NORMAL = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
 ProgressCallback = Callable[[float, str | None], None]
 
 
@@ -58,6 +65,66 @@ def _emit_progress(
     if progress_cb is None:
         return
     progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _axis_angle_to_rotation(axis: np.ndarray, angle: float) -> np.ndarray:
+    """Convert axis-angle to a 3x3 rotation matrix."""
+    axis = axis / max(np.linalg.norm(axis), 1e-12)
+    x, y, z = axis
+    K = np.array(
+        [[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]],
+        dtype=np.float64,
+    )
+    I = np.eye(3, dtype=np.float64)
+    return I + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+
+
+def _rotation_matrix_from_vectors(src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+    """Return rotation matrix R such that R @ src ~= dst."""
+    src = src / max(np.linalg.norm(src), 1e-12)
+    dst = dst / max(np.linalg.norm(dst), 1e-12)
+    cross = np.cross(src, dst)
+    cross_norm = np.linalg.norm(cross)
+    dot = float(np.clip(np.dot(src, dst), -1.0, 1.0))
+
+    if cross_norm < 1e-10:
+        if dot > 0.0:
+            return np.eye(3, dtype=np.float64)
+        # 180° turn around any axis orthogonal to src.
+        aux = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        if abs(src[0]) > 0.9:
+            aux = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        axis = np.cross(src, aux)
+        axis = axis / max(np.linalg.norm(axis), 1e-12)
+        return _axis_angle_to_rotation(axis, np.pi)
+
+    axis = cross / cross_norm
+    angle = float(np.arctan2(cross_norm, dot))
+    return _axis_angle_to_rotation(axis, angle)
+
+
+def _rotation_matrix_about_y(angle: float) -> np.ndarray:
+    c = float(np.cos(angle))
+    s = float(np.sin(angle))
+    return np.array(
+        [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+        dtype=np.float64,
+    )
+
+
+def _matrix_to_list(mat: np.ndarray) -> list[list[float]]:
+    return [[float(v) for v in row] for row in mat]
+
+
+def _vector_to_list(vec: np.ndarray) -> list[float]:
+    return [float(v) for v in vec]
 
 
 def _auto_scale_frame_target(
@@ -421,6 +488,127 @@ def _concat_results(
     return out
 
 
+def _estimate_camera_plane_transform(
+    camera_poses: np.ndarray,
+) -> tuple[np.ndarray | None, np.ndarray | None, dict]:
+    """Estimate world alignment from camera orbit plane via PCA.
+
+    Aligns the best-fit camera orbit normal to +Y so the orbit plane becomes
+    parallel to the default XZ reference surface.
+    """
+    meta: dict[str, object] = {
+        "enabled": True,
+        "applied": False,
+        "method": "camera_plane_pca",
+        "target_plane_normal": _vector_to_list(_TARGET_PLANE_NORMAL),
+    }
+
+    if camera_poses.shape[0] < _ALIGN_MIN_FRAMES:
+        meta["reason"] = (
+            f"insufficient_frames: need >= {_ALIGN_MIN_FRAMES}, "
+            f"got {camera_poses.shape[0]}"
+        )
+        return None, None, meta
+
+    centers = camera_poses[:, :3, 3].astype(np.float64)
+    centroid = centers.mean(axis=0)
+    centered = centers - centroid
+
+    cov = (centered.T @ centered) / max(len(centered) - 1, 1)
+    eigvals, eigvecs = np.linalg.eigh(cov)  # ascending
+    order = np.argsort(eigvals)[::-1]
+    eigvals = eigvals[order]
+    eigvecs = eigvecs[:, order]
+
+    major = eigvecs[:, 0]
+    normal = eigvecs[:, 2]
+
+    line_ratio = float(eigvals[1] / max(eigvals[0], 1e-12))
+    planar_ratio = float(eigvals[2] / max(eigvals[1], 1e-12))
+    radius = float(np.sqrt(max((eigvals[0] + eigvals[1]) * 0.5, 0.0)))
+
+    meta.update({
+        "eigenvalues": [float(v) for v in eigvals],
+        "line_ratio": line_ratio,
+        "planar_ratio": planar_ratio,
+        "orbit_radius_estimate": radius,
+        "camera_centroid": _vector_to_list(centroid),
+        "camera_plane_normal_before": _vector_to_list(normal),
+    })
+
+    if line_ratio < _ALIGN_MIN_LINE_RATIO:
+        meta["reason"] = (
+            f"camera_path_too_linear: line_ratio={line_ratio:.6f} < "
+            f"{_ALIGN_MIN_LINE_RATIO:.6f}"
+        )
+        return None, None, meta
+
+    if planar_ratio > _ALIGN_MAX_PLANAR_RATIO:
+        meta["reason"] = (
+            f"camera_path_not_planar_enough: planar_ratio={planar_ratio:.6f} > "
+            f"{_ALIGN_MAX_PLANAR_RATIO:.6f}"
+        )
+        return None, None, meta
+
+    if radius < _ALIGN_MIN_RADIUS:
+        meta["reason"] = (
+            f"orbit_radius_too_small: radius={radius:.6f} < "
+            f"{_ALIGN_MIN_RADIUS:.6f}"
+        )
+        return None, None, meta
+
+    # Step 1: align orbit normal to +Y.
+    R_normal = _rotation_matrix_from_vectors(normal, _TARGET_PLANE_NORMAL)
+
+    # Step 2: stabilize yaw by sending the major in-plane axis to +X.
+    major_rot = R_normal @ major
+    major_xz = major_rot.copy()
+    major_xz[1] = 0.0
+    major_xz_norm = np.linalg.norm(major_xz)
+
+    if major_xz_norm > 1e-10:
+        major_xz = major_xz / major_xz_norm
+        yaw = float(np.arctan2(major_xz[2], major_xz[0]))
+        R_yaw = _rotation_matrix_about_y(-yaw)
+    else:
+        yaw = 0.0
+        R_yaw = np.eye(3, dtype=np.float64)
+
+    R = R_yaw @ R_normal
+    # Rotate around camera centroid (preserves global placement scale).
+    t = centroid - (R @ centroid)
+
+    normal_after = R @ normal
+    meta.update({
+        "applied": True,
+        "yaw_correction_rad": yaw,
+        "rotation": _matrix_to_list(R),
+        "translation": _vector_to_list(t),
+        "camera_plane_normal_after": _vector_to_list(normal_after),
+    })
+    return R, t, meta
+
+
+def _align_results_to_camera_plane(results: dict) -> tuple[dict, dict]:
+    """Normalize world axes from camera orbit geometry."""
+    if "camera_poses" not in results:
+        return results, {
+            "enabled": True,
+            "applied": False,
+            "method": "camera_plane_pca",
+            "reason": "camera_poses_missing",
+            "target_plane_normal": _vector_to_list(_TARGET_PLANE_NORMAL),
+        }
+
+    poses_np = results["camera_poses"][0].detach().cpu().numpy()
+    R, t, meta = _estimate_camera_plane_transform(poses_np)
+    if R is None or t is None:
+        return results, meta
+
+    aligned = _apply_rigid_transform(results, R, t, s=1.0)
+    return aligned, meta
+
+
 class _nullcontext:
     """Minimal no-op context manager (for Python <3.10 compat)."""
 
@@ -438,6 +626,7 @@ def run_pi3x_inference(
     max_frames: int | None = None,
     conf_threshold: float | None = None,
     edge_rtol: float | None = None,
+    align_camera_plane: bool | None = None,
     progress_cb: ProgressCallback | None = None,
 ) -> tuple[Path, Path, Path]:
     """Run Pi3X inference and save full (conf+edge filtered) point cloud.
@@ -453,6 +642,8 @@ def run_pi3x_inference(
         max_frames: Maximum frames for Pi3X.
         conf_threshold: Confidence threshold for filtering.
         edge_rtol: Depth edge relative tolerance.
+        align_camera_plane: If True, align camera-orbit plane to the default
+            reference surface (XZ) by rotating world coordinates.
 
     Returns:
         Tuple of (ply_full_path, poses_path, cache_path).
@@ -465,6 +656,8 @@ def run_pi3x_inference(
         conf_threshold = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.1"))
     if edge_rtol is None:
         edge_rtol = float(os.environ.get("EDGE_RTOL", "0.03"))
+    if align_camera_plane is None:
+        align_camera_plane = _env_flag("ALIGN_CAMERA_PLANE", True)
 
     from pi3.utils.basic import write_ply
     from pi3.models.pi3x import Pi3X
@@ -634,6 +827,28 @@ def run_pi3x_inference(
     del model
     cleanup_pytorch_vram()
 
+    # --- Optional world alignment from camera orbit plane ---
+    alignment_meta: dict[str, object] = {
+        "enabled": bool(align_camera_plane),
+        "applied": False,
+        "method": "camera_plane_pca",
+        "target_plane_normal": _vector_to_list(_TARGET_PLANE_NORMAL),
+    }
+    if align_camera_plane:
+        _emit_progress(progress_cb, 66.0, "Aligning world axes from camera orbit")
+        results, alignment_meta = _align_results_to_camera_plane(results)
+        if alignment_meta.get("applied"):
+            before = alignment_meta.get("camera_plane_normal_before")
+            after = alignment_meta.get("camera_plane_normal_after")
+            print("Applied camera-plane world alignment:")
+            print(f"  Normal before: {before}")
+            print(f"  Normal after:  {after}")
+        else:
+            print(f"Skipped camera-plane alignment: {alignment_meta.get('reason', 'unknown')}")
+    else:
+        alignment_meta["reason"] = "disabled"
+        print("Camera-plane alignment disabled (ALIGN_CAMERA_PLANE=0).")
+
     # --- Confidence + edge filtering ---
     _emit_progress(progress_cb, 70.0, "Applying confidence and edge filters")
     # Filter 1: Confidence
@@ -676,6 +891,7 @@ def run_pi3x_inference(
                 "poses": [pose.tolist() for pose in poses],
                 "frame_indices": frame_indices_used,
                 "source_indices": source_indices_used,
+                "alignment": alignment_meta,
             },
             f, indent=2,
         )
@@ -827,6 +1043,7 @@ def run_pi3x(
     max_frames: int | None = None,
     conf_threshold: float | None = None,
     edge_rtol: float | None = None,
+    align_camera_plane: bool | None = None,
     progress_cb: ProgressCallback | None = None,
 ) -> tuple[Path, Path]:
     """Run Pi3X inference and save filtered point cloud + camera poses.
@@ -842,6 +1059,8 @@ def run_pi3x(
         max_frames: Maximum frames for Pi3X.
         conf_threshold: Confidence threshold for filtering.
         edge_rtol: Depth edge relative tolerance.
+        align_camera_plane: If True, align camera-orbit plane to the default
+            reference surface (XZ) by rotating world coordinates.
 
     Returns:
         Tuple of (ply_path, poses_path).
@@ -852,6 +1071,7 @@ def run_pi3x(
         max_frames=max_frames,
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
+        align_camera_plane=align_camera_plane,
         progress_cb=progress_cb,
     )
     ply_path = apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
