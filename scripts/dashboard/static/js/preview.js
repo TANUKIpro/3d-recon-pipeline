@@ -94,9 +94,11 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
-    // Stage-specific axis conversion is configured when data is loaded.
+    // Stage-specific axis conversion:
+    // Pi3X keeps the legacy X-flip fallback until pose metadata resolves it.
+    // Stages 4-6 are already aligned in world coordinates and should not flip.
     const sceneRoot = new THREE.Group();
-    sceneRoot.rotation.x = Math.PI;
+    sceneRoot.rotation.x = stageNum === 2 ? Math.PI : 0;
     scene.add(sceneRoot);
 
     // Show container
