@@ -223,19 +223,14 @@ export class PreviewPanel {
         stage.sceneRoot.rotation.x = sceneFlipX ? Math.PI : 0;
 
         const alignmentSign = this._forwardSignFromAlignment(data.alignment);
-        let forwardSign = alignmentSign;
-        let forwardSignSource = data.alignment?.inferred_forward_axis || 'alignment';
-        if (forwardSign == null) {
-          forwardSign = normalized.forwardSign;
-          forwardSignSource = `orbit-${normalized.convention}`;
-        } else if (
-          normalized.used >= 3 &&
-          normalized.confidence >= 0.15 &&
-          forwardSign !== normalized.forwardSign
-        ) {
-          // Guard against stale/misdetected metadata from older outputs.
-          forwardSign = normalized.forwardSign;
-          forwardSignSource = `orbit-override(${normalized.convention})`;
+        let forwardSign = normalized.forwardSign;
+        let forwardSignSource = `orbit-${normalized.convention}`;
+        if (normalized.used < 3 || normalized.confidence < 0.05) {
+          // If orbit-based estimate is weak, fallback to metadata.
+          if (alignmentSign != null) {
+            forwardSign = alignmentSign;
+            forwardSignSource = data.alignment?.inferred_forward_axis || 'alignment-fallback';
+          }
         }
 
         if (forwardSign == null) {
