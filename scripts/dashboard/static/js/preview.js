@@ -94,8 +94,7 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
-    // OpenCV (Y-down, Z-forward) → OpenGL (Y-up, Z-backward)
-    // rotation.x = PI flips both Y and Z axes
+    // Stage-specific axis conversion is configured when data is loaded.
     const sceneRoot = new THREE.Group();
     sceneRoot.rotation.x = Math.PI;
     scene.add(sceneRoot);
@@ -220,6 +219,8 @@ export class PreviewPanel {
 
         const normalized = this._normalizePoseConvention(rawPoseArray);
         const poseArray = normalized.poseArray;
+        const sceneFlipX = this._shouldApplySceneFlipX(poseArray, data.alignment);
+        stage.sceneRoot.rotation.x = sceneFlipX ? Math.PI : 0;
 
         const alignmentSign = this._forwardSignFromAlignment(data.alignment);
         let forwardSign = alignmentSign;
@@ -251,6 +252,7 @@ export class PreviewPanel {
           'frames:',
           normalized.used,
         );
+        console.info('Pi3X scene flip X(pi):', sceneFlipX);
         console.info('Camera overlay forwardSign:', forwardSign, forwardSignSource);
 
         cameraOverlay.create(THREE, stage.sceneRoot, poseArray, { forwardSign });
@@ -317,6 +319,40 @@ export class PreviewPanel {
       confidence: c2wEval.confidence,
       used: c2wEval.used,
     };
+  }
+
+  _shouldApplySceneFlipX(poseArray, alignment) {
+    const meanDownY = this._meanCameraDownY(poseArray);
+    if (meanDownY != null && Math.abs(meanDownY) >= 0.15) {
+      // If camera-down is +Y, data is likely in OpenCV Y-down world => flip.
+      return meanDownY > 0;
+    }
+    if (alignment && alignment.applied === true) {
+      // Aligned outputs are expected to already use +Y as up.
+      return false;
+    }
+    return true;
+  }
+
+  _meanCameraDownY(poseArray) {
+    if (!poseArray || poseArray.length === 0) return null;
+    const mat = new THREE.Matrix4();
+    const basisX = new THREE.Vector3();
+    const basisY = new THREE.Vector3();
+    const basisZ = new THREE.Vector3();
+    let sumY = 0;
+    let used = 0;
+
+    for (const pose of poseArray) {
+      mat.fromArray(pose.matrix);
+      mat.extractBasis(basisX, basisY, basisZ);
+      basisY.normalize(); // camera +Y (down)
+      sumY += basisY.y;
+      used += 1;
+    }
+
+    if (used === 0) return null;
+    return sumY / used;
   }
 
   _invertPoseArray(poseArray) {
@@ -465,12 +501,15 @@ export class PreviewPanel {
         obj = new THREE.Mesh(geometry, meshMat);
       } else {
         // Point cloud
-        const material = new THREE.PointsMaterial({
+        const materialParams = {
           size: 0.005,
           vertexColors: geometry.hasAttribute('color'),
           sizeAttenuation: true,
-          color: geometry.hasAttribute('color') ? undefined : 0x4a9eff,
-        });
+        };
+        if (!geometry.hasAttribute('color')) {
+          materialParams.color = 0x4a9eff;
+        }
+        const material = new THREE.PointsMaterial(materialParams);
         obj = new THREE.Points(geometry, material);
       }
 
