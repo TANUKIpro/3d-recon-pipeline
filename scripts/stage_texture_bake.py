@@ -8,6 +8,7 @@ Adapted from im2pc/host/extract_intrinsics.py and im2pc/host/texture_mesh.py.
 
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import cv2
@@ -28,13 +29,43 @@ def _load_point_cloud(path: str) -> tuple[np.ndarray, np.ndarray]:
     return points, colors
 
 
-def _load_poses(path: str) -> np.ndarray:
+def _load_poses(path: str) -> tuple[np.ndarray, list[int]]:
     with open(path) as f:
-        return np.array(json.load(f)["poses"], dtype=np.float64)
+        data = json.load(f)
+    poses = np.array(data["poses"], dtype=np.float64)
+    frame_indices = data.get("frame_indices")
+    if frame_indices is None:
+        frame_indices = list(range(len(poses)))
+    else:
+        frame_indices = [int(i) for i in frame_indices]
+    if len(frame_indices) != len(poses):
+        print(
+            f"Warning: poses={len(poses)} but frame_indices={len(frame_indices)}. "
+            "Using positional indices."
+        )
+        frame_indices = list(range(len(poses)))
+    return poses, frame_indices
+
+
+def _resolve_indexed_file(base_dir: str, idx: int, suffix: str) -> Path:
+    """Resolve by numbered filename first, then by sorted positional index."""
+    path = Path(base_dir) / f"{idx:05d}{suffix}"
+    if path.is_file():
+        return path
+
+    files = _list_indexed_files(base_dir, suffix)
+    if 0 <= idx < len(files):
+        return Path(files[idx])
+    raise FileNotFoundError(f"Indexed file not found: {base_dir} idx={idx} suffix={suffix}")
+
+
+@lru_cache(maxsize=16)
+def _list_indexed_files(base_dir: str, suffix: str) -> tuple[str, ...]:
+    return tuple(str(p) for p in sorted(Path(base_dir).glob(f"*{suffix}")))
 
 
 def _load_frame(frames_dir: str, idx: int) -> np.ndarray:
-    path = Path(frames_dir) / f"{idx:05d}.jpg"
+    path = _resolve_indexed_file(frames_dir, idx, ".jpg")
     img = cv2.imread(str(path))
     if img is None:
         raise FileNotFoundError(f"Frame not found: {path}")
@@ -42,7 +73,7 @@ def _load_frame(frames_dir: str, idx: int) -> np.ndarray:
 
 
 def _load_mask(masks_dir: str, idx: int) -> np.ndarray:
-    path = Path(masks_dir) / f"{idx:05d}.png"
+    path = _resolve_indexed_file(masks_dir, idx, ".png")
     mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if mask is None:
         raise FileNotFoundError(f"Mask not found: {path}")
@@ -72,7 +103,7 @@ def _project_points(pts, c2w, K, img_w, img_h):
 
 
 def _estimate_intrinsics(
-    points, colors, poses, frames_dir, masks_dir, img_w, img_h,
+    points, colors, poses, pose_frame_indices, frames_dir, masks_dir, img_w, img_h,
     num_eval_frames=10, subsample_points=50000,
 ) -> dict:
     """Estimate camera intrinsics via grid search + Nelder-Mead."""
@@ -87,17 +118,21 @@ def _estimate_intrinsics(
         pts_sub, col_sub = points, colors
 
     n_frames = len(poses)
-    frame_indices = np.linspace(0, n_frames - 1, num_eval_frames, dtype=int).tolist()
-    print(f"  Evaluating {len(frame_indices)} frames, {len(pts_sub)} points")
+    eval_pose_indices = np.linspace(0, n_frames - 1, num_eval_frames, dtype=int).tolist()
+    print(f"  Evaluating {len(eval_pose_indices)} frames, {len(pts_sub)} points")
 
     cx_init, cy_init = img_w / 2.0, img_h / 2.0
 
     def color_score(K):
         total_err, total_cnt = 0.0, 0
-        for idx in frame_indices:
-            frame = _load_frame(frames_dir, idx)
-            mask = _load_mask(masks_dir, idx)
-            uv, valid, _ = _project_points(pts_sub, poses[idx], K, img_w, img_h)
+        for pose_idx in eval_pose_indices:
+            src_idx = int(pose_frame_indices[pose_idx])
+            try:
+                frame = _load_frame(frames_dir, src_idx)
+                mask = _load_mask(masks_dir, src_idx)
+            except FileNotFoundError:
+                continue
+            uv, valid, _ = _project_points(pts_sub, poses[pose_idx], K, img_w, img_h)
             if uv.shape[0] == 0:
                 continue
             ui, vi = uv[:, 0].astype(np.int32), uv[:, 1].astype(np.int32)
@@ -210,14 +245,18 @@ def bake_texture(
     print(f"  {len(vertices)} verts, {len(faces)} faces")
 
     # --- Load camera data ---
-    poses = _load_poses(poses_path)
+    poses, pose_frame_indices = _load_poses(poses_path)
 
-    # Determine image size from first frame
-    first_frame = cv2.imread(str(Path(frames_dir) / "00000.jpg"))
-    if first_frame is None:
-        raise FileNotFoundError("Cannot load first frame")
+    if len(poses) == 0:
+        raise RuntimeError("No poses found in camera_poses.json")
+
+    # Determine image size from first pose-linked frame.
+    first_frame = _load_frame(frames_dir, int(pose_frame_indices[0]))
     img_h, img_w = first_frame.shape[:2]
-    print(f"  Image size: {img_w}x{img_h}, {len(poses)} poses")
+    print(
+        f"  Image size: {img_w}x{img_h}, {len(poses)} poses "
+        f"(frame range: {min(pose_frame_indices)}..{max(pose_frame_indices)})"
+    )
 
     # --- Estimate intrinsics ---
     # Load denoised PLY for intrinsics estimation (original colored point cloud)
@@ -231,7 +270,7 @@ def bake_texture(
 
     print("Estimating camera intrinsics...")
     intrinsics = _estimate_intrinsics(
-        pc_points, pc_colors, poses, frames_dir, mask_dir, img_w, img_h,
+        pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
     )
     K = np.array(intrinsics["K"], dtype=np.float64)
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
@@ -301,18 +340,19 @@ def bake_texture(
     weight_sum = np.zeros(n_valid, dtype=np.float64)
 
     for vidx in range(len(poses)):
+        src_idx = int(pose_frame_indices[vidx])
         c2w = poses[vidx]
         cam_pos = c2w[:3, 3]
 
-        frame = cv2.imread(str(Path(frames_dir) / f"{vidx:05d}.jpg"))
-        if frame is None:
+        try:
+            frame = _load_frame(frames_dir, src_idx)
+        except FileNotFoundError:
             continue
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float64) / 255.0
 
-        mask = cv2.imread(str(Path(mask_dir) / f"{vidx:05d}.png"), cv2.IMREAD_GRAYSCALE)
-        if mask is None:
+        try:
+            mask_bool = _load_mask(mask_dir, src_idx)
+        except FileNotFoundError:
             continue
-        mask_bool = mask > 127
 
         # View direction
         view_dirs = cam_pos - pos3d
