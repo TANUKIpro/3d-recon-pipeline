@@ -2,7 +2,7 @@
  * 3D preview manager — per-stage scene support for PLY/OBJ.
  *
  * Uses a single shared renderer that moves between stage containers.
- * Stage 3 has a dedicated scene for camera overlay support.
+ * Stage 2 has a dedicated scene for camera overlay support.
  */
 
 let THREE;
@@ -169,24 +169,25 @@ export class PreviewPanel {
   /**
    * Load Pi3X results: point cloud + camera poses.
    * @param {CameraOverlay} cameraOverlay - camera overlay instance
+   * @param {string} [plyFile='object_full.ply'] - PLY filename to load
    */
-  async loadPi3xResults(cameraOverlay) {
-    await this.initSceneForStage(3);
-    this.activateStage(3);
+  async loadPi3xResults(cameraOverlay, plyFile = 'object_full.ply') {
+    await this.initSceneForStage(2);
+    this.activateStage(2);
 
     // Hide empty placeholder
-    const empty = document.getElementById('stage-3-empty');
+    const empty = document.getElementById('stage-2-empty');
     if (empty) empty.classList.add('hidden');
 
     // Show toolbar
     const toolbar = document.getElementById('pi3x-toolbar');
     if (toolbar) toolbar.style.display = 'flex';
 
-    const stage = this._stages[3];
+    const stage = this._stages[2];
     if (!stage) return;
 
     // Load point cloud
-    await this._loadPLYIntoStage(3, 'object.ply');
+    await this._loadPLYIntoStage(2, plyFile);
 
     // Update point count
     if (stage.currentObject?.geometry) {

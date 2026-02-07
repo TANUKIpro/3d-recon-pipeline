@@ -29,13 +29,13 @@
     <div class="stage-connector"></div>
     <div class="stage-pill" data-stage="2">
       <span class="stage-dot"></span>
-      <span class="stage-label">SAM2</span>
+      <span class="stage-label">Pi3X</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector"></div>
     <div class="stage-pill" data-stage="3">
       <span class="stage-dot"></span>
-      <span class="stage-label">Pi3X</span>
+      <span class="stage-label">SAM2</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector"></div>
@@ -73,12 +73,27 @@
         <div id="gallery-grid"></div>
       </div>
 
-      <!-- Stage 2: SAM2 Segmentation -->
-      <div id="stage-panel-2" class="stage-panel active">
+      <!-- Stage 2: Pi3X 3D Reconstruction -->
+      <div id="stage-panel-2" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-2-empty">
+          <p>Pi3X point cloud + camera positions will appear here.</p>
+        </div>
+        <div id="three-container-2" class="three-container"></div>
+        <div id="pi3x-toolbar" style="display:none">
+          <label class="toolbar-check">
+            <input type="checkbox" id="pi3x-cameras-toggle" checked> Show cameras
+          </label>
+          <span id="pi3x-point-count" class="toolbar-info"></span>
+          <span id="pi3x-camera-count" class="toolbar-info"></span>
+        </div>
+      </div>
+
+      <!-- Stage 3: SAM2 Segmentation -->
+      <div id="stage-panel-3" class="stage-panel active">
         <div id="sam2-container">
           <canvas id="sam2-canvas"></canvas>
           <div id="sam2-placeholder">
-            <p>SAM2 canvas will activate when Stage 2 begins.</p>
+            <p>SAM2 canvas will activate when Stage 3 begins.</p>
             <p>Click on the object to segment it.</p>
           </div>
         </div>
@@ -97,21 +112,6 @@
             </div>
           </div>
           <div id="sam2-verification-strip"></div>
-        </div>
-      </div>
-
-      <!-- Stage 3: Pi3X 3D Reconstruction -->
-      <div id="stage-panel-3" class="stage-panel">
-        <div class="stage-panel-empty" id="stage-3-empty">
-          <p>Pi3X point cloud + camera positions will appear here.</p>
-        </div>
-        <div id="three-container-3" class="three-container"></div>
-        <div id="pi3x-toolbar" style="display:none">
-          <label class="toolbar-check">
-            <input type="checkbox" id="pi3x-cameras-toggle" checked> Show cameras
-          </label>
-          <span id="pi3x-point-count" class="toolbar-info"></span>
-          <span id="pi3x-camera-count" class="toolbar-info"></span>
         </div>
       </div>
 
@@ -165,29 +165,16 @@
           </div>
         </div>
 
-        <!-- Stage 1+3: Max Frames (shared) -->
-        <div class="config-section" data-stages="1 3">
+        <!-- Stage 1+2: Max Frames (shared with Pi3X) -->
+        <div class="config-section" data-stages="1 2">
           <div class="form-group">
             <label for="cfg-max-frames">Max Frames</label>
             <input type="number" id="cfg-max-frames" value="50" min="5" max="500">
           </div>
         </div>
 
-        <!-- Stage 2: SAM2 Model -->
+        <!-- Stage 2: Pi3X params -->
         <div class="config-section" data-stages="2">
-          <div class="form-group">
-            <label for="cfg-sam2-model">SAM2 Model</label>
-            <select id="cfg-sam2-model">
-              <option value="large" selected>Large</option>
-              <option value="base">Base+</option>
-              <option value="small">Small</option>
-              <option value="tiny">Tiny</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Stage 3: Pi3X params -->
-        <div class="config-section" data-stages="3">
           <div class="form-row">
             <div class="form-group">
               <label for="cfg-pixel-limit">Pixel Limit</label>
@@ -201,6 +188,19 @@
           <div class="form-group">
             <label for="cfg-edge-rtol">Edge RTol</label>
             <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
+          </div>
+        </div>
+
+        <!-- Stage 3: SAM2 Model -->
+        <div class="config-section" data-stages="3">
+          <div class="form-group">
+            <label for="cfg-sam2-model">SAM2 Model</label>
+            <select id="cfg-sam2-model">
+              <option value="large" selected>Large</option>
+              <option value="base">Base+</option>
+              <option value="small">Small</option>
+              <option value="tiny">Tiny</option>
+            </select>
           </div>
         </div>
 

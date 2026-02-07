@@ -20,8 +20,8 @@ class StageStatus(str, Enum):
 class PipelineStage(IntEnum):
     IDLE = 0
     EXTRACT_FRAMES = 1
-    SAM2_SEGMENT = 2
-    PI3X_RECONSTRUCT = 3
+    PI3X_RECONSTRUCT = 2
+    SAM2_SEGMENT = 3
     DENOISE = 4
     DIFFCD_MESH = 5
     TEXTURE_BAKE = 6
@@ -30,8 +30,8 @@ class PipelineStage(IntEnum):
 
 STAGE_LABELS: dict[int, str] = {
     PipelineStage.EXTRACT_FRAMES: "Extract Frames",
-    PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.PI3X_RECONSTRUCT: "Pi3X 3D Reconstruction",
+    PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.DENOISE: "Point Cloud Denoise",
     PipelineStage.DIFFCD_MESH: "DiffCD Mesh",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
@@ -97,6 +97,8 @@ class PipelineSession:
     # Artifacts produced by each stage
     frames_dir: str | None = None
     mask_dir: str | None = None
+    ply_full_path: str | None = None    # full (unmasked) PLY from Pi3X
+    pi3x_cache_path: str | None = None  # cache for mask filtering
     ply_path: str | None = None
     poses_path: str | None = None
     denoised_ply: str | None = None
@@ -120,6 +122,8 @@ class PipelineSession:
         self._task = None
         self.frames_dir = None
         self.mask_dir = None
+        self.ply_full_path = None
+        self.pi3x_cache_path = None
         self.ply_path = None
         self.poses_path = None
         self.denoised_ply = None

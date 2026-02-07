@@ -9,7 +9,7 @@ export class StageController {
   constructor() {
     this._panels = {};
     this._pills = {};
-    this._activeStage = 2; // Default to SAM2 panel
+    this._activeStage = 3; // Default to SAM2 panel
     this._stageStates = {};
 
     // Collect all pills and panels
@@ -22,7 +22,7 @@ export class StageController {
     this._bindEvents();
 
     // Mark default panel
-    this._pills[2]?.classList.add('selected');
+    this._pills[3]?.classList.add('selected');
   }
 
   get activeStage() {

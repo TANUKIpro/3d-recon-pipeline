@@ -53,7 +53,7 @@ export class ConfigPanel {
 
     this._panel.classList.add('stage-filtered');
     const stageStr = String(stage);
-    const names = { 1:'Extract Frames', 2:'SAM2', 3:'Pi3X', 4:'Denoise', 5:'DiffCD Mesh', 6:'Texture Bake' };
+    const names = { 1:'Extract Frames', 2:'Pi3X', 3:'SAM2', 4:'Denoise', 5:'DiffCD Mesh', 6:'Texture Bake' };
 
     this._sections.forEach(s => {
       const stages = s.dataset.stages.split(/\s+/);
