@@ -123,25 +123,34 @@ async def pipeline_video_info(path: str):
 
     def _probe(p: str) -> dict:
         import cv2
-        from stage_extract_frames import _detect_rotation
+        from stage_extract_frames import _detect_rotation, _normalize_fps
         cap = cv2.VideoCapture(p)
         try:
-            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            raw_fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            fps = _normalize_fps(raw_fps)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-            duration = total_frames / fps if fps > 0 else 0
+            duration = total_frames / raw_fps if raw_fps > 0 else 0
+            frame_interval = max(1, int(round(fps / 2)))
+            max_frames = (
+                max(1, (total_frames + frame_interval - 1) // frame_interval)
+                if total_frames > 0
+                else 0
+            )
             rotation = _detect_rotation(cap, p)
             # Swap width/height for 90°/270° rotation
             if rotation in (90, 270):
                 width, height = height, width
             return {
-                "fps": round(fps, 2),
+                "fps": fps,
                 "total_frames": total_frames,
                 "width": width,
                 "height": height,
                 "duration": round(duration, 2),
                 "rotation": rotation,
+                "suggested_frame_interval": frame_interval,
+                "suggested_max_frames": max_frames,
             }
         finally:
             cap.release()

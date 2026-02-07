@@ -5,6 +5,7 @@ Adapted from im2pc/host/pi3x_sam2_cli.py::extract_frames().
 
 import os
 import subprocess
+import math
 from pathlib import Path
 from typing import Callable
 
@@ -77,6 +78,17 @@ def _rotation_to_cv2_code(rotation: int):
     return None
 
 
+def _normalize_fps(raw_fps: float | int | None, fallback: int = 30) -> int:
+    """Normalize FPS for UI/parameter defaults (e.g. 59.94 -> 60)."""
+    try:
+        fps = float(raw_fps)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(fps) or fps <= 0:
+        return fallback
+    return max(1, int(round(fps)))
+
+
 def extract_frames(
     video_path: str,
     output_dir: str,
@@ -89,17 +101,13 @@ def extract_frames(
     Args:
         video_path: Path to input video (.mp4).
         output_dir: Parent output directory.
-        frame_interval: Extract every N-th frame. Default from env FRAME_INTERVAL or 10.
-        max_frames: Maximum frames to extract. Default from env MAX_FRAMES or 50.
+        frame_interval: Extract every N-th frame. Defaults to about fps/2.
+        max_frames: Maximum frames to extract. Defaults to full video coverage
+            under the selected frame_interval.
 
     Returns:
         Path to the frames directory containing JPEG files.
     """
-    if frame_interval is None:
-        frame_interval = int(os.environ.get("FRAME_INTERVAL", "10"))
-    if max_frames is None:
-        max_frames = int(os.environ.get("MAX_FRAMES", "50"))
-
     video_path = Path(video_path)
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
@@ -111,9 +119,19 @@ def extract_frames(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    print(f"Video: {total_frames} frames, {fps:.1f} fps")
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    fps = _normalize_fps(cap.get(cv2.CAP_PROP_FPS))
+    if frame_interval is None:
+        frame_interval = max(1, int(round(fps / 2)))
+    frame_interval = max(1, int(frame_interval))
+    if max_frames is None:
+        if total_frames > 0:
+            max_frames = max(1, (total_frames + frame_interval - 1) // frame_interval)
+        else:
+            max_frames = int(os.environ.get("MAX_FRAMES", "50"))
+    max_frames = max(1, int(max_frames))
+
+    print(f"Video: {total_frames} frames, {fps} fps")
     _emit_progress(progress_cb, 2.0, "Inspecting video metadata")
 
     # Detect and handle rotation metadata

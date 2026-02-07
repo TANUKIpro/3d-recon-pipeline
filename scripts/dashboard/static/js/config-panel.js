@@ -28,6 +28,9 @@ export class ConfigPanel {
 
     this.onStart = null;  // callback(config)
     this.onCancel = null; // callback()
+    this._videoMeta = null;
+    this._maxFramesAuto = true;
+    this._extractDefaults = { frame_interval: 10, max_frames: 50 };
 
     this._bindEvents();
     this._loadVideos();
@@ -66,8 +69,14 @@ export class ConfigPanel {
   getConfig() {
     return {
       video_path: this._videoSelect.value,
-      frame_interval: parseInt(this._inputs.frame_interval.value) || 10,
-      max_frames: parseInt(this._inputs.max_frames.value) || 50,
+      frame_interval: this._parsePositiveInt(
+        this._inputs.frame_interval.value,
+        this._extractDefaults.frame_interval,
+      ),
+      max_frames: this._parsePositiveInt(
+        this._inputs.max_frames.value,
+        this._extractDefaults.max_frames,
+      ),
       pixel_limit: parseInt(this._inputs.pixel_limit.value) || 255000,
       confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.1,
       edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
@@ -122,12 +131,15 @@ export class ConfigPanel {
     });
 
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
+    this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
+    this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
   }
 
   async _onVideoChange() {
     const path = this._videoSelect.value;
     if (!path) {
       this._videoInfo.textContent = '';
+      this._videoMeta = null;
       return;
     }
     this._videoInfo.textContent = 'Loading...';
@@ -135,13 +147,33 @@ export class ConfigPanel {
       const res = await fetch(`/api/pipeline/video-info?path=${encodeURIComponent(path)}`);
       if (!res.ok) {
         this._videoInfo.textContent = 'Failed to load video info';
+        this._videoMeta = null;
         return;
       }
       const data = await res.json();
       if (data.error) {
         this._videoInfo.textContent = data.error;
+        this._videoMeta = null;
         return;
       }
+      this._videoMeta = data;
+
+      const suggestedInterval = this._parsePositiveInt(
+        data.suggested_frame_interval,
+        Math.max(1, Math.round((this._parsePositiveInt(data.fps, 30)) / 2)),
+      );
+      const suggestedMaxFrames = this._parsePositiveInt(
+        data.suggested_max_frames,
+        this._estimateMaxFrames(data.total_frames, suggestedInterval),
+      );
+      this._extractDefaults = {
+        frame_interval: suggestedInterval,
+        max_frames: suggestedMaxFrames,
+      };
+      this._inputs.frame_interval.value = String(suggestedInterval);
+      this._inputs.max_frames.value = String(suggestedMaxFrames);
+      this._maxFramesAuto = true;
+
       const mins = Math.floor(data.duration / 60);
       const secs = (data.duration % 60).toFixed(1);
       const dur = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
@@ -149,6 +181,46 @@ export class ConfigPanel {
         `${data.width}x${data.height} | ${data.fps} fps | ${data.total_frames} frames | ${dur}`;
     } catch {
       this._videoInfo.textContent = 'Failed to load video info';
+      this._videoMeta = null;
     }
+  }
+
+  _onFrameIntervalInput() {
+    if (!this._videoMeta) return;
+    const interval = this._parsePositiveInt(
+      this._inputs.frame_interval.value,
+      this._extractDefaults.frame_interval,
+    );
+    this._extractDefaults.frame_interval = interval;
+    if (!this._maxFramesAuto) return;
+    const maxFrames = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
+    this._extractDefaults.max_frames = maxFrames;
+    this._inputs.max_frames.value = String(maxFrames);
+  }
+
+  _onMaxFramesInput() {
+    const raw = (this._inputs.max_frames.value || '').trim();
+    if (!raw) {
+      this._maxFramesAuto = true;
+      this._onFrameIntervalInput();
+      return;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      this._maxFramesAuto = false;
+    }
+  }
+
+  _estimateMaxFrames(totalFrames, frameInterval) {
+    const total = this._parsePositiveInt(totalFrames, 0);
+    const interval = this._parsePositiveInt(frameInterval, 1);
+    if (total <= 0) return this._extractDefaults.max_frames;
+    return Math.max(1, Math.ceil(total / interval));
+  }
+
+  _parsePositiveInt(value, fallback) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return n;
   }
 }
