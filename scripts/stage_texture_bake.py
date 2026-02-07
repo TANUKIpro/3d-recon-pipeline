@@ -248,6 +248,14 @@ def bake_texture(
         output_dir: Output directory for OBJ/MTL/PNG.
         tex_size: Texture resolution. Default from env TEXTURE_SIZE or 2048.
 
+    Environment toggles for sharpness/quality:
+        TEXTURE_OVERSAMPLE (int): Internal supersampling multiplier (1=off, 2=default).
+        TEXTURE_BLEND_MODE (str): 'weighted' (default) or 'max' to pick best single view.
+        TEXTURE_MIN_COS (float): Minimum normal·view cosine to accept a sample (default 0.2).
+        TEXTURE_ANGLE_EXP (float): Exponent on cosine weight to sharpen view selection.
+        TEXTURE_DIST_POW (float): Distance falloff power for view weight (default 1.0).
+        TEXTURE_SHARPEN (float): Unsharp mask amount (0=off, 0.1–0.4 typical).
+
     Returns:
         Path to the output OBJ file.
     """
@@ -255,6 +263,16 @@ def bake_texture(
 
     if tex_size is None:
         tex_size = int(os.environ.get("TEXTURE_SIZE", "2048"))
+
+    oversample = max(1, int(os.environ.get("TEXTURE_OVERSAMPLE", "2")))
+    blend_mode = os.environ.get("TEXTURE_BLEND_MODE", "weighted").strip().lower()
+    use_max_blend = blend_mode == "max"
+    min_cos = float(os.environ.get("TEXTURE_MIN_COS", "0.2"))
+    angle_exp = float(os.environ.get("TEXTURE_ANGLE_EXP", "2.0"))
+    dist_pow = float(os.environ.get("TEXTURE_DIST_POW", "1.0"))
+    sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", "0.15"))
+
+    tex_res = tex_size * oversample
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -333,10 +351,17 @@ def bake_texture(
     face_normals = face_normals / np.maximum(norms, 1e-10)
 
     # --- Build texel mapping ---
-    print(f"Building texel mapping ({tex_size}x{tex_size})...")
+    print(
+        "Building texel mapping "
+        f"({tex_size}x{tex_size}, internal {tex_res}x{tex_res}, oversample x{oversample})"
+    )
+    print(
+        "  Weighting: blend=%s, min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f"
+        % ("max" if use_max_blend else "weighted", min_cos, angle_exp, dist_pow, sharpen_amt)
+    )
     _emit_progress(progress_cb, 62.0, "Building texel mapping")
-    face_id_buf = np.full((tex_size, tex_size), -1, dtype=np.int32)
-    uv_scaled = uvs * tex_size
+    face_id_buf = np.full((tex_res, tex_res), -1, dtype=np.int32)
+    uv_scaled = uvs * tex_res
 
     emit_every_face = max(1, len(new_faces) // 40)
     for fi in range(len(new_faces)):
@@ -407,7 +432,7 @@ def bake_texture(
         dists = np.linalg.norm(view_dirs, axis=1, keepdims=True)
         view_dirs_n = view_dirs / np.maximum(dists, 1e-10)
         cos_angle = np.sum(normals * view_dirs_n, axis=1)
-        facing = cos_angle > 0.1
+        facing = cos_angle > min_cos
 
         if facing.sum() == 0:
             continue
@@ -426,12 +451,25 @@ def bake_texture(
             continue
 
         colors_sampled = _bilinear_sample(frame, px_proj[ok], py_proj[ok])
-        w = cos_angle[facing][ok]
 
-        facing_indices = np.where(facing)[0]
-        final_indices = facing_indices[ok]
-        color_sum[final_indices] += colors_sampled * w[:, None]
-        weight_sum[final_indices] += w
+        # View weight: sharper angle preference + distance falloff
+        ang = np.maximum(cos_angle[facing][ok], 0.0) ** angle_exp
+        dist_term = np.power(np.maximum(dists[facing][ok, 0], 1e-6), dist_pow)
+        w = ang / dist_term
+
+        if use_max_blend:
+            # Winner-takes-all per texel
+            facing_indices = np.where(facing)[0]
+            final_indices = facing_indices[ok]
+            better = w > weight_sum[final_indices]
+            if np.any(better):
+                weight_sum[final_indices[better]] = w[better]
+                color_sum[final_indices[better]] = colors_sampled[better]
+        else:
+            facing_indices = np.where(facing)[0]
+            final_indices = facing_indices[ok]
+            color_sum[final_indices] += colors_sampled * w[:, None]
+            weight_sum[final_indices] += w
 
         if vidx % 5 == 0:
             print(f"  View {vidx+1}/{len(poses)}: {n_ok} texels")
@@ -445,9 +483,10 @@ def bake_texture(
 
     # Normalize
     has_color = weight_sum > 0
-    color_sum[has_color] /= weight_sum[has_color, None]
+    if not use_max_blend:
+        color_sum[has_color] /= weight_sum[has_color, None]
 
-    texture = np.zeros((tex_size, tex_size, 3), dtype=np.float32)
+    texture = np.zeros((tex_res, tex_res, 3), dtype=np.float32)
     texture[ys, xs] = color_sum.astype(np.float32)
 
     cov = has_color.sum()
@@ -477,6 +516,16 @@ def bake_texture(
             f"Padding seams ({iter_idx + 1}/8)",
         )
 
+    # Downsample from supersample grid and optionally sharpen
+    final_tex = result_tex
+    if oversample > 1:
+        final_tex = cv2.resize(
+            result_tex, (tex_size, tex_size), interpolation=cv2.INTER_AREA
+        )
+    if sharpen_amt > 0:
+        blur = cv2.GaussianBlur(final_tex, (0, 0), sigmaX=1.0)
+        final_tex = np.clip(final_tex + sharpen_amt * (final_tex - blur), 0.0, 1.0)
+
     # --- Export OBJ + MTL + PNG ---
     basename = "textured_mesh"
     obj_path = output_path / f"{basename}.obj"
@@ -484,7 +533,7 @@ def bake_texture(
     tex_path = output_path / "texture.png"
 
     # Texture PNG (flip V for OBJ convention)
-    tex_u8 = np.clip(result_tex * 255, 0, 255).astype(np.uint8)
+    tex_u8 = np.clip(final_tex * 255, 0, 255).astype(np.uint8)
     tex_bgr = cv2.cvtColor(tex_u8, cv2.COLOR_RGB2BGR)[::-1]
     cv2.imwrite(str(tex_path), tex_bgr)
     print(f"Saved: {tex_path}")
