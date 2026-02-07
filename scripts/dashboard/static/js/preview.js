@@ -1,5 +1,8 @@
 /**
- * 3D preview (PLY point clouds, OBJ meshes) via three.js + frame gallery.
+ * 3D preview manager — per-stage scene support for PLY/OBJ.
+ *
+ * Uses a single shared renderer that moves between stage containers.
+ * Stage 3 has a dedicated scene for camera overlay support.
  */
 
 let THREE;
@@ -10,23 +13,21 @@ let MTLLoader;
 
 export class PreviewPanel {
   constructor() {
-    this._container = document.getElementById('three-container');
-    this._fileSelect = document.getElementById('preview-file-select');
-    this._loadBtn = document.getElementById('preview-load');
     this._galleryGrid = document.getElementById('gallery-grid');
 
-    this._scene = null;
-    this._camera = null;
+    // Per-stage scene state: { scene, camera, controls, container, currentObject, initialized }
+    this._stages = {};
     this._renderer = null;
-    this._controls = null;
-    this._currentObject = null;
-    this._initialized = false;
-
-    this._bindEvents();
+    this._threeLoaded = false;
+    this._activeStage = null;
+    this._animating = false;
   }
 
-  async init3D() {
-    if (this._initialized) return;
+  /**
+   * Load three.js and addons (once).
+   */
+  async _loadThree() {
+    if (this._threeLoaded) return;
     try {
       THREE = await import('three');
       const addons = await Promise.all([
@@ -39,152 +40,294 @@ export class PreviewPanel {
       PLYLoader = addons[1].PLYLoader;
       OBJLoader = addons[2].OBJLoader;
       MTLLoader = addons[3].MTLLoader;
-
-      this._setup3DScene();
-      this._initialized = true;
+      this._threeLoaded = true;
     } catch (e) {
       console.error('Failed to load three.js:', e);
-      this._container.innerHTML = '<p style="padding:20px;color:#888">3D preview unavailable (three.js load failed)</p>';
     }
   }
 
-  _setup3DScene() {
-    const w = this._container.clientWidth || 640;
-    const h = this._container.clientHeight || 480;
+  /**
+   * Get THREE module reference (for camera overlay).
+   */
+  get THREE() { return THREE; }
 
-    this._scene = new THREE.Scene();
-    this._scene.background = new THREE.Color(0x0a0a14);
+  /**
+   * Lazy-init a 3D scene for a given stage.
+   */
+  async initSceneForStage(stageNum) {
+    if (this._stages[stageNum]?.initialized) return;
 
-    this._camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
-    this._camera.position.set(0, 0, 2);
+    await this._loadThree();
+    if (!this._threeLoaded) return;
 
-    this._renderer = new THREE.WebGLRenderer({ antialias: true });
-    this._renderer.setSize(w, h);
-    this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this._container.appendChild(this._renderer.domElement);
+    const containerId = `three-container-${stageNum}`;
+    const container = document.getElementById(containerId);
+    if (!container) return;
 
-    this._controls = new OrbitControls(this._camera, this._renderer.domElement);
-    this._controls.enableDamping = true;
-    this._controls.dampingFactor = 0.1;
+    // Create shared renderer once
+    if (!this._renderer) {
+      this._renderer = new THREE.WebGLRenderer({ antialias: true });
+      this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    }
+
+    const w = container.clientWidth || 640;
+    const h = container.clientHeight || 480;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a14);
+
+    const camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
+    camera.position.set(0, 0, 2);
+
+    const controls = new OrbitControls(camera, this._renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
 
     // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-    this._scene.add(ambient);
+    scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(2, 3, 4);
-    this._scene.add(dirLight);
+    scene.add(dirLight);
 
     // Grid
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
-    this._scene.add(grid);
+    scene.add(grid);
+
+    // Show container
+    container.classList.add('visible');
+
+    this._stages[stageNum] = {
+      scene, camera, controls, container,
+      currentObject: null,
+      initialized: true,
+    };
 
     // Resize observer
     const ro = new ResizeObserver(() => {
-      const nw = this._container.clientWidth;
-      const nh = this._container.clientHeight;
+      const nw = container.clientWidth;
+      const nh = container.clientHeight;
       if (nw > 0 && nh > 0) {
-        this._camera.aspect = nw / nh;
-        this._camera.updateProjectionMatrix();
-        this._renderer.setSize(nw, nh);
+        camera.aspect = nw / nh;
+        camera.updateProjectionMatrix();
       }
     });
-    ro.observe(this._container);
+    ro.observe(container);
 
-    // Animate
-    const animate = () => {
-      requestAnimationFrame(animate);
-      this._controls.update();
-      this._renderer.render(this._scene, this._camera);
-    };
-    animate();
+    // Start animation loop if not running
+    if (!this._animating) {
+      this._animating = true;
+      this._animate();
+    }
   }
 
-  async refreshFileList() {
-    try {
-      const res = await fetch('/api/preview/outputs');
-      const data = await res.json();
-      this._fileSelect.innerHTML = '<option value="">Select file to preview...</option>';
+  /**
+   * Activate the renderer for a specific stage (moves canvas to container).
+   */
+  activateStage(stageNum) {
+    const stage = this._stages[stageNum];
+    if (!stage || !this._renderer) return;
 
-      for (const f of data.files) {
-        if (['.ply', '.obj'].includes(f.ext)) {
-          const opt = document.createElement('option');
-          opt.value = f.path;
-          opt.textContent = `${f.name} (${f.size_mb} MB)`;
-          this._fileSelect.appendChild(opt);
+    this._activeStage = stageNum;
+
+    // Move renderer canvas to this container
+    const canvas = this._renderer.domElement;
+    const needsRebind = canvas.parentElement !== stage.container;
+
+    if (needsRebind) {
+      stage.container.appendChild(canvas);
+
+      // Re-bind controls to the new parent
+      stage.controls.dispose();
+      stage.controls = new OrbitControls(stage.camera, canvas);
+      stage.controls.enableDamping = true;
+      stage.controls.dampingFactor = 0.1;
+    }
+
+    // Resize
+    const w = stage.container.clientWidth;
+    const h = stage.container.clientHeight;
+    if (w > 0 && h > 0) {
+      this._renderer.setSize(w, h);
+      stage.camera.aspect = w / h;
+      stage.camera.updateProjectionMatrix();
+    }
+  }
+
+  /**
+   * Animation loop — renders the active stage.
+   */
+  _animate() {
+    requestAnimationFrame(() => this._animate());
+    if (this._activeStage == null) return;
+    const stage = this._stages[this._activeStage];
+    if (!stage || !this._renderer) return;
+    stage.controls.update();
+    this._renderer.render(stage.scene, stage.camera);
+  }
+
+  /**
+   * Load Pi3X results: point cloud + camera poses.
+   * @param {CameraOverlay} cameraOverlay - camera overlay instance
+   */
+  async loadPi3xResults(cameraOverlay) {
+    await this.initSceneForStage(3);
+    this.activateStage(3);
+
+    // Hide empty placeholder
+    const empty = document.getElementById('stage-3-empty');
+    if (empty) empty.classList.add('hidden');
+
+    // Show toolbar
+    const toolbar = document.getElementById('pi3x-toolbar');
+    if (toolbar) toolbar.style.display = 'flex';
+
+    const stage = this._stages[3];
+    if (!stage) return;
+
+    // Load point cloud
+    await this._loadPLYIntoStage(3, 'object.ply');
+
+    // Update point count
+    if (stage.currentObject?.geometry) {
+      const count = stage.currentObject.geometry.attributes.position?.count || 0;
+      const el = document.getElementById('pi3x-point-count');
+      if (el) el.textContent = `${count.toLocaleString()} points`;
+    }
+
+    // Load camera poses
+    try {
+      const res = await fetch('/api/preview/file/camera_poses.json');
+      if (res.ok) {
+        const data = await res.json();
+
+        // Convert {poses: [[4x4], ...], frame_indices: [...]} → [{matrix: flat16, frame_index}]
+        const poseArray = (data.poses || []).map((mat4x4, i) => {
+          // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
+          const flat = new Array(16);
+          for (let r = 0; r < 4; r++)
+            for (let c = 0; c < 4; c++)
+              flat[c * 4 + r] = mat4x4[r][c];
+          return { matrix: flat, frame_index: (data.frame_indices || [])[i] ?? i };
+        });
+
+        cameraOverlay.create(THREE, stage.scene, poseArray);
+
+        // Apply same centering offset as point cloud
+        if (stage.centerOffset) {
+          cameraOverlay.applyOffset(stage.centerOffset);
+        }
+
+        // Display camera count
+        const countEl = document.getElementById('pi3x-camera-count');
+        if (countEl) countEl.textContent = `${poseArray.length} cameras`;
+
+        // Bind toggle
+        const toggle = document.getElementById('pi3x-cameras-toggle');
+        if (toggle) {
+          toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
       }
     } catch (e) {
-      console.error('Failed to load output files:', e);
+      console.error('Failed to load camera poses:', e);
     }
   }
 
-  async loadFile(relativePath) {
-    if (!this._initialized) await this.init3D();
-    if (!relativePath) return;
+  /**
+   * Auto-load the appropriate result file for a stage.
+   */
+  async loadStageResult(stageNum) {
+    const fileMap = {
+      4: 'object_denoised.ply',
+      5: 'object_mesh.ply',
+      6: 'textured_mesh.obj',
+    };
+
+    const file = fileMap[stageNum];
+    if (!file) return;
+
+    await this.initSceneForStage(stageNum);
+    this.activateStage(stageNum);
+
+    // Hide empty placeholder
+    const empty = document.getElementById(`stage-${stageNum}-empty`);
+    if (empty) empty.classList.add('hidden');
+
+    const ext = file.split('.').pop().toLowerCase();
+    if (ext === 'ply') {
+      await this._loadPLYIntoStage(stageNum, file);
+    } else if (ext === 'obj') {
+      await this._loadOBJIntoStage(stageNum, file);
+    }
+  }
+
+  /**
+   * Load a PLY file into a specific stage's scene.
+   */
+  async _loadPLYIntoStage(stageNum, relativePath) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
 
     // Remove previous object
-    if (this._currentObject) {
-      this._scene.remove(this._currentObject);
-      this._currentObject = null;
+    if (stage.currentObject) {
+      stage.scene.remove(stage.currentObject);
+      stage.currentObject = null;
     }
 
     const url = `/api/preview/file/${relativePath}`;
-    const ext = relativePath.split('.').pop().toLowerCase();
+    const loader = new PLYLoader();
 
     try {
-      if (ext === 'ply') {
-        await this._loadPLY(url);
-      } else if (ext === 'obj') {
-        await this._loadOBJ(url, relativePath);
+      const geometry = await new Promise((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
+
+      geometry.computeBoundingBox();
+      const center = new THREE.Vector3();
+      geometry.boundingBox.getCenter(center);
+      geometry.translate(-center.x, -center.y, -center.z);
+      stage.centerOffset = center;
+
+      let obj;
+      if (geometry.index && geometry.index.count > 0) {
+        // Mesh
+        const meshMat = new THREE.MeshStandardMaterial({
+          vertexColors: geometry.hasAttribute('color'),
+          side: THREE.DoubleSide,
+        });
+        obj = new THREE.Mesh(geometry, meshMat);
+      } else {
+        // Point cloud
+        const material = new THREE.PointsMaterial({
+          size: 0.005,
+          vertexColors: geometry.hasAttribute('color'),
+          sizeAttenuation: true,
+          color: geometry.hasAttribute('color') ? undefined : 0x4a9eff,
+        });
+        obj = new THREE.Points(geometry, material);
       }
+
+      stage.currentObject = obj;
+      stage.scene.add(obj);
+      this._fitCamera(stage, geometry.boundingBox);
     } catch (e) {
-      console.error('Failed to load 3D file:', e);
+      console.error(`Failed to load PLY (stage ${stageNum}):`, e);
     }
   }
 
-  async _loadPLY(url) {
-    const loader = new PLYLoader();
-    const geometry = await new Promise((resolve, reject) => {
-      loader.load(url, resolve, undefined, reject);
-    });
+  /**
+   * Load an OBJ file into a specific stage's scene.
+   */
+  async _loadOBJIntoStage(stageNum, relativePath) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
 
-    geometry.computeBoundingBox();
-    const center = new THREE.Vector3();
-    geometry.boundingBox.getCenter(center);
-    geometry.translate(-center.x, -center.y, -center.z);
-
-    let material;
-    if (geometry.hasAttribute('color')) {
-      material = new THREE.PointsMaterial({
-        size: 0.005,
-        vertexColors: true,
-        sizeAttenuation: true,
-      });
-    } else {
-      material = new THREE.PointsMaterial({
-        size: 0.005,
-        color: 0x4a9eff,
-        sizeAttenuation: true,
-      });
+    if (stage.currentObject) {
+      stage.scene.remove(stage.currentObject);
+      stage.currentObject = null;
     }
 
-    // Detect if mesh (has faces) or point cloud
-    if (geometry.index && geometry.index.count > 0) {
-      const meshMat = new THREE.MeshStandardMaterial({
-        vertexColors: geometry.hasAttribute('color'),
-        side: THREE.DoubleSide,
-      });
-      this._currentObject = new THREE.Mesh(geometry, meshMat);
-    } else {
-      this._currentObject = new THREE.Points(geometry, material);
-    }
-
-    this._scene.add(this._currentObject);
-    this._fitCamera(geometry.boundingBox);
-  }
-
-  async _loadOBJ(url, relativePath) {
-    // Try loading MTL if available
+    const url = `/api/preview/file/${relativePath}`;
     const mtlPath = relativePath.replace(/\.obj$/i, '.mtl');
     let materials = null;
 
@@ -199,43 +342,73 @@ export class PreviewPanel {
       // No MTL file — okay
     }
 
-    const objLoader = new OBJLoader();
-    if (materials) objLoader.setMaterials(materials);
+    try {
+      const objLoader = new OBJLoader();
+      if (materials) objLoader.setMaterials(materials);
 
-    const object = await new Promise((resolve, reject) => {
-      objLoader.load(url, resolve, undefined, reject);
-    });
+      const object = await new Promise((resolve, reject) => {
+        objLoader.load(url, resolve, undefined, reject);
+      });
 
-    // Center the object
-    const box = new THREE.Box3().setFromObject(object);
-    const center = box.getCenter(new THREE.Vector3());
-    object.position.sub(center);
+      const box = new THREE.Box3().setFromObject(object);
+      const center = box.getCenter(new THREE.Vector3());
+      object.position.sub(center);
 
-    this._currentObject = object;
-    this._scene.add(this._currentObject);
-    this._fitCamera(box);
+      stage.currentObject = object;
+      stage.scene.add(object);
+      this._fitCamera(stage, box);
+    } catch (e) {
+      console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
+    }
   }
 
-  _fitCamera(box) {
+  /**
+   * Fit camera to bounding box for a specific stage.
+   */
+  _fitCamera(stage, box) {
     const size = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
     const dist = maxDim * 1.5;
-    this._camera.position.set(dist * 0.5, dist * 0.5, dist);
-    this._controls.target.set(0, 0, 0);
-    this._controls.update();
+    stage.camera.position.set(dist * 0.5, dist * 0.5, dist);
+    stage.controls.target.set(0, 0, 0);
+    stage.controls.update();
   }
 
-  async loadGallery() {
+  /**
+   * Load extracted frames into Stage 1 gallery (representative 10 frames).
+   * @param {number} frameCount - total extracted frame count from backend
+   */
+  async loadGallery(frameCount) {
     try {
       const res = await fetch('/api/preview/outputs');
       const data = await res.json();
       this._galleryGrid.innerHTML = '';
 
-      const images = data.files.filter(f => ['.png', '.jpg'].includes(f.ext));
-      // Sort: frames first, then masks, then others
+      const images = data.files.filter(
+        f => ['.png', '.jpg'].includes(f.ext) && f.path.startsWith('frames/')
+      );
       images.sort((a, b) => a.path.localeCompare(b.path));
 
-      for (const f of images) {
+      // Show frame count header
+      const totalCount = frameCount || images.length;
+      const headerEl = document.getElementById('frame-count-header');
+      const textEl = document.getElementById('frame-count-text');
+      if (headerEl && textEl) {
+        textEl.textContent = `Extracted ${totalCount} frames`;
+        headerEl.style.display = '';
+      }
+
+      // Select up to 10 representative frames (evenly spaced)
+      const maxShow = 10;
+      let selected = images;
+      if (images.length > maxShow) {
+        const step = (images.length - 1) / (maxShow - 1);
+        selected = Array.from({length: maxShow}, (_, i) =>
+          images[Math.round(i * step)]
+        );
+      }
+
+      for (const f of selected) {
         const img = document.createElement('img');
         img.className = 'gallery-thumb';
         img.src = `/api/preview/file/${f.path}`;
@@ -246,17 +419,10 @@ export class PreviewPanel {
       }
 
       if (images.length === 0) {
-        this._galleryGrid.innerHTML = '<p style="padding:20px;color:#555">No images yet.</p>';
+        this._galleryGrid.innerHTML = '<p style="padding:20px;color:#555">No frames yet.</p>';
       }
     } catch (e) {
       console.error('Failed to load gallery:', e);
     }
-  }
-
-  _bindEvents() {
-    this._loadBtn.addEventListener('click', () => {
-      const val = this._fileSelect.value;
-      if (val) this.loadFile(val);
-    });
   }
 }

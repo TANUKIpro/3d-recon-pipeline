@@ -60,6 +60,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             cfg.max_frames,
         )
         session.frames_dir = str(Path(output_dir) / "frames")
+        frame_count = len(list(Path(session.frames_dir).glob("*.jpg")))
+        await broadcast(session, {
+            "type": "extract_frames_result",
+            "frame_count": frame_count,
+        })
 
         _check_cancelled(session)
 
@@ -71,55 +76,76 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "label": STAGE_LABELS[PipelineStage.SAM2_SEGMENT],
         })
 
-        # Initialize SAM2 model in a thread
-        meta = await asyncio.to_thread(
-            sam2_service.initialize,
-            session.frames_dir,
-            output_dir,
-            cfg.sam2_model,
-        )
-
-        session.sam2_frame_count = meta["frame_count"]
-        session.sam2_width = meta["width"]
-        session.sam2_height = meta["height"]
-
-        # Signal frontend: SAM2 is ready for interaction
-        session.stage_interactive(PipelineStage.SAM2_SEGMENT)
-        await broadcast(session, {
-            "type": "sam2_ready",
-            "frame_count": meta["frame_count"],
-            "width": meta["width"],
-            "height": meta["height"],
-        })
-
-        # Wait for user to confirm segmentation via REST API
-        session.sam2_confirm_event.clear()
-        await session.sam2_confirm_event.wait()
-
-        _check_cancelled(session)
-
-        # Propagate masks
-        await broadcast(session, {"type": "sam2_propagating"})
-
-        loop = asyncio.get_event_loop()
-
-        def _propagate_cb(frame_idx: int, total: int) -> None:
-            asyncio.run_coroutine_threadsafe(
-                broadcast(session, {
-                    "type": "sam2_propagate_progress",
-                    "frame": frame_idx + 1,
-                    "total": total,
-                }),
-                loop,
+        # SAM2 interact → propagate → verify loop (supports redo)
+        while True:
+            # Initialize SAM2 model in a thread
+            meta = await asyncio.to_thread(
+                sam2_service.initialize,
+                session.frames_dir,
+                output_dir,
+                cfg.sam2_model,
             )
 
-        mask_dir = await asyncio.to_thread(
-            sam2_service.propagate_and_save, _propagate_cb
-        )
-        session.mask_dir = mask_dir
+            session.sam2_frame_count = meta["frame_count"]
+            session.sam2_width = meta["width"]
+            session.sam2_height = meta["height"]
 
-        # Release SAM2 model
-        await asyncio.to_thread(sam2_service.release)
+            # Signal frontend: SAM2 is ready for interaction
+            session.stage_interactive(PipelineStage.SAM2_SEGMENT)
+            await broadcast(session, {
+                "type": "sam2_ready",
+                "frame_count": meta["frame_count"],
+                "width": meta["width"],
+                "height": meta["height"],
+            })
+
+            # Wait for user to confirm segmentation via REST API
+            session.sam2_confirm_event.clear()
+            await session.sam2_confirm_event.wait()
+
+            _check_cancelled(session)
+
+            # Propagate masks
+            await broadcast(session, {"type": "sam2_propagating"})
+
+            loop = asyncio.get_event_loop()
+
+            def _propagate_cb(frame_idx: int, total: int) -> None:
+                asyncio.run_coroutine_threadsafe(
+                    broadcast(session, {
+                        "type": "sam2_propagate_progress",
+                        "frame": frame_idx + 1,
+                        "total": total,
+                    }),
+                    loop,
+                )
+
+            mask_dir = await asyncio.to_thread(
+                sam2_service.propagate_and_save, _propagate_cb
+            )
+            session.mask_dir = mask_dir
+
+            # Release SAM2 model
+            await asyncio.to_thread(sam2_service.release)
+
+            # Clear event BEFORE notifying frontend to avoid race condition
+            session.sam2_approve_event.clear()
+            session.sam2_approved = False
+
+            # Signal frontend: verification strip ready
+            await broadcast(session, {
+                "type": "sam2_verification_ready",
+                "frame_count": meta["frame_count"],
+            })
+
+            # Wait for user to approve or redo
+            await session.sam2_approve_event.wait()
+
+            _check_cancelled(session)
+
+            if session.sam2_approved:
+                break
+            # User chose redo — loop back to re-init SAM2
 
         session.stage_complete(PipelineStage.SAM2_SEGMENT)
         await broadcast(session, {

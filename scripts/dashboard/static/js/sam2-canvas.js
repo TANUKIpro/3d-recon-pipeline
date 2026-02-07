@@ -31,12 +31,14 @@ export class SAM2Canvas {
     this._imgHeight = height;
     this._positiveCount = 0;
     this._negativeCount = 0;
+    this.frameCount = frameCount;
 
     this._placeholder.style.display = 'none';
     this._canvas.style.display = 'block';
     this._undoBtn.disabled = false;
     this._clearBtn.disabled = false;
     this._confirmBtn.disabled = false;
+    this._confirmBtn.textContent = 'Confirm & Propagate';
 
     // Load first frame
     this._loadFrame(0);
