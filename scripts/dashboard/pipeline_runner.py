@@ -68,7 +68,28 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
         _check_cancelled(session)
 
-        # ── Stage 2: SAM2 Interactive Segmentation ────────────────
+        # VRAM gate: ensure sufficient free VRAM before Pi3X
+        await asyncio.to_thread(_vram_gate)
+
+        # ── Stage 2: Pi3X 3D Reconstruction ───────────────────────
+        await _run_stage(
+            session,
+            PipelineStage.PI3X_RECONSTRUCT,
+            _stage_pi3x_inference,
+            session.frames_dir,
+            output_dir,
+            cfg.pixel_limit,
+            cfg.max_frames,
+            cfg.confidence_threshold,
+            cfg.edge_rtol,
+        )
+        session.ply_full_path = str(Path(output_dir) / "object_full.ply")
+        session.poses_path = str(Path(output_dir) / "camera_poses.json")
+        session.pi3x_cache_path = str(Path(output_dir) / "pi3x_cache.npz")
+
+        _check_cancelled(session)
+
+        # ── Stage 3: SAM2 Interactive Segmentation ────────────────
         session.stage_start(PipelineStage.SAM2_SEGMENT)
         await broadcast(session, {
             "type": "stage_start",
@@ -147,33 +168,21 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 break
             # User chose redo — loop back to re-init SAM2
 
+        # Apply SAM2 masks to Pi3X cache
+        await asyncio.to_thread(
+            _stage_apply_masks,
+            session.pi3x_cache_path,
+            session.mask_dir,
+            output_dir,
+        )
+        session.ply_path = str(Path(output_dir) / "object.ply")
+
         session.stage_complete(PipelineStage.SAM2_SEGMENT)
         await broadcast(session, {
             "type": "stage_complete",
             "stage": int(PipelineStage.SAM2_SEGMENT),
             "elapsed": session.stages[int(PipelineStage.SAM2_SEGMENT)].elapsed,
         })
-
-        _check_cancelled(session)
-
-        # VRAM gate
-        await asyncio.to_thread(_vram_gate)
-
-        # ── Stage 3: Pi3X 3D Reconstruction ───────────────────────
-        await _run_stage(
-            session,
-            PipelineStage.PI3X_RECONSTRUCT,
-            _stage_pi3x,
-            session.frames_dir,
-            session.mask_dir,
-            output_dir,
-            cfg.pixel_limit,
-            cfg.max_frames,
-            cfg.confidence_threshold,
-            cfg.edge_rtol,
-        )
-        session.ply_path = str(Path(output_dir) / "object.ply")
-        session.poses_path = str(Path(output_dir) / "camera_poses.json")
 
         _check_cancelled(session)
 
@@ -291,21 +300,26 @@ def _stage_extract_frames(video_path: str, output_dir: str, frame_interval: int,
     extract_frames(video_path, output_dir, frame_interval=frame_interval, max_frames=max_frames)
 
 
-def _stage_pi3x(
-    frames_dir: str, mask_dir: str, output_dir: str,
+def _stage_pi3x_inference(
+    frames_dir: str, output_dir: str,
     pixel_limit: int, max_frames: int,
     conf_threshold: float, edge_rtol: float,
 ) -> None:
-    from stage_pi3x_reconstruct import run_pi3x
+    from stage_pi3x_reconstruct import run_pi3x_inference
     from vram_utils import cleanup_pytorch_vram
-    run_pi3x(
-        frames_dir, mask_dir, output_dir,
+    run_pi3x_inference(
+        frames_dir, output_dir,
         pixel_limit=pixel_limit,
         max_frames=max_frames,
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
     )
     cleanup_pytorch_vram()
+
+
+def _stage_apply_masks(cache_path: str, mask_dir: str, output_dir: str) -> None:
+    from stage_pi3x_reconstruct import apply_sam2_masks
+    apply_sam2_masks(cache_path, mask_dir, output_dir)
 
 
 def _stage_denoise(ply_path: str, output_dir: str) -> None:

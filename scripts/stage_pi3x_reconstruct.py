@@ -1,4 +1,4 @@
-"""Stage 3: Pi3X 3D reconstruction with triple filtering.
+"""Stage 2: Pi3X 3D reconstruction with triple filtering.
 
 Runs Pi3X on full (unmasked) images for optimal pose estimation,
 then applies confidence + depth-edge + SAM2 mask filtering.
@@ -327,20 +327,22 @@ class _nullcontext:
         return False
 
 
-def run_pi3x(
+def run_pi3x_inference(
     frames_dir: str,
-    mask_dir: str,
     output_dir: str,
     pixel_limit: int | None = None,
     max_frames: int | None = None,
     conf_threshold: float | None = None,
     edge_rtol: float | None = None,
-) -> tuple[Path, Path]:
-    """Run Pi3X inference and save filtered point cloud + camera poses.
+) -> tuple[Path, Path, Path]:
+    """Run Pi3X inference and save full (conf+edge filtered) point cloud.
+
+    This is the first half of the reconstruction: runs the model and applies
+    confidence + depth-edge filtering only (no SAM2 masks). Saves intermediate
+    cache for later mask application via ``apply_sam2_masks()``.
 
     Args:
         frames_dir: Directory of JPEG frames.
-        mask_dir: Directory of SAM2 mask PNGs.
         output_dir: Output directory.
         pixel_limit: Max pixels per frame for resize.
         max_frames: Maximum frames for Pi3X.
@@ -348,7 +350,7 @@ def run_pi3x(
         edge_rtol: Depth edge relative tolerance.
 
     Returns:
-        Tuple of (ply_path, poses_path).
+        Tuple of (ply_full_path, poses_path, cache_path).
     """
     if pixel_limit is None:
         pixel_limit = int(os.environ.get("PIXEL_LIMIT", "255000"))
@@ -367,7 +369,6 @@ def run_pi3x(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    mask_dir = Path(mask_dir)
 
     # --- Load frames ---
     log_vram("before Pi3X load")
@@ -408,7 +409,7 @@ def run_pi3x(
     del model
     cleanup_pytorch_vram()
 
-    # --- Triple filter ---
+    # --- Confidence + edge filtering ---
     # Filter 1: Confidence
     conf_mask = torch.sigmoid(results["conf"][..., 0]) > conf_threshold
     conf_count = conf_mask[0].sum().item()
@@ -418,7 +419,84 @@ def run_pi3x(
     conf_edge_mask = conf_mask & non_edge
     conf_edge_count = conf_edge_mask[0].sum().item()
 
-    # Filter 3: SAM2 masks
+    total = N * H * W
+    print("Filtering stats (conf+edge):")
+    print(f"  Total pixels:     {total:>10,}")
+    print(f"  After conf:       {conf_count:>10,} ({100*conf_count/total:.1f}%)")
+    print(f"  After conf+edge:  {conf_edge_count:>10,} ({100*conf_edge_count/total:.1f}%)")
+
+    # --- Save full (conf+edge filtered) point cloud ---
+    ply_full_path = output_path / "object_full.ply"
+    if conf_edge_count > 0:
+        full_points = results["points"][0][conf_edge_mask[0]].cpu()
+        full_colors = imgs.permute(0, 2, 3, 1)[conf_edge_mask[0]]
+        write_ply(full_points, full_colors, str(ply_full_path))
+        print(f"Saved full PLY: {ply_full_path} ({conf_edge_count:,} points)")
+        del full_points, full_colors
+    else:
+        write_ply(torch.zeros(0, 3), torch.zeros(0, 3), str(ply_full_path))
+        print("Warning: No points after conf+edge filtering.")
+
+    # --- Save camera poses ---
+    poses = results["camera_poses"][0].cpu().numpy()
+    poses_path = output_path / "camera_poses.json"
+    with open(poses_path, "w") as f:
+        json.dump(
+            {"poses": [pose.tolist() for pose in poses], "frame_indices": list(range(N))},
+            f, indent=2,
+        )
+    print(f"Saved camera poses: {poses_path}")
+
+    # --- Cache intermediate data for apply_sam2_masks() ---
+    cache_path = output_path / "pi3x_cache.npz"
+    np.savez_compressed(
+        str(cache_path),
+        points=results["points"][0].cpu().half().numpy(),
+        conf_edge_mask=conf_edge_mask[0].cpu().numpy(),
+        colors=imgs.permute(0, 2, 3, 1).cpu().numpy(),
+        N=np.array(N),
+        H=np.array(H),
+        W=np.array(W),
+    )
+    print(f"Saved Pi3X cache: {cache_path}")
+
+    # Cleanup remaining GPU tensors
+    del results, imgs, conf_mask, non_edge, conf_edge_mask
+    cleanup_pytorch_vram()
+
+    return ply_full_path, poses_path, cache_path
+
+
+def apply_sam2_masks(
+    cache_path: str,
+    mask_dir: str,
+    output_dir: str,
+) -> Path:
+    """Apply SAM2 masks to cached Pi3X results and save filtered point cloud.
+
+    Args:
+        cache_path: Path to pi3x_cache.npz from run_pi3x_inference().
+        mask_dir: Directory of SAM2 mask PNGs.
+        output_dir: Output directory.
+
+    Returns:
+        Path to the filtered PLY file (object.ply).
+    """
+    from pi3.utils.basic import write_ply
+
+    output_path = Path(output_dir)
+    mask_dir = Path(mask_dir)
+
+    # Load cache
+    cache = np.load(str(cache_path))
+    points = cache["points"]  # (N, H, W, 3) float16
+    conf_edge_mask = cache["conf_edge_mask"]  # (N, H, W) bool
+    colors = cache["colors"]  # (N, H, W, 3) float
+    N = int(cache["N"])
+    H = int(cache["H"])
+    W = int(cache["W"])
+
+    # Load SAM2 masks
     mask_files = sorted(mask_dir.glob("*.png"))
     if len(mask_files) != N:
         print(f"Warning: {len(mask_files)} masks vs {N} frames. Using min.")
@@ -432,55 +510,71 @@ def run_pi3x(
         else:
             sam2_masks.append(np.zeros((H, W), dtype=bool))
 
-    sam2_mask_tensor = torch.from_numpy(np.stack(sam2_masks)).to(device)
-    final_mask = conf_edge_mask[0] & sam2_mask_tensor
-    final_count = final_mask.sum().item()
+    sam2_mask = np.stack(sam2_masks)
+    final_mask = conf_edge_mask & sam2_mask
+    final_count = final_mask.sum()
 
-    # Stats
     total = N * H * W
-    print("Filtering stats:")
-    print(f"  Total pixels:     {total:>10,}")
-    print(f"  After conf:       {conf_count:>10,} ({100*conf_count/total:.1f}%)")
+    conf_edge_count = conf_edge_mask.sum()
+    print("Filtering stats (+SAM2 mask):")
     print(f"  After conf+edge:  {conf_edge_count:>10,} ({100*conf_edge_count/total:.1f}%)")
     print(f"  After +SAM2 mask: {final_count:>10,} ({100*final_count/total:.1f}%)")
 
+    ply_path = output_path / "object.ply"
     if final_count == 0:
         print("Warning: No points after filtering.")
-        ply_path = output_path / "object.ply"
         write_ply(torch.zeros(0, 3), torch.zeros(0, 3), str(ply_path))
-        poses_path = output_path / "camera_poses.json"
-        with open(poses_path, "w") as f:
-            json.dump({"poses": [], "frame_indices": []}, f)
-        return ply_path, poses_path
+        return ply_path
 
-    # Extract points and colors
-    points = results["points"][0][final_mask].cpu()
-    colors = imgs.permute(0, 2, 3, 1)[final_mask]
+    # Extract points and colors using final mask
+    pts = torch.from_numpy(points[final_mask].astype(np.float32))
+    cols = torch.from_numpy(colors[final_mask].astype(np.float32))
 
     # Bounding box
-    pts_np = points.numpy()
+    pts_np = pts.numpy()
     bbox_size = pts_np.max(axis=0) - pts_np.min(axis=0)
     print(f"  Bounding box (m): {bbox_size[0]:.3f} x {bbox_size[1]:.3f} x {bbox_size[2]:.3f}")
 
-    # Save PLY
-    ply_path = output_path / "object.ply"
-    write_ply(points, colors, str(ply_path))
+    write_ply(pts, cols, str(ply_path))
     print(f"Saved PLY: {ply_path} ({final_count:,} points)")
 
-    # Save camera poses
-    poses = results["camera_poses"][0].cpu().numpy()
-    poses_path = output_path / "camera_poses.json"
-    with open(poses_path, "w") as f:
-        json.dump(
-            {"poses": [pose.tolist() for pose in poses], "frame_indices": list(range(N))},
-            f, indent=2,
-        )
-    print(f"Saved camera poses: {poses_path}")
+    return ply_path
 
-    # Cleanup remaining GPU tensors
-    del results, imgs, conf_mask, non_edge, conf_edge_mask, sam2_mask_tensor, final_mask
-    cleanup_pytorch_vram()
 
+def run_pi3x(
+    frames_dir: str,
+    mask_dir: str,
+    output_dir: str,
+    pixel_limit: int | None = None,
+    max_frames: int | None = None,
+    conf_threshold: float | None = None,
+    edge_rtol: float | None = None,
+) -> tuple[Path, Path]:
+    """Run Pi3X inference and save filtered point cloud + camera poses.
+
+    Backward-compatible wrapper that calls run_pi3x_inference() followed
+    by apply_sam2_masks().
+
+    Args:
+        frames_dir: Directory of JPEG frames.
+        mask_dir: Directory of SAM2 mask PNGs.
+        output_dir: Output directory.
+        pixel_limit: Max pixels per frame for resize.
+        max_frames: Maximum frames for Pi3X.
+        conf_threshold: Confidence threshold for filtering.
+        edge_rtol: Depth edge relative tolerance.
+
+    Returns:
+        Tuple of (ply_path, poses_path).
+    """
+    _ply_full, poses_path, cache_path = run_pi3x_inference(
+        frames_dir, output_dir,
+        pixel_limit=pixel_limit,
+        max_frames=max_frames,
+        conf_threshold=conf_threshold,
+        edge_rtol=edge_rtol,
+    )
+    ply_path = apply_sam2_masks(cache_path, mask_dir, output_dir)
     return ply_path, poses_path
 
 

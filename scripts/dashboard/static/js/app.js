@@ -36,8 +36,8 @@ document.addEventListener('stage-activated', async (e) => {
   // Config panel: show stage-specific params
   config.setActiveStage(stage);
 
-  // For 3D stages (3-6), activate the renderer if scene is initialized
-  if (stage >= 3 && stage <= 6) {
+  // For 3D stages (2=Pi3X, 4-6), activate the renderer if scene is initialized
+  if (stage === 2 || (stage >= 4 && stage <= 6)) {
     if (preview._stages?.[stage]?.initialized) {
       preview.activateStage(stage);
     }
@@ -118,18 +118,21 @@ ws.on('stage_complete', (msg) => {
     const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
     if (empty) empty.classList.add('hidden');
     preview.loadGallery(_extractedFrameCount);
-  } else if (msg.stage === 3) {
+  } else if (msg.stage === 2) {
     preview.loadPi3xResults(cameraOverlay);
+  } else if (msg.stage === 3) {
+    // SAM2 complete — reload Pi3X viewer with filtered object.ply
+    preview.loadPi3xResults(cameraOverlay, 'object.ply');
   } else if (msg.stage >= 4 && msg.stage <= 6) {
     preview.loadStageResult(msg.stage);
   }
 });
 
 ws.on('sam2_ready', (msg) => {
-  pipelineUI.stageInteractive(2);
+  pipelineUI.stageInteractive(3);
   sam2.activate(msg.frame_count, msg.width, msg.height);
   sam2Verify.hide();
-  stageCtrl.activateStage(2);
+  stageCtrl.activateStage(3);
   log.append('stdout', `SAM2 ready: ${msg.frame_count} frames (${msg.width}x${msg.height})\n`);
   log.append('stdout', 'Click on the object to segment. Right-click for negative points.\n');
 });

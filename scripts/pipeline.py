@@ -5,8 +5,8 @@ RGB video → Textured 3D mesh (OBJ)
 
 Pipeline stages:
   1. Frame extraction (CPU)
-  2. SAM2 interactive segmentation (GPU, Gradio UI)
-  3. Pi3X 3D reconstruction + triple filtering (GPU)
+  2. Pi3X 3D reconstruction (GPU)
+  3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
   4. Point cloud denoising (CPU)
   5. DiffCD mesh reconstruction (GPU/JAX subprocess)
   6. Texture baking (CPU)
@@ -67,12 +67,34 @@ Examples:
         frames_dir = str(extract_frames(args.video_path, output_dir))
         print(f"  → {frames_dir}")
 
+    # VRAM gate: ensure sufficient free VRAM before Pi3X
+    if skip_to <= 1:
+        ensure_vram_available(min_free_mb=12000, stage_name="before Pi3X")
+
     # =====================================================================
-    # Stage 2: SAM2 Interactive Segmentation
+    # Stage 2: Pi3X 3D Reconstruction
     # =====================================================================
     if skip_to <= 2:
         print("\n" + "=" * 60)
-        print("Stage 2/6: SAM2 Interactive Segmentation")
+        print("Stage 2/6: Pi3X 3D Reconstruction")
+        print("=" * 60)
+        from stage_pi3x_reconstruct import run_pi3x_inference
+
+        _ply_full, poses_path, cache_path = run_pi3x_inference(frames_dir, output_dir)
+        cleanup_pytorch_vram()
+        print(f"  → Full PLY: {_ply_full}")
+        print(f"  → Poses: {poses_path}")
+        print(f"  → Cache: {cache_path}")
+    else:
+        poses_path = Path(output_dir) / "camera_poses.json"
+        cache_path = Path(output_dir) / "pi3x_cache.npz"
+
+    # =====================================================================
+    # Stage 3: SAM2 Interactive Segmentation + Mask Filtering
+    # =====================================================================
+    if skip_to <= 3:
+        print("\n" + "=" * 60)
+        print("Stage 3/6: SAM2 Interactive Segmentation")
         print("=" * 60)
         print(">>> Open http://localhost:7860 to select the object <<<")
         from stage_sam2_ui import run_sam2_interactive
@@ -81,26 +103,12 @@ Examples:
         cleanup_pytorch_vram()
         print(f"  → {mask_dir}")
 
-    # VRAM gate: ensure sufficient free VRAM before Pi3X (only after SAM2 ran)
-    if skip_to <= 2:
-        ensure_vram_available(min_free_mb=12000, stage_name="before Pi3X")
-
-    # =====================================================================
-    # Stage 3: Pi3X 3D Reconstruction
-    # =====================================================================
-    if skip_to <= 3:
-        print("\n" + "=" * 60)
-        print("Stage 3/6: Pi3X 3D Reconstruction")
-        print("=" * 60)
-        from stage_pi3x_reconstruct import run_pi3x
-
-        ply_path, poses_path = run_pi3x(frames_dir, mask_dir, output_dir)
-        cleanup_pytorch_vram()
+        # Apply SAM2 masks to Pi3X cache
+        from stage_pi3x_reconstruct import apply_sam2_masks
+        ply_path = apply_sam2_masks(str(cache_path), mask_dir, output_dir)
         print(f"  → PLY: {ply_path}")
-        print(f"  → Poses: {poses_path}")
     else:
         ply_path = Path(output_dir) / "object.ply"
-        poses_path = Path(output_dir) / "camera_poses.json"
 
     # =====================================================================
     # Stage 4: Point Cloud Denoising
