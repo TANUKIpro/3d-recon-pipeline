@@ -5,11 +5,24 @@ CPU-only stage, no VRAM needed.
 """
 
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 from plyfile import PlyData, PlyElement
 from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
+
+ProgressCallback = Callable[[float, str | None], None]
+
+
+def _emit_progress(
+    progress_cb: ProgressCallback | None,
+    progress: float,
+    detail: str | None = None,
+) -> None:
+    if progress_cb is None:
+        return
+    progress_cb(max(0.0, min(100.0, float(progress))), detail)
 
 
 def _load_ply(path: str | Path) -> tuple[np.ndarray, np.ndarray | None]:
@@ -109,7 +122,11 @@ def _sor(points, colors, nb_neighbors=20, std_ratio=2.0):
     return points[inlier], colors[inlier] if colors is not None else None
 
 
-def denoise(ply_path: str, output_dir: str) -> Path:
+def denoise(
+    ply_path: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
     """Denoise point cloud using DBSCAN + SOR.
 
     Args:
@@ -123,29 +140,36 @@ def denoise(ply_path: str, output_dir: str) -> Path:
     output_path.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading: {ply_path}")
+    _emit_progress(progress_cb, 5.0, "Loading point cloud")
     points, colors = _load_ply(ply_path)
     original_count = len(points)
     print(f"  {original_count:,} points loaded")
+    _emit_progress(progress_cb, 20.0, f"Loaded {original_count:,} points")
 
     if original_count == 0:
         out = output_path / "object_denoised.ply"
         _save_ply(out, points, colors)
+        _emit_progress(progress_cb, 100.0, "No points to denoise")
         return out
 
     # Auto-tune DBSCAN eps
     bbox_extent = points.max(axis=0) - points.min(axis=0)
     eps = np.median(bbox_extent) * 0.02
     print(f"Auto-tuned DBSCAN eps: {eps:.6f}")
+    _emit_progress(progress_cb, 35.0, "Running DBSCAN clustering")
 
     # DBSCAN
     points, colors, n_clusters = _dbscan_largest_cluster(points, colors, eps)
     print(f"DBSCAN: {n_clusters} clusters, kept {len(points):,} points")
+    _emit_progress(progress_cb, 65.0, f"DBSCAN complete ({n_clusters} clusters)")
 
     # SOR
     before_sor = len(points)
     print("Running SOR...")
+    _emit_progress(progress_cb, 75.0, "Running statistical outlier removal")
     points, colors = _sor(points, colors)
     print(f"SOR: {len(points):,} points ({before_sor - len(points):,} removed)")
+    _emit_progress(progress_cb, 90.0, "Saving denoised point cloud")
 
     # Summary
     removed = original_count - len(points)
@@ -154,6 +178,7 @@ def denoise(ply_path: str, output_dir: str) -> Path:
     out = output_path / "object_denoised.ply"
     _save_ply(out, points, colors)
     print(f"Saved: {out}")
+    _emit_progress(progress_cb, 100.0, "Denoise complete")
     return out
 
 

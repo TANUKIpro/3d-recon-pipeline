@@ -9,6 +9,7 @@ Adapted from im2pc/host/pi3x_sam2_cli.py.
 import json
 import os
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -45,6 +46,18 @@ _VRAM_PROFILES = [
 # Clamp per-chunk similarity scale to avoid catastrophic drift.
 _CHUNK_SCALE_MIN = 0.85
 _CHUNK_SCALE_MAX = 1.15
+
+ProgressCallback = Callable[[float, str | None], None]
+
+
+def _emit_progress(
+    progress_cb: ProgressCallback | None,
+    progress: float,
+    detail: str | None = None,
+) -> None:
+    if progress_cb is None:
+        return
+    progress_cb(max(0.0, min(100.0, float(progress))), detail)
 
 
 def _auto_scale_frame_target(
@@ -207,6 +220,9 @@ def _run_inference_chunked(
     dtype: torch.dtype | None,
     chunk_size: int = 20,
     overlap: int = 5,
+    progress_cb: ProgressCallback | None = None,
+    progress_start: float = 35.0,
+    progress_end: float = 60.0,
 ) -> dict:
     """Fallback: process frames in overlapping windows when a single pass OOMs.
 
@@ -219,12 +235,19 @@ def _run_inference_chunked(
 
     print(f"Chunked inference: {N} frames, chunk_size={chunk_size}, overlap={overlap}")
     all_chunks = []  # list of (start, end, results_dict)
+    starts = list(range(0, N, chunk_size - overlap))
+    total_chunks = max(1, len(starts))
 
-    for start in range(0, N, chunk_size - overlap):
+    for chunk_idx, start in enumerate(starts):
         end = min(start + chunk_size, N)
         if end - start < 2:
             break
         print(f"  Processing chunk [{start}:{end}] ({end - start} frames)")
+        _emit_progress(
+            progress_cb,
+            progress_start + ((chunk_idx / total_chunks) * (progress_end - progress_start)),
+            f"Pi3X chunk inference ({chunk_idx + 1}/{total_chunks})",
+        )
 
         # Reload full model to GPU for this chunk
         model.to(device)
@@ -232,6 +255,11 @@ def _run_inference_chunked(
             model, imgs[start:end], device, dtype,
         )
         all_chunks.append((start, end, chunk_results))
+        _emit_progress(
+            progress_cb,
+            progress_start + (((chunk_idx + 1) / total_chunks) * (progress_end - progress_start)),
+            f"Pi3X chunk inference ({chunk_idx + 1}/{total_chunks})",
+        )
 
         # Offload entire model between chunks
         model.cpu()
@@ -410,6 +438,7 @@ def run_pi3x_inference(
     max_frames: int | None = None,
     conf_threshold: float | None = None,
     edge_rtol: float | None = None,
+    progress_cb: ProgressCallback | None = None,
 ) -> tuple[Path, Path, Path]:
     """Run Pi3X inference and save full (conf+edge filtered) point cloud.
 
@@ -443,6 +472,7 @@ def run_pi3x_inference(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    _emit_progress(progress_cb, 3.0, "Scanning input frames")
 
     # --- Count frames and apply frame budget before inference ---
     frame_files = sorted(Path(frames_dir).glob("*.jpg"))
@@ -452,6 +482,7 @@ def run_pi3x_inference(
 
     target_frames = min(max_frames, num_frames)
     target_frames = _auto_scale_frame_target(target_frames, pixel_limit)
+    _emit_progress(progress_cb, 8.0, f"Selected up to {target_frames} frames")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
@@ -463,8 +494,10 @@ def run_pi3x_inference(
     # --- Load model once (outside retry loop) ---
     log_vram("before Pi3X load")
     print("Loading Pi3X model...")
+    _emit_progress(progress_cb, 12.0, "Loading Pi3X model")
     model = Pi3X.from_pretrained("yyfz233/Pi3X").to(device).eval()
     log_vram("after Pi3X load")
+    _emit_progress(progress_cb, 22.0, "Pi3X model loaded")
 
     # --- OOM retry loop: reduce frame count first, resolution second ---
     current_target_frames = max(2, target_frames)
@@ -496,9 +529,15 @@ def run_pi3x_inference(
         imgs = imgs.to(device)
 
         print(f"Running Pi3X inference on {N} frames...")
+        _emit_progress(
+            progress_cb,
+            30.0,
+            f"Running Pi3X inference ({N} frames, attempt {retry_count + 1})",
+        )
         try:
             model.to(device)
             results = _run_inference_memory_efficient(model, imgs, device, dtype)
+            _emit_progress(progress_cb, 60.0, "Pi3X inference complete")
             break  # success
         except torch.cuda.OutOfMemoryError:
             model.cpu()
@@ -525,6 +564,11 @@ def run_pi3x_inference(
                     )
                     current_target_frames = new_target
                     reduced = True
+                    _emit_progress(
+                        progress_cb,
+                        24.0,
+                        f"OOM fallback: reducing frames to {new_target} (retry {retry_count})",
+                    )
 
             if not reduced and current_pixel_limit > _MIN_PIXEL_LIMIT:
                 new_limit = max(
@@ -538,6 +582,11 @@ def run_pi3x_inference(
                     )
                     current_pixel_limit = new_limit
                     reduced = True
+                    _emit_progress(
+                        progress_cb,
+                        24.0,
+                        f"OOM fallback: reducing pixel limit to {new_limit} (retry {retry_count})",
+                    )
 
             if reduced:
                 del imgs
@@ -550,10 +599,19 @@ def run_pi3x_inference(
                     f"CUDA OOM persists, trying chunk fallback "
                     f"(chunk_size={chunk_size}, overlap={overlap})"
                 )
+                _emit_progress(progress_cb, 32.0, "OOM fallback: switching to chunked inference")
                 model.to(device)
                 try:
                     results = _run_inference_chunked(
-                        model, imgs, device, dtype, chunk_size=chunk_size, overlap=overlap
+                        model,
+                        imgs,
+                        device,
+                        dtype,
+                        chunk_size=chunk_size,
+                        overlap=overlap,
+                        progress_cb=progress_cb,
+                        progress_start=35.0,
+                        progress_end=60.0,
                     )
                 except torch.cuda.OutOfMemoryError as e:
                     del imgs
@@ -577,6 +635,7 @@ def run_pi3x_inference(
     cleanup_pytorch_vram()
 
     # --- Confidence + edge filtering ---
+    _emit_progress(progress_cb, 70.0, "Applying confidence and edge filters")
     # Filter 1: Confidence
     conf_mask = torch.sigmoid(results["conf"][..., 0]) > conf_threshold
     conf_count = conf_mask[0].sum().item()
@@ -593,6 +652,7 @@ def run_pi3x_inference(
     print(f"  After conf+edge:  {conf_edge_count:>10,} ({100*conf_edge_count/total:.1f}%)")
 
     # --- Save full (conf+edge filtered) point cloud ---
+    _emit_progress(progress_cb, 80.0, "Saving point cloud")
     ply_full_path = output_path / "object_full.ply"
     if conf_edge_count > 0:
         full_points = results["points"][0][conf_edge_mask[0]].cpu()
@@ -605,6 +665,7 @@ def run_pi3x_inference(
         print("Warning: No points after conf+edge filtering.")
 
     # --- Save camera poses ---
+    _emit_progress(progress_cb, 90.0, "Saving camera poses")
     poses = results["camera_poses"][0].cpu().numpy()
     poses_path = output_path / "camera_poses.json"
     frame_indices_used = selected_frame_ids[:N]
@@ -621,6 +682,7 @@ def run_pi3x_inference(
     print(f"Saved camera poses: {poses_path}")
 
     # --- Cache intermediate data for apply_sam2_masks() ---
+    _emit_progress(progress_cb, 96.0, "Saving Pi3X cache")
     cache_path = output_path / "pi3x_cache.npz"
     np.savez_compressed(
         str(cache_path),
@@ -638,6 +700,7 @@ def run_pi3x_inference(
     # Cleanup remaining GPU tensors
     del results, imgs, conf_mask, non_edge, conf_edge_mask
     cleanup_pytorch_vram()
+    _emit_progress(progress_cb, 100.0, "Pi3X stage complete")
 
     return ply_full_path, poses_path, cache_path
 
@@ -646,6 +709,7 @@ def apply_sam2_masks(
     cache_path: str,
     mask_dir: str,
     output_dir: str,
+    progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Apply SAM2 masks to cached Pi3X results and save filtered point cloud.
 
@@ -661,6 +725,7 @@ def apply_sam2_masks(
 
     output_path = Path(output_dir)
     mask_dir = Path(mask_dir)
+    _emit_progress(progress_cb, 5.0, "Loading Pi3X cache")
 
     # Load cache
     cache = np.load(str(cache_path))
@@ -682,6 +747,7 @@ def apply_sam2_masks(
             "Falling back to 0..N-1."
         )
         frame_indices = list(range(N))
+    _emit_progress(progress_cb, 15.0, f"Loaded cache for {N} frames")
 
     # Load SAM2 masks
     mask_files = sorted(mask_dir.glob("*.png"))
@@ -690,7 +756,8 @@ def apply_sam2_masks(
 
     sam2_masks = []
     missing_masks = 0
-    for frame_idx in frame_indices:
+    emit_every = max(1, N // 40)
+    for i, frame_idx in enumerate(frame_indices):
         mask_path = mask_dir / f"{int(frame_idx):05d}.png"
         if not mask_path.exists() and 0 <= int(frame_idx) < len(mask_files):
             # Backward-compat fallback: treat as positional index.
@@ -699,16 +766,21 @@ def apply_sam2_masks(
         if not mask_path.exists():
             missing_masks += 1
             sam2_masks.append(np.zeros((H, W), dtype=bool))
-            continue
-
-        mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if mask_img is None:
-            missing_masks += 1
-            sam2_masks.append(np.zeros((H, W), dtype=bool))
-            continue
-
-        mask_resized = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
-        sam2_masks.append(mask_resized > 127)
+        else:
+            mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if mask_img is None:
+                missing_masks += 1
+                sam2_masks.append(np.zeros((H, W), dtype=bool))
+            else:
+                mask_resized = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
+                sam2_masks.append(mask_resized > 127)
+        if i % emit_every == 0 or i == N - 1:
+            ratio = (i + 1) / max(N, 1)
+            _emit_progress(
+                progress_cb,
+                15.0 + ratio * 55.0,
+                f"Loading SAM2 masks ({i + 1}/{N})",
+            )
 
     if missing_masks > 0:
         print(f"Warning: {missing_masks}/{N} masks missing or unreadable.")
@@ -716,6 +788,7 @@ def apply_sam2_masks(
     sam2_mask = np.stack(sam2_masks)
     final_mask = conf_edge_mask & sam2_mask
     final_count = final_mask.sum()
+    _emit_progress(progress_cb, 78.0, "Applying SAM2 mask filter")
 
     total = N * H * W
     conf_edge_count = conf_edge_mask.sum()
@@ -727,6 +800,7 @@ def apply_sam2_masks(
     if final_count == 0:
         print("Warning: No points after filtering.")
         write_ply(torch.zeros(0, 3), torch.zeros(0, 3), str(ply_path))
+        _emit_progress(progress_cb, 100.0, "Mask filtering complete (no points)")
         return ply_path
 
     # Extract points and colors using final mask
@@ -740,6 +814,7 @@ def apply_sam2_masks(
 
     write_ply(pts, cols, str(ply_path))
     print(f"Saved PLY: {ply_path} ({final_count:,} points)")
+    _emit_progress(progress_cb, 100.0, "Mask filtering complete")
 
     return ply_path
 
@@ -752,6 +827,7 @@ def run_pi3x(
     max_frames: int | None = None,
     conf_threshold: float | None = None,
     edge_rtol: float | None = None,
+    progress_cb: ProgressCallback | None = None,
 ) -> tuple[Path, Path]:
     """Run Pi3X inference and save filtered point cloud + camera poses.
 
@@ -776,8 +852,9 @@ def run_pi3x(
         max_frames=max_frames,
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
+        progress_cb=progress_cb,
     )
-    ply_path = apply_sam2_masks(cache_path, mask_dir, output_dir)
+    ply_path = apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
     return ply_path, poses_path
 
 

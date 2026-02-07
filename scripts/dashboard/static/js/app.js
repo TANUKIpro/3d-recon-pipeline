@@ -27,6 +27,7 @@ const cameraOverlay = new CameraOverlay();
 
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
+const overallProgressBadge = document.getElementById('overall-progress-badge');
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -53,6 +54,7 @@ config.onStart = async (cfg) => {
     sam2Verify.hide();
     _extractedFrameCount = 0;
     setStatus('running', 'Running');
+    setOverallProgress(0);
 
     const res = await fetch('/api/pipeline/start', {
       method: 'POST',
@@ -84,6 +86,7 @@ config.onCancel = async () => {
 
 ws.on('status', (msg) => {
   pipelineUI.updateAll(msg);
+  setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (msg.running) {
     config.setRunning(true);
     setStatus('running', 'Running');
@@ -94,6 +97,7 @@ ws.on('stage_start', (msg) => {
   stageCtrl.activateStage(msg.stage);
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
+  setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   log.append('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`);
 });
 
@@ -105,6 +109,7 @@ ws.on('extract_frames_result', (msg) => {
 
 ws.on('stage_complete', (msg) => {
   pipelineUI.stageComplete(msg.stage, msg.elapsed);
+  setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (msg.error) {
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
@@ -126,6 +131,11 @@ ws.on('stage_complete', (msg) => {
   } else if (msg.stage >= 4 && msg.stage <= 6) {
     preview.loadStageResult(msg.stage);
   }
+});
+
+ws.on('stage_progress', (msg) => {
+  pipelineUI.stageProgress(msg.stage, msg.progress, msg.detail);
+  setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
 });
 
 ws.on('sam2_ready', (msg) => {
@@ -172,6 +182,7 @@ ws.on('pi3x_preview_ready', () => {
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
+  setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
 });
@@ -181,6 +192,7 @@ ws.on('pipeline_error', (msg) => {
   config.setActiveStage(null);
   setStatus('error', 'Error');
   pipelineUI.stageFailed(msg.stage);
+  setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   stageCtrl.setStageState(msg.stage, 'failed');
   log.append('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`);
 });
@@ -225,6 +237,12 @@ function setStatus(state, text) {
   else if (state === 'complete') statusBadge.classList.add('badge-complete');
   else if (state === 'error') statusBadge.classList.add('badge-error');
   else statusBadge.classList.add('badge-idle');
+}
+
+function setOverallProgress(value) {
+  if (!overallProgressBadge) return;
+  const pct = Math.max(0, Math.min(100, Number(value) || 0));
+  overallProgressBadge.textContent = `Overall: ${Math.round(pct)}%`;
 }
 
 function formatTime(secs) {
