@@ -468,10 +468,17 @@ html, body {
   min-height: 16px;
 }
 
+#object-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  min-height: 16px;
+}
+
 .form-row { display: flex; gap: 8px; }
 .form-row .form-group { flex: 1; }
 
-input[type="number"], select {
+input[type="number"], input[type="text"], select {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -482,6 +489,60 @@ input[type="number"], select {
   font-family: var(--font);
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+.object-artifacts-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(22, 33, 62, 0.45);
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.object-artifacts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+#object-artifacts {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.object-artifact-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.14);
+  font-size: 11px;
+  font-family: var(--font);
+}
+
+.object-artifact-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-artifact-size {
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
 
 .form-actions {
   display: flex;

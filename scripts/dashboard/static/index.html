@@ -164,6 +164,25 @@
             <div id="video-info"></div>
           </div>
           <div class="form-group">
+            <label for="object-select">Target Object</label>
+            <select id="object-select">
+              <option value="__new__">Create New Object</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="cfg-object-name">Object Name</label>
+            <input type="text" id="cfg-object-name" placeholder="e.g. mug_blue">
+            <div id="object-info"></div>
+          </div>
+          <div class="object-artifacts-panel">
+            <div class="object-artifacts-header">
+              <span>Object Artifacts</span>
+              <button id="btn-refresh-objects" class="btn-small" type="button">Refresh</button>
+            </div>
+            <div id="object-artifacts-empty" class="config-note">No artifacts for this object yet.</div>
+            <ul id="object-artifacts"></ul>
+          </div>
+          <div class="form-group">
             <label for="cfg-frame-interval">Frame Interval</label>
             <input type="number" id="cfg-frame-interval" value="10" min="1" max="1000">
           </div>

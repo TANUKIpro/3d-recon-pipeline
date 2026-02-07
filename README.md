@@ -58,11 +58,12 @@ docker compose up
 ブラウザで **http://localhost:7860** を開くと Web ダッシュボードが表示される。
 
 1. **Video** ドロップダウンで動画を選択
-2. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
-3. **Start Pipeline** をクリック
-4. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
-5. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
-6. ログ・進捗・3Dプレビューをリアルタイムで確認
+2. **Target Object** で既存オブジェクトを選択、または新規 `Object Name` を入力
+3. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
+4. **Start Pipeline** をクリック
+5. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
+6. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
+7. ログ・進捗・3Dプレビューをリアルタイムで確認
 
 ## 使い方
 
@@ -87,6 +88,8 @@ docker compose down
 **ダッシュボード機能:**
 
 - **動画選択**: `/data/input/` に配置した動画ファイルを自動検出
+- **オブジェクト切替**: `Target Object` で対象オブジェクトを切替、`Object Name` で新規作成
+- **生成物一覧**: 選択中オブジェクトの主要成果物をパネル表示
 - **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
 - **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
 - **進捗バー**: 6ステージの状態をリアルタイム表示 (pending → running → complete)
@@ -171,21 +174,23 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 ## 出力ファイル
 
-パイプライン完了後、`data/output/` に以下が生成される:
+パイプライン完了後、`data/output/objects/<object_name>/` に以下が生成される:
 
 ```
 data/output/
-├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
-├── textured_mesh.mtl      # マテリアル定義
-├── texture.png            # テクスチャアトラス (2048x2048)
-├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
-├── object_denoised.ply    # デノイズ済み点群
-├── object.ply             # Pi3Xトリプルフィルタ済み点群
-├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
-├── intrinsics.json        # 推定カメラ内部パラメータ
-├── frames/                # 抽出フレーム画像 (JPEG)
-├── masks/                 # SAM2セグメンテーションマスク (PNG)
-└── diffcd/                # DiffCD作業ディレクトリ
+└── objects/
+    └── <object_name>/
+        ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
+        ├── textured_mesh.mtl      # マテリアル定義
+        ├── texture.png            # テクスチャアトラス (2048x2048)
+        ├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
+        ├── object_denoised.ply    # デノイズ済み点群
+        ├── object.ply             # Pi3Xトリプルフィルタ済み点群
+        ├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
+        ├── intrinsics.json        # 推定カメラ内部パラメータ
+        ├── frames/                # 抽出フレーム画像 (JPEG)
+        ├── masks/                 # SAM2セグメンテーションマスク (PNG)
+        └── diffcd/                # DiffCD作業ディレクトリ
 ```
 
 ## アーキテクチャ
