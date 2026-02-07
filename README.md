@@ -153,6 +153,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (必要時のみリサイズ) |
 | `CONFIDENCE_THRESHOLD` | `0.1` | 信頼度フィルタ閾値 |
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
+| `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列 (`0` で無効) |
 
 ### DiffCD メッシュ再構成 (Stage 5)
 
@@ -180,7 +181,7 @@ data/output/
 ├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
 ├── object_denoised.ply    # デノイズ済み点群
 ├── object.ply             # Pi3Xトリプルフィルタ済み点群
-├── camera_poses.json      # カメラ外部パラメータ (4x4行列) + 使用フレームindex
+├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
 ├── intrinsics.json        # 推定カメラ内部パラメータ
 ├── frames/                # 抽出フレーム画像 (JPEG)
 ├── masks/                 # SAM2セグメンテーションマスク (PNG)
