@@ -21,9 +21,11 @@ export class PreviewPanel {
     this._threeLoaded = false;
     this._activeStage = null;
     this._animating = false;
+    this._sceneFlipX = null;
   }
 
   reset() {
+    this._sceneFlipX = null;
     this.clearFromStage(1);
   }
 
@@ -140,10 +142,9 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
-    // Use OpenCV->OpenGL X-axis flip by default for all 3D stage scenes.
-    // Pi3X (stage 2) may override this after pose metadata is loaded.
+    // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-6 use inferred flip when available.
     const sceneRoot = new THREE.Group();
-    sceneRoot.rotation.x = Math.PI;
+    sceneRoot.rotation.x = this._defaultSceneFlipX(stageNum) ? Math.PI : 0;
     scene.add(sceneRoot);
 
     // Show container
@@ -230,6 +231,11 @@ export class PreviewPanel {
     stage.container?.classList.remove('visible');
   }
 
+  _defaultSceneFlipX(stageNum) {
+    if (this._sceneFlipX != null) return this._sceneFlipX;
+    return stageNum === 2;
+  }
+
   _disposeObject(object3d) {
     if (!object3d) return;
     object3d.traverse((node) => {
@@ -289,20 +295,13 @@ export class PreviewPanel {
       if (res.ok) {
         const data = await res.json();
 
-        // Convert {poses: [[4x4], ...], frame_indices: [...]} → [{matrix: flat16, frame_index}]
-        const rawPoseArray = (data.poses || []).map((mat4x4, i) => {
-          // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
-          const flat = new Array(16);
-          for (let r = 0; r < 4; r++)
-            for (let c = 0; c < 4; c++)
-              flat[c * 4 + r] = mat4x4[r][c];
-          return { matrix: flat, frame_index: (data.frame_indices || [])[i] ?? i };
-        });
+        const rawPoseArray = this._poseJsonToArray(data);
 
         const normalized = this._normalizePoseConvention(rawPoseArray);
         const poseArray = normalized.poseArray;
         const sceneFlipX = this._shouldApplySceneFlipX(poseArray, data.alignment);
-        stage.sceneRoot.rotation.x = sceneFlipX ? Math.PI : 0;
+        this._sceneFlipX = sceneFlipX;
+        this._applySceneFlipToLoadedStages(sceneFlipX);
 
         const alignmentSign = this._forwardSignFromAlignment(data.alignment);
         let forwardSign = normalized.forwardSign;
@@ -368,6 +367,54 @@ export class PreviewPanel {
       if (empty) empty.classList.remove('hidden');
       if (toolbar) toolbar.style.display = 'none';
       stage.container?.classList.remove('visible');
+    }
+  }
+
+  _poseJsonToArray(data) {
+    const poses = Array.isArray(data?.poses) ? data.poses : [];
+    const frameIndices = Array.isArray(data?.frame_indices) ? data.frame_indices : [];
+    return poses.map((mat4x4, i) => {
+      // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
+      const flat = new Array(16);
+      for (let r = 0; r < 4; r++)
+        for (let c = 0; c < 4; c++)
+          flat[c * 4 + r] = mat4x4[r][c];
+      return { matrix: flat, frame_index: frameIndices[i] ?? i };
+    });
+  }
+
+  _applySceneFlipToLoadedStages(sceneFlipX) {
+    const rotationX = sceneFlipX ? Math.PI : 0;
+    for (const stageNum of [2, 4, 5, 6]) {
+      const stage = this._stages[stageNum];
+      if (stage?.sceneRoot) stage.sceneRoot.rotation.x = rotationX;
+    }
+  }
+
+  async _ensureSceneFlipForStage(stageNum) {
+    if (stageNum < 4 || stageNum > 6) return;
+    if (this._sceneFlipX == null) {
+      this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses();
+    }
+    const stage = this._stages[stageNum];
+    if (stage?.sceneRoot) {
+      stage.sceneRoot.rotation.x = this._sceneFlipX ? Math.PI : 0;
+    }
+  }
+
+  async _resolveSceneFlipFromCameraPoses() {
+    try {
+      const res = await fetch('/api/preview/file/camera_poses.json');
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const rawPoseArray = this._poseJsonToArray(data);
+      const normalized = this._normalizePoseConvention(rawPoseArray);
+      return this._shouldApplySceneFlipX(normalized.poseArray, data.alignment);
+    } catch (e) {
+      console.warn('Failed to infer scene flip from camera poses:', e);
+      return false;
     }
   }
 
@@ -544,6 +591,7 @@ export class PreviewPanel {
     if (!file) return;
 
     await this.initSceneForStage(stageNum);
+    await this._ensureSceneFlipForStage(stageNum);
     this.activateStage(stageNum);
 
     // Hide empty placeholder
