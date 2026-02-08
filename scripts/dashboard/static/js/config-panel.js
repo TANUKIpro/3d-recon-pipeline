@@ -98,7 +98,8 @@ export class ConfigPanel {
     this._objectArtifacts = document.getElementById('object-artifacts');
     this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
     this._resumeStageInfo = document.getElementById('cfg-resume-stage-info');
-    this._frameBudgetNote = document.getElementById('cfg-frame-budget-note');
+    this._pi3xFrameTargetValue = document.getElementById('cfg-pi3x-frame-target-value');
+    this._pi3xFrameTargetNote = document.getElementById('cfg-pi3x-frame-target-note');
     this._pi3xPlanNote = document.getElementById('cfg-pi3x-plan-note');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
@@ -108,6 +109,7 @@ export class ConfigPanel {
       frame_interval: document.getElementById('cfg-frame-interval'),
       max_frames: document.getElementById('cfg-max-frames'),
       pixel_limit: document.getElementById('cfg-pixel-limit'),
+      pi3x_frame_target: document.getElementById('cfg-pi3x-frame-target'),
       confidence_threshold: document.getElementById('cfg-conf-threshold'),
       edge_rtol: document.getElementById('cfg-edge-rtol'),
       sam2_model: document.getElementById('cfg-sam2-model'),
@@ -146,6 +148,8 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this._updatingDenoisePreset = false;
+    this._pi3xFrameTargetAuto = true;
+    this._pi3xFrameTargetRecommended = null;
     this._pi3xPlanRequestId = 0;
     this._pi3xPlanDebounce = null;
 
@@ -220,6 +224,8 @@ export class ConfigPanel {
     const objectName = this._normalizeObjectName(this._objectNameInput.value || suggestedObject || 'object');
     this._objectNameInput.value = objectName;
     const resumeFromStage = this._resolveResumeStage();
+    const maxFrames = this._resolveMaxFrames();
+    const pi3xFrameTarget = this._resolvePi3xFrameTarget(maxFrames);
 
     return {
       video_path: this._videoSelect.value,
@@ -229,11 +235,9 @@ export class ConfigPanel {
         this._inputs.frame_interval.value,
         this._extractDefaults.frame_interval,
       ),
-      max_frames: this._parsePositiveInt(
-        this._inputs.max_frames.value,
-        this._extractDefaults.max_frames,
-      ),
+      max_frames: maxFrames,
       pixel_limit: parseInt(this._inputs.pixel_limit.value) || 255000,
+      pi3x_frame_target: pi3xFrameTarget,
       confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.2,
       edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
       sam2_model: this._inputs.sam2_model.value,
@@ -331,6 +335,7 @@ export class ConfigPanel {
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
     this._inputs.pixel_limit.addEventListener('input', () => this._updateFrameBudgetPreview());
+    this._inputs.pi3x_frame_target.addEventListener('input', () => this._onPi3xFrameTargetInput());
     this._inputs.denoise_preset.addEventListener('change', () => {
       const preset = this._inputs.denoise_preset.value;
       if (preset === DENOISE_CUSTOM_PRESET) {
@@ -584,13 +589,16 @@ export class ConfigPanel {
         data.suggested_max_frames,
         this._estimateMaxFrames(data.total_frames, suggestedInterval),
       );
+      const clampedSuggestedMaxFrames = Math.max(2, suggestedMaxFrames);
       this._extractDefaults = {
         frame_interval: suggestedInterval,
-        max_frames: suggestedMaxFrames,
+        max_frames: clampedSuggestedMaxFrames,
       };
       this._inputs.frame_interval.value = String(suggestedInterval);
-      this._inputs.max_frames.value = String(suggestedMaxFrames);
+      this._inputs.max_frames.value = String(clampedSuggestedMaxFrames);
       this._maxFramesAuto = true;
+      this._pi3xFrameTargetAuto = true;
+      this._pi3xFrameTargetRecommended = null;
 
       const mins = Math.floor(data.duration / 60);
       const secs = (data.duration % 60).toFixed(1);
@@ -612,6 +620,7 @@ export class ConfigPanel {
       'frame_interval',
       'max_frames',
       'pixel_limit',
+      'pi3x_frame_target',
       'confidence_threshold',
       'edge_rtol',
       'diffcd_batch_size',
@@ -651,6 +660,8 @@ export class ConfigPanel {
     }
 
     this._maxFramesAuto = false;
+    this._pi3xFrameTargetAuto = cfg.pi3x_frame_target == null;
+    this._pi3xFrameTargetRecommended = null;
     this._updateDenoiseControls();
     this._onDenoiseInputChanged();
     this._updateFrameBudgetPreview();
@@ -829,52 +840,88 @@ export class ConfigPanel {
     this._updateFrameBudgetPreview();
   }
 
+  _onPi3xFrameTargetInput() {
+    this._pi3xFrameTargetAuto = false;
+    this._syncPi3xFrameTargetInput();
+  }
+
   _estimateMaxFrames(totalFrames, frameInterval) {
     const total = this._parsePositiveInt(totalFrames, 0);
     const interval = this._parsePositiveInt(frameInterval, 1);
     if (total <= 0) return this._extractDefaults.max_frames;
-    return Math.max(1, Math.ceil(total / interval));
+    return Math.max(2, Math.ceil(total / interval));
   }
 
-  _resolveRequestedPi3xFrames() {
-    const maxFrames = this._parsePositiveInt(
-      this._inputs.max_frames.value,
-      this._extractDefaults.max_frames,
+  _resolveMaxFrames() {
+    return Math.max(
+      2,
+      this._parsePositiveInt(
+        this._inputs.max_frames.value,
+        this._extractDefaults.max_frames,
+      ),
     );
-    const resumeStage = this._resolveResumeStage();
-    const objectFrameCount = this._parsePositiveInt(this._selectedObjectSummary?.frame_count, 0);
-    if (resumeStage > 1 && objectFrameCount > 0) {
-      return {
-        requestedFrames: Math.max(2, Math.min(maxFrames, objectFrameCount)),
-        source: `resume from existing frames (${objectFrameCount})`,
-      };
+  }
+
+  _clampPi3xFrameTarget(targetFrames, maxFrames) {
+    const maxAllowed = Math.max(2, this._parsePositiveInt(maxFrames, this._extractDefaults.max_frames));
+    const parsed = this._parsePositiveInt(targetFrames, maxAllowed);
+    return Math.max(2, Math.min(parsed, maxAllowed));
+  }
+
+  _resolvePi3xFrameTarget(maxFrames = this._resolveMaxFrames()) {
+    const fallback = this._clampPi3xFrameTarget(
+      this._pi3xFrameTargetRecommended ?? maxFrames,
+      maxFrames,
+    );
+    const parsed = this._parsePositiveInt(this._inputs.pi3x_frame_target.value, fallback);
+    return this._clampPi3xFrameTarget(parsed, maxFrames);
+  }
+
+  _syncPi3xFrameTargetInput(opts = {}) {
+    const maxFrames = this._resolveMaxFrames();
+    const recommendedRaw = opts.recommendedFrames;
+    if (recommendedRaw != null) {
+      this._pi3xFrameTargetRecommended = this._clampPi3xFrameTarget(recommendedRaw, maxFrames);
+    } else if (this._pi3xFrameTargetRecommended == null) {
+      this._pi3xFrameTargetRecommended = maxFrames;
+    } else {
+      this._pi3xFrameTargetRecommended = this._clampPi3xFrameTarget(this._pi3xFrameTargetRecommended, maxFrames);
     }
 
-    if (this._videoMeta) {
-      const interval = this._parsePositiveInt(
-        this._inputs.frame_interval.value,
-        this._extractDefaults.frame_interval,
-      );
-      const extractedEstimate = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
-      return {
-        requestedFrames: Math.max(2, Math.min(maxFrames, extractedEstimate)),
-        source: `estimated from video (${extractedEstimate})`,
-      };
+    this._inputs.pi3x_frame_target.min = '2';
+    this._inputs.pi3x_frame_target.max = String(maxFrames);
+
+    const fallback = this._pi3xFrameTargetRecommended;
+    let selectedFrames = this._resolvePi3xFrameTarget(maxFrames);
+    if (this._pi3xFrameTargetAuto || !(this._inputs.pi3x_frame_target.value || '').trim()) {
+      selectedFrames = fallback;
+      this._inputs.pi3x_frame_target.value = String(selectedFrames);
+    } else {
+      this._inputs.pi3x_frame_target.value = String(selectedFrames);
+    }
+
+    if (this._pi3xFrameTargetValue) {
+      this._pi3xFrameTargetValue.textContent = String(selectedFrames);
+    }
+    if (this._pi3xFrameTargetNote) {
+      this._pi3xFrameTargetNote.textContent =
+        `AutoTarget recommendation: ${fallback} frames (max ${maxFrames})`;
     }
 
     return {
-      requestedFrames: Math.max(2, maxFrames),
-      source: 'using Max Frames',
+      requestedFrames: maxFrames,
+      selectedFrames,
+      recommendedFrames: fallback,
     };
   }
 
-  _updateFrameBudgetPreview() {
-    const frameInfo = this._resolveRequestedPi3xFrames();
-    if (this._frameBudgetNote) {
-      this._frameBudgetNote.textContent =
-        `Pi3X requested frames before VRAM tuning: ${frameInfo.requestedFrames} (${frameInfo.source}).`;
-    }
+  _resolveRequestedPi3xFrames() {
+    return this._resolveMaxFrames();
+  }
 
+  _updateFrameBudgetPreview() {
+    const requestedFrames = this._resolveRequestedPi3xFrames();
+    this._syncPi3xFrameTargetInput();
     if (!this._pi3xPlanNote) return;
     const pixelLimit = this._parsePositiveInt(this._inputs.pixel_limit.value, 255000);
     this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: estimating...';
@@ -882,7 +929,7 @@ export class ConfigPanel {
       clearTimeout(this._pi3xPlanDebounce);
     }
     this._pi3xPlanDebounce = setTimeout(() => {
-      this._updatePi3xPlanPreview(frameInfo.requestedFrames, pixelLimit);
+      this._updatePi3xPlanPreview(requestedFrames, pixelLimit);
     }, 120);
   }
 
@@ -894,14 +941,19 @@ export class ConfigPanel {
       );
       if (reqId !== this._pi3xPlanRequestId) return;
       if (!res.ok) {
+        this._syncPi3xFrameTargetInput({ recommendedFrames: requestedFrames });
         this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
         return;
       }
       const data = await res.json();
       const autoFrames = this._parsePositiveInt(data.auto_target_frames, requestedFrames);
+      const synced = this._syncPi3xFrameTargetInput({ recommendedFrames: autoFrames });
       const targetPct = Number(data.target_vram_utilization) * 100;
       const usedPct = Number(data.predicted_used_pct);
-      const parts = [`Auto target: ${autoFrames}/${requestedFrames} frames`];
+      const parts = [`Auto target: ${synced.recommendedFrames}/${synced.requestedFrames} frames`];
+      if (synced.selectedFrames !== synced.recommendedFrames) {
+        parts.push(`selected ${synced.selectedFrames}`);
+      }
       if (Number.isFinite(targetPct) && targetPct > 0) {
         parts.push(`target VRAM ${targetPct.toFixed(0)}%`);
       }
@@ -914,6 +966,7 @@ export class ConfigPanel {
       this._pi3xPlanNote.textContent = parts.join(' | ');
     } catch {
       if (reqId !== this._pi3xPlanRequestId) return;
+      this._syncPi3xFrameTargetInput({ recommendedFrames: requestedFrames });
       this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
     }
   }

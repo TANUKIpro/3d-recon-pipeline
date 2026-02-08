@@ -110,7 +110,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session.frames_dir,
                 output_dir,
                 cfg.pixel_limit,
-                cfg.max_frames,
+                cfg.pi3x_frame_target,
                 cfg.confidence_threshold,
                 cfg.edge_rtol,
             )
@@ -586,7 +586,7 @@ def _stage_extract_frames(
 
 def _stage_pi3x_inference(
     frames_dir: str, output_dir: str,
-    pixel_limit: int, max_frames: int,
+    pixel_limit: int, pi3x_frame_target: int,
     conf_threshold: float, edge_rtol: float,
     progress_cb=None,
 ) -> None:
@@ -595,7 +595,7 @@ def _stage_pi3x_inference(
     run_pi3x_inference(
         frames_dir, output_dir,
         pixel_limit=pixel_limit,
-        max_frames=max_frames,
+        max_frames=pi3x_frame_target,
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
         progress_cb=progress_cb,
