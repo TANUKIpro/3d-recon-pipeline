@@ -687,6 +687,7 @@ input[type="range"] {
 
 .log-stderr { color: var(--danger); }
 .log-vram { color: var(--warning); font-weight: 600; }
+.log-progress { color: var(--text-dim); font-style: italic; }
 
 /* ── Buttons ──────────────────────────────────────────────── */
 button {

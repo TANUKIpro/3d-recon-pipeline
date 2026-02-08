@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import io
 import sys
 import threading
-from typing import Any, TextIO
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator, TextIO
+
+
+_CURRENT_LOG_STAGE: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "dashboard_log_stage",
+    default=None,
+)
+
+
+@contextmanager
+def stage_log_scope(stage: int | None) -> Iterator[None]:
+    """Bind emitted stdout/stderr logs to a pipeline stage in current context."""
+    token = _CURRENT_LOG_STAGE.set(int(stage) if stage is not None else None)
+    try:
+        yield
+    finally:
+        _CURRENT_LOG_STAGE.reset(token)
 
 
 class StreamCapture(io.TextIOBase):
@@ -44,7 +62,11 @@ class LogBroadcaster:
         broadcaster.uninstall() # restores originals
     """
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        stage_resolver: Callable[[], int | None] | None = None,
+    ) -> None:
         self._loop = loop
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=4096)
         self._original_stdout = sys.stdout
@@ -53,6 +75,7 @@ class LogBroadcaster:
         self._stderr_capture: StreamCapture | None = None
         self._lock = threading.Lock()
         self._installed = False
+        self._stage_resolver = stage_resolver
 
     def install(self) -> None:
         if self._installed:
@@ -76,6 +99,14 @@ class LogBroadcaster:
 
     def _on_write(self, stream: str, text: str) -> None:
         msg = {"type": "log", "stream": stream, "text": text}
+        stage = _CURRENT_LOG_STAGE.get()
+        if stage is None and self._stage_resolver is not None:
+            try:
+                stage = self._stage_resolver()
+            except Exception:
+                stage = None
+        if stage is not None:
+            msg["stage"] = stage
         try:
             asyncio.run_coroutine_threadsafe(self._queue.put(msg), self._loop)
         except RuntimeError:
