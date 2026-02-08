@@ -17,13 +17,10 @@ import torch
 
 from vram_utils import (
     cleanup_pytorch_vram,
-    get_free_vram_mb,
+    estimate_pi3x_frame_plan,
     log_vram,
     offload_module,
 )
-
-# Estimated Pi3X model weight size on GPU (encoder + decoder + heads)
-_ESTIMATED_MODEL_MB = 5500
 
 # OOM strategy: keep image detail first, then reduce resolution as a last resort.
 _OOM_FRAME_REDUCTION_FACTOR = 0.80
@@ -32,16 +29,6 @@ _MIN_INFER_FRAMES = 12
 _MIN_PIXEL_LIMIT = 50_000
 _MAX_OOM_RETRIES = 7
 _USE_CHUNK_FALLBACK = True
-
-# (effective_free_vram_mb_lower, frame_pixel_budget)
-# budget = N_frames * pixel_limit
-_VRAM_PROFILES = [
-    (14000, 12_750_000),  # 50f*255K, or 85f*150K
-    (12000, 10_000_000),  # 50f*200K, or 67f*150K
-    (10000,  7_500_000),  # 50f*150K, or 75f*100K
-    ( 8000,  4_800_000),  # 40f*120K, or 60f*80K
-    (    0,  2_400_000),  # 30f*80K,  or 48f*50K
-]
 
 # Clamp per-chunk similarity scale to avoid catastrophic drift.
 _CHUNK_SCALE_MIN = 0.85
@@ -131,48 +118,6 @@ def _vector_to_list(vec: np.ndarray) -> list[float]:
 def _safe_normalize_rows(vectors: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     return vectors / np.maximum(norms, 1e-12)
-
-
-def _auto_scale_frame_target(
-    requested_frames: int,
-    pixel_limit: int,
-) -> int:
-    """Scale down frame count from VRAM budget while preserving pixel detail.
-
-    Subtracts estimated model weight size from free VRAM before profile
-    selection, since this function is called before model loading.
-    Only reduces the frame count (never increases beyond caller's request).
-    """
-    free = get_free_vram_mb()
-    if free is None:
-        return requested_frames
-
-    effective_free = free - _ESTIMATED_MODEL_MB
-    print(
-        f"VRAM auto-scale: {free}MB free, "
-        f"{effective_free}MB effective (minus ~{_ESTIMATED_MODEL_MB}MB model), "
-        f"requested {requested_frames} frames @ pixel_limit={pixel_limit}"
-    )
-
-    for threshold, budget in _VRAM_PROFILES:
-        if effective_free >= threshold:
-            safe_frames = max(2, budget // max(pixel_limit, 1))
-            new_frames = min(requested_frames, safe_frames)
-            if new_frames != requested_frames:
-                print(
-                    f"VRAM auto-scale: effective {effective_free}MB, "
-                    f"budget {budget} / pixel_limit {pixel_limit} → "
-                    f"frames {requested_frames}→{new_frames}"
-                )
-            else:
-                print(
-                    f"VRAM auto-scale: effective {effective_free}MB, "
-                    f"budget {budget} / pixel_limit {pixel_limit} → "
-                    f"no adjustment needed"
-                )
-            return new_frames
-
-    return requested_frames
 
 
 def _pick_frame_subset(
@@ -823,9 +768,30 @@ def run_pi3x_inference(
     if num_frames < 2:
         raise RuntimeError("Need at least 2 frames for reconstruction.")
 
-    target_frames = min(max_frames, num_frames)
-    target_frames = _auto_scale_frame_target(target_frames, pixel_limit)
-    _emit_progress(progress_cb, 8.0, f"Selected up to {target_frames} frames")
+    target_frames_requested = max(2, min(max_frames, num_frames))
+    frame_plan = estimate_pi3x_frame_plan(target_frames_requested, pixel_limit)
+    target_frames = min(
+        target_frames_requested,
+        int(frame_plan.get("auto_target_frames") or target_frames_requested),
+    )
+    vram_target_pct = int(round(float(frame_plan.get("target_vram_utilization") or 0.95) * 100))
+    if frame_plan.get("reason") == "ok":
+        print(
+            f"VRAM auto-plan ({vram_target_pct}% target): "
+            f"{target_frames_requested}→{target_frames} frames "
+            f"(pixel_limit={pixel_limit}, "
+            f"est={frame_plan.get('predicted_used_pct', 0.0):.1f}% VRAM)"
+        )
+    else:
+        print(
+            "VRAM auto-plan unavailable; using requested frame target "
+            f"({target_frames_requested} frames): {frame_plan.get('reason')}"
+        )
+    _emit_progress(
+        progress_cb,
+        8.0,
+        f"Selected up to {target_frames} frames (VRAM target {vram_target_pct}%)",
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
