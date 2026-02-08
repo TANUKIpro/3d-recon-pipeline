@@ -373,14 +373,24 @@ def _build_pipeline_config(
         DENOISE_ALGORITHMS,
         str(denoise_defaults["denoise_algorithm"]),
     )
+    max_frames = max(2, _parse_int(source.get("max_frames"), _env_int("MAX_FRAMES", 50)))
+    max_pi3x_target = max_frames
+    pi3x_frame_target = max(
+        2,
+        min(
+            _parse_int(source.get("pi3x_frame_target"), max_frames),
+            max_pi3x_target,
+        ),
+    )
 
     return PipelineConfig(
         video_path=video_path,
         output_dir=str(output_dir),
         object_name=object_name,
         frame_interval=_parse_int(source.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
-        max_frames=_parse_int(source.get("max_frames"), _env_int("MAX_FRAMES", 50)),
+        max_frames=max_frames,
         pixel_limit=_parse_int(source.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
+        pi3x_frame_target=pi3x_frame_target,
         confidence_threshold=_parse_float(source.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.2)),
         edge_rtol=_parse_float(source.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
         sam2_model=str(source.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),

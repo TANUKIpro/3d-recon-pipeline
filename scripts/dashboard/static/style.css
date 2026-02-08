@@ -568,6 +568,28 @@ input[type="number"], input[type="text"], select {
 }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.range-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+}
+
+.range-label-row label {
+  margin-bottom: 0;
+}
+
+.range-value {
+  font-size: 11px;
+  color: var(--text-primary);
+  font-family: var(--font);
+}
+
 .object-artifacts-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);

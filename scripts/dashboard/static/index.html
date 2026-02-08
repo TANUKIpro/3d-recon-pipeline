@@ -209,20 +209,10 @@
             <label for="cfg-frame-interval">Frame Interval</label>
             <input type="number" id="cfg-frame-interval" value="10" min="1" max="1000">
           </div>
-        </div>
-
-        <!-- Stage 1+2: shared advanced controls -->
-        <div class="config-section" data-stages="1 2">
-          <details class="config-advanced">
-            <summary>Frame Budget (Shared: Stage 1 + Pi3X)</summary>
-            <div class="config-advanced-body">
-              <div class="form-group">
-                <label for="cfg-max-frames">Max Frames</label>
-                <input type="number" id="cfg-max-frames" value="50" min="1" max="100000">
-                <div id="cfg-frame-budget-note" class="config-note">Shared by Extract Frames and Pi3X.</div>
-              </div>
-            </div>
-          </details>
+          <div class="form-group">
+            <label for="cfg-max-frames">Max Frames</label>
+            <input type="number" id="cfg-max-frames" value="50" min="2" max="100000">
+          </div>
         </div>
 
         <!-- Stage 2: Pi3X easy controls -->
@@ -230,6 +220,14 @@
           <div class="form-group">
             <label for="cfg-pixel-limit">Pixel Limit</label>
             <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
+          </div>
+          <div class="form-group">
+            <div class="range-label-row">
+              <label for="cfg-pi3x-frame-target">Frame Target</label>
+              <span id="cfg-pi3x-frame-target-value" class="range-value">50</span>
+            </div>
+            <input type="range" id="cfg-pi3x-frame-target" value="50" min="2" max="50" step="1">
+            <div id="cfg-pi3x-frame-target-note" class="config-note"></div>
             <div id="cfg-pi3x-plan-note" class="config-note"></div>
           </div>
           <details class="config-advanced">

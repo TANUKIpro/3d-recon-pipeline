@@ -78,6 +78,7 @@ class PipelineConfig:
     frame_interval: int = 10
     max_frames: int = 50
     pixel_limit: int = 255_000
+    pi3x_frame_target: int = 50
     confidence_threshold: float = 0.2
     edge_rtol: float = 0.03
     sam2_model: str = "large"
