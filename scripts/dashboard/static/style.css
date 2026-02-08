@@ -388,6 +388,52 @@ html, body {
   font-family: var(--font);
 }
 
+/* ── Stage 5 Mesh Post-Process Toolbar ───────────────────── */
+#mesh-post-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mesh-post-toolbar label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+#mesh-post-toolbar select,
+#mesh-post-toolbar input[type="number"] {
+  width: auto;
+  margin: 0;
+}
+
+#mesh-post-method {
+  min-width: 110px;
+}
+
+#mesh-post-iterations {
+  width: 72px;
+}
+
+#mesh-post-lambda {
+  width: 82px;
+}
+
+#mesh-post-status {
+  margin-left: auto;
+}
+
+#mesh-post-status.error {
+  color: var(--danger);
+}
+
+#mesh-post-status.success {
+  color: var(--success);
+}
+
 /* ── Frame Count Header ──────────────────────────────────── */
 .frame-count-header {
   padding: 8px 12px;
