@@ -171,15 +171,14 @@ ws.on('status', async (msg) => {
 });
 
 ws.on('stage_start', (msg) => {
-  // Stage 2 is marked "interactive" while waiting for confirmation.
-  // Once Stage 3 starts, Stage 2 confirmation is complete and the pill should return to "complete".
-  if (msg.stage >= 3 && pipelineUI.getStageStatus(2) === 'interactive') {
-    pipelineUI.stageComplete(2);
-    stageCtrl.setStageState(2, 'complete');
-  }
-
   const prevStage = Number(msg.stage) - 1;
   if (prevStage >= 1 && prevStage <= TRANSITION_STAGE_MAX) {
+    const prevStatus = pipelineUI.getStageStatus(prevStage);
+    if (prevStatus === 'interactive' || prevStatus === 'running') {
+      pipelineUI.stageComplete(prevStage);
+    }
+    stageCtrl.setStageState(prevStage, 'complete');
+
     if (_waitingConfirmationStage === prevStage) {
       _waitingConfirmationStage = null;
     }
@@ -263,8 +262,8 @@ ws.on('next_stage_confirmation_required', (msg) => {
     if (_waitingConfirmationStage !== null && _waitingConfirmationStage !== fromStage) {
       setTaskConfirmState(
         _waitingConfirmationStage,
-        'idle',
-        defaultTaskConfirmIdleMessage(_waitingConfirmationStage),
+        'confirmed',
+        defaultTaskConfirmConfirmedMessage(_waitingConfirmationStage),
       );
     }
     _waitingConfirmationStage = fromStage;
@@ -420,6 +419,27 @@ function defaultTaskConfirmConfirmedMessage(stage) {
   return `Stage ${stage} confirmed. Proceeded to Stage ${stage + 1}.`;
 }
 
+function defaultTaskConfirmStandbyMessage(stage) {
+  return `Stage ${stage} is complete. Start the pipeline to continue to Stage ${stage + 1}.`;
+}
+
+function resolveTaskConfirmIdleMessage(statusMsg, stage) {
+  const info = getStageInfo(statusMsg, stage);
+  if (!info) return defaultTaskConfirmIdleMessage(stage);
+
+  const status = String(info.status || 'pending');
+  if (status === 'running') {
+    return `Stage ${stage} is running. Confirmation will appear after completion.`;
+  }
+  if (status === 'failed') {
+    return `Stage ${stage} failed. Resolve the error and rerun this stage.`;
+  }
+  if (status === 'interactive') {
+    return `Stage ${stage} is waiting for required interaction.`;
+  }
+  return defaultTaskConfirmIdleMessage(stage);
+}
+
 function setTaskConfirmState(stage, state, message) {
   const bar = _taskConfirmBars[stage];
   const msg = _taskConfirmMessages[stage];
@@ -474,6 +494,7 @@ function resetTaskConfirmBars(resumeFromStage = 1) {
 
 function isTransitionConfirmed(statusMsg, stage) {
   if (!statusMsg || stage < 1 || stage > TRANSITION_STAGE_MAX) return false;
+  if (!isStageDone(statusMsg, stage)) return false;
 
   const current = Number(statusMsg.current_stage);
   if (Number.isFinite(current) && current > stage) {
@@ -491,15 +512,19 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
 
   const next = statusMsg.next_stage_confirmation || {};
   const waitingStage = next.required === true ? Number(next.from_stage) : NaN;
-  _waitingConfirmationStage = Number.isFinite(waitingStage)
+  const waitingStageIsValid = Number.isFinite(waitingStage)
     && waitingStage >= 1
     && waitingStage <= TRANSITION_STAGE_MAX
-    ? waitingStage
-    : null;
+    && statusMsg.running === true
+    && isStageDone(statusMsg, waitingStage)
+    && !isTransitionConfirmed(statusMsg, waitingStage);
+  _waitingConfirmationStage = waitingStageIsValid ? waitingStage : null;
 
   const resumeStage = Math.max(1, Math.min(STAGE_COUNT, Number(statusMsg.resume_from_stage) || 1));
 
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
+    const stageDone = isStageDone(statusMsg, stage);
+
     if (_waitingConfirmationStage === stage) {
       setTaskConfirmState(stage, 'waiting', String(next.message || defaultTaskConfirmWaitingMessage(stage)));
       continue;
@@ -510,12 +535,17 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
       continue;
     }
 
-    if (statusMsg.running && stage < resumeStage) {
+    if (stage < resumeStage && stageDone) {
       setTaskConfirmState(stage, 'confirmed', `Stage ${stage} already completed before resume.`);
       continue;
     }
 
-    setTaskConfirmState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
+    if (!statusMsg.running && stageDone) {
+      setTaskConfirmState(stage, 'idle', defaultTaskConfirmStandbyMessage(stage));
+      continue;
+    }
+
+    setTaskConfirmState(stage, 'idle', resolveTaskConfirmIdleMessage(statusMsg, stage));
   }
 
   if (isStageDone(statusMsg, 6)) {
