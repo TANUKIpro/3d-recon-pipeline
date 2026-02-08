@@ -13,6 +13,9 @@ import { StageController } from './stage-controller.js';
 import { SAM2Verification } from './sam2-verification.js';
 import { CameraOverlay } from './camera-overlay.js';
 
+const STAGE_COUNT = 6;
+const TRANSITION_STAGE_MAX = 5;
+
 // ── Init modules ─────────────────────────────────────────────
 
 const ws = new WsManager();
@@ -28,37 +31,26 @@ const cameraOverlay = new CameraOverlay();
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 const overallProgressBadge = document.getElementById('overall-progress-badge');
-const nextStageBar = document.getElementById('next-stage-bar');
-const nextStageMessage = document.getElementById('next-stage-message');
-const nextStageConfirmBtn = document.getElementById('next-stage-confirm');
+
+const _taskConfirmBars = {};
+const _taskConfirmMessages = {};
+const _taskConfirmButtons = {};
 
 let _extractedFrameCount = 0;
 let _hydratedStatusKey = '';
 let _objectLoadRequestId = 0;
+let _waitingConfirmationStage = null;
 
-if (nextStageConfirmBtn) {
-  nextStageConfirmBtn.addEventListener('click', async () => {
-    if (!isNextStageConfirmationPending()) return;
-    nextStageConfirmBtn.disabled = true;
-    nextStageConfirmBtn.textContent = 'Proceeding...';
-    try {
-      const res = await fetch('/api/pipeline/confirm-next', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      if (data.status === 'no_waiting_confirmation') {
-        clearNextStageConfirmation();
-        return;
-      }
-      nextStageConfirmBtn.textContent = 'Waiting...';
-    } catch (e) {
-      nextStageConfirmBtn.disabled = false;
-      nextStageConfirmBtn.textContent = 'Continue';
-      log.append('stderr', `Next-stage confirmation failed: ${e.message}\n`);
-    }
-  });
+for (let stage = 1; stage <= STAGE_COUNT; stage++) {
+  _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
+  _taskConfirmMessages[stage] = _taskConfirmBars[stage]?.querySelector('.task-confirm-message') || null;
+  _taskConfirmButtons[stage] = _taskConfirmBars[stage]?.querySelector('.task-confirm-btn') || null;
+
+  if (stage <= TRANSITION_STAGE_MAX && _taskConfirmButtons[stage]) {
+    _taskConfirmButtons[stage].addEventListener('click', () => confirmNextStage(stage));
+  }
 }
+resetTaskConfirmBars();
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -89,7 +81,7 @@ config.onObjectSelected = async (objectName) => {
     sam2Verify.hide();
     preview.reset();
     pipelineUI.reset();
-    clearNextStageConfirmation();
+    resetTaskConfirmBars();
     setOverallProgress(0);
     setStatus('idle', 'Idle');
     stageCtrl.activateStage(1);
@@ -145,7 +137,7 @@ config.onStart = async (cfg) => {
     cameraOverlay.remove();
     sam2.deactivate();
     sam2Verify.hide();
-    clearNextStageConfirmation();
+    resetTaskConfirmBars(resumeFromStage);
     pipelineUI.resetFromStage(resumeFromStage);
     _extractedFrameCount = 0;
     _hydratedStatusKey = '';
@@ -186,7 +178,14 @@ ws.on('stage_start', (msg) => {
     stageCtrl.setStageState(2, 'complete');
   }
 
-  clearNextStageConfirmation();
+  const prevStage = Number(msg.stage) - 1;
+  if (prevStage >= 1 && prevStage <= TRANSITION_STAGE_MAX) {
+    if (_waitingConfirmationStage === prevStage) {
+      _waitingConfirmationStage = null;
+    }
+    setTaskConfirmState(prevStage, 'confirmed', defaultTaskConfirmConfirmedMessage(prevStage));
+  }
+
   stageCtrl.activateStage(msg.stage);
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
@@ -255,31 +254,49 @@ ws.on('pi3x_preview_ready', () => {
   pipelineUI.stageInteractive(2);
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
-  log.append('stdout', 'Pi3X complete. Review the 3D preview, then use the Continue bar.\n');
+  log.append('stdout', 'Pi3X complete. Review the 3D preview, then confirm on Stage 2.\n');
 });
 
 ws.on('next_stage_confirmation_required', (msg) => {
   const fromStage = Number(msg.from_stage);
-  if (fromStage >= 1 && fromStage <= 6) {
+  if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
+    if (_waitingConfirmationStage !== null && _waitingConfirmationStage !== fromStage) {
+      setTaskConfirmState(
+        _waitingConfirmationStage,
+        'idle',
+        defaultTaskConfirmIdleMessage(_waitingConfirmationStage),
+      );
+    }
+    _waitingConfirmationStage = fromStage;
     pipelineUI.stageInteractive(fromStage);
     stageCtrl.setStageState(fromStage, 'interactive');
-    stageCtrl.activateStage(resolveReviewStageForConfirmation(fromStage));
+    stageCtrl.activateStage(fromStage);
+    setTaskConfirmState(fromStage, 'waiting', String(msg.message || defaultTaskConfirmWaitingMessage(fromStage)));
   }
-  setNextStageConfirmation({ required: true, ...msg });
   if (msg.message) {
     log.append('stdout', `${msg.message}\n`);
   }
 });
 
-ws.on('next_stage_confirmation_cleared', () => {
-  clearNextStageConfirmation();
+ws.on('next_stage_confirmation_cleared', (msg) => {
+  const fromStage = Number(msg.from_stage);
+  if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
+    if (_waitingConfirmationStage === fromStage) {
+      _waitingConfirmationStage = null;
+    }
+    setTaskConfirmState(fromStage, 'confirmed', defaultTaskConfirmConfirmedMessage(fromStage));
+  }
 });
 
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();
-  clearNextStageConfirmation();
+  _waitingConfirmationStage = null;
+  for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
+    setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
+  }
+  setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
@@ -289,7 +306,14 @@ ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();
-  clearNextStageConfirmation();
+  if (_waitingConfirmationStage !== null) {
+    setTaskConfirmState(
+      _waitingConfirmationStage,
+      'idle',
+      `Stage ${_waitingConfirmationStage} confirmation was interrupted.`,
+    );
+    _waitingConfirmationStage = null;
+  }
   const cancelled = /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
   if (msg.stage >= 1 && msg.stage <= 6) {
@@ -360,14 +384,6 @@ function resolvePreferredStage(statusMsg) {
   return 1;
 }
 
-function resolveReviewStageForConfirmation(stage) {
-  const n = Number(stage);
-  if (!Number.isFinite(n) || n < 1 || n > 6) return 1;
-  // Stage 3 output is visualized in the Stage 2 Pi3X panel.
-  if (n === 3) return 2;
-  return n;
-}
-
 function buildStatusKey(statusMsg) {
   const objectName = statusMsg?.object_name || '';
   const next = statusMsg?.next_stage_confirmation || {};
@@ -389,6 +405,148 @@ function syncStageStates(statusMsg) {
   for (let i = 1; i <= 6; i++) {
     const info = getStageInfo(statusMsg, i);
     stageCtrl.setStageState(i, info?.status || 'pending');
+  }
+}
+
+function defaultTaskConfirmIdleMessage(stage) {
+  return `Stage ${stage} confirmation will appear after completion.`;
+}
+
+function defaultTaskConfirmWaitingMessage(stage) {
+  return `Stage ${stage} complete. Confirm to continue to Stage ${stage + 1}.`;
+}
+
+function defaultTaskConfirmConfirmedMessage(stage) {
+  return `Stage ${stage} confirmed. Proceeded to Stage ${stage + 1}.`;
+}
+
+function setTaskConfirmState(stage, state, message) {
+  const bar = _taskConfirmBars[stage];
+  const msg = _taskConfirmMessages[stage];
+  const btn = _taskConfirmButtons[stage];
+  if (!bar || !msg) return;
+
+  bar.classList.remove('idle', 'waiting', 'sending', 'confirmed');
+
+  if (stage === STAGE_COUNT || state === 'final') {
+    bar.classList.add('task-confirm-final');
+    msg.textContent = String(message || 'Final stage. No next-stage confirmation.');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Done';
+    }
+    return;
+  }
+
+  bar.classList.remove('task-confirm-final');
+  bar.classList.add(state);
+  msg.textContent = String(message || '');
+
+  if (!btn) return;
+
+  if (state === 'waiting') {
+    btn.disabled = false;
+    btn.textContent = 'Continue';
+  } else if (state === 'sending') {
+    btn.disabled = true;
+    btn.textContent = 'Waiting...';
+  } else if (state === 'confirmed') {
+    btn.disabled = true;
+    btn.textContent = 'Confirmed';
+  } else {
+    btn.disabled = true;
+    btn.textContent = 'Continue';
+  }
+}
+
+function resetTaskConfirmBars(resumeFromStage = 1) {
+  const resumeStage = Math.max(1, Math.min(STAGE_COUNT, Number(resumeFromStage) || 1));
+  _waitingConfirmationStage = null;
+  for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
+    if (stage < resumeStage) {
+      setTaskConfirmState(stage, 'confirmed', `Stage ${stage} already completed before resume.`);
+    } else {
+      setTaskConfirmState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
+    }
+  }
+  setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
+}
+
+function isTransitionConfirmed(statusMsg, stage) {
+  if (!statusMsg || stage < 1 || stage > TRANSITION_STAGE_MAX) return false;
+
+  const current = Number(statusMsg.current_stage);
+  if (Number.isFinite(current) && current > stage) {
+    return true;
+  }
+
+  const nextInfo = getStageInfo(statusMsg, stage + 1);
+  if (!nextInfo) return false;
+  if (nextInfo.status !== 'pending') return true;
+  return Number(nextInfo.progress) > 0;
+}
+
+function syncTaskConfirmBarsFromStatus(statusMsg) {
+  if (!statusMsg) return;
+
+  const next = statusMsg.next_stage_confirmation || {};
+  const waitingStage = next.required === true ? Number(next.from_stage) : NaN;
+  _waitingConfirmationStage = Number.isFinite(waitingStage)
+    && waitingStage >= 1
+    && waitingStage <= TRANSITION_STAGE_MAX
+    ? waitingStage
+    : null;
+
+  const resumeStage = Math.max(1, Math.min(STAGE_COUNT, Number(statusMsg.resume_from_stage) || 1));
+
+  for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
+    if (_waitingConfirmationStage === stage) {
+      setTaskConfirmState(stage, 'waiting', String(next.message || defaultTaskConfirmWaitingMessage(stage)));
+      continue;
+    }
+
+    if (isTransitionConfirmed(statusMsg, stage)) {
+      setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
+      continue;
+    }
+
+    if (statusMsg.running && stage < resumeStage) {
+      setTaskConfirmState(stage, 'confirmed', `Stage ${stage} already completed before resume.`);
+      continue;
+    }
+
+    setTaskConfirmState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
+  }
+
+  if (isStageDone(statusMsg, 6)) {
+    setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
+  } else {
+    setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
+  }
+}
+
+async function confirmNextStage(stage) {
+  if (_waitingConfirmationStage !== stage) return;
+
+  setTaskConfirmState(stage, 'sending', `Stage ${stage} confirmed. Waiting for Stage ${stage + 1} start...`);
+
+  try {
+    const res = await fetch('/api/pipeline/confirm-next', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    if (data.status === 'no_waiting_confirmation') {
+      _waitingConfirmationStage = null;
+      setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
+      return;
+    }
+
+    // Keep "sending" state until backend emits stage start or cleared event.
+  } catch (e) {
+    setTaskConfirmState(stage, 'waiting', `${defaultTaskConfirmWaitingMessage(stage)} (${e.message})`);
+    log.append('stderr', `Next-stage confirmation failed at stage ${stage}: ${e.message}\n`);
   }
 }
 
@@ -429,8 +587,8 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 async function applyStatusSnapshot(statusMsg, opts = {}) {
   pipelineUI.updateAll(statusMsg);
   syncStageStates(statusMsg);
+  syncTaskConfirmBarsFromStatus(statusMsg);
   setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
-  setNextStageConfirmation(statusMsg.next_stage_confirmation || {});
 
   if (statusMsg.object_name) {
     config.setObjectName(statusMsg.object_name);
@@ -447,7 +605,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
         activate: false,
       });
       if (Number.isFinite(waitingFromStage) && waitingFromStage >= 1 && waitingFromStage <= 6) {
-        stageCtrl.activateStage(resolveReviewStageForConfirmation(waitingFromStage));
+        stageCtrl.activateStage(waitingFromStage);
       } else {
         stageCtrl.activateStage(resolvePreferredStage(statusMsg));
       }
@@ -459,7 +617,6 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
 
   config.setRunning(false);
   config.setActiveStage(null);
-  clearNextStageConfirmation();
 
   const allDone = [1, 2, 3, 4, 5, 6].every((stage) => isStageDone(statusMsg, stage));
   if (allDone) setStatus('complete', 'Done');
@@ -471,41 +628,6 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
       activate: true,
     });
   }
-}
-
-function isNextStageConfirmationPending() {
-  return nextStageBar?.dataset.required === '1';
-}
-
-function setNextStageConfirmation(next) {
-  if (!nextStageBar || !nextStageMessage || !nextStageConfirmBtn) return;
-
-  const required = next?.required === true;
-  if (!required) {
-    clearNextStageConfirmation();
-    return;
-  }
-
-  const fromStage = Number(next?.from_stage);
-  const toStage = Number(next?.to_stage);
-  const fromLabel = Number.isFinite(fromStage) ? `Stage ${fromStage}` : 'Current stage';
-  const toLabel = Number.isFinite(toStage) ? `Stage ${toStage}` : 'next stage';
-  const message = String(next?.message || '').trim();
-
-  nextStageBar.dataset.required = '1';
-  nextStageBar.classList.add('waiting');
-  nextStageConfirmBtn.disabled = false;
-  nextStageConfirmBtn.textContent = 'Continue';
-  nextStageMessage.textContent = message || `${fromLabel} complete. Continue to ${toLabel}?`;
-}
-
-function clearNextStageConfirmation() {
-  if (!nextStageBar || !nextStageMessage || !nextStageConfirmBtn) return;
-  nextStageBar.dataset.required = '0';
-  nextStageBar.classList.remove('waiting');
-  nextStageMessage.textContent = 'No stage confirmation pending.';
-  nextStageConfirmBtn.disabled = true;
-  nextStageConfirmBtn.textContent = 'Continue';
 }
 
 function setStatus(state, text) {
