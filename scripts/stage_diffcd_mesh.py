@@ -42,7 +42,7 @@ _OOM_MARKERS = (
 )
 
 _DEFAULT_DIFFCD_BATCH_SIZE = 5000
-_DEFAULT_DIFFCD_N_BATCHES = 40000
+_DEFAULT_DIFFCD_N_BATCHES = 30000
 _DEFAULT_DIFFCD_RESOLUTION = 512
 _MIN_DIFFCD_BATCH_SIZE = 500
 _DIFFCD_BATCH_STEP = 100
@@ -387,7 +387,7 @@ def run_diffcd(
         Path to the final mesh PLY file.
     """
     batch_size = int(os.environ.get("DIFFCD_BATCH_SIZE", "5000"))
-    n_batches = int(os.environ.get("DIFFCD_N_BATCHES", "40000"))
+    n_batches = int(os.environ.get("DIFFCD_N_BATCHES", "30000"))
     resolution = int(os.environ.get("DIFFCD_RESOLUTION", "512"))
 
     output_path = Path(output_dir)
