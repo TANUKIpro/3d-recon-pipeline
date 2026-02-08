@@ -106,6 +106,15 @@ ws.on('status', (msg) => {
 });
 
 ws.on('stage_start', (msg) => {
+  // Stage 2 is marked "interactive" while waiting for approval.
+  // Once Stage 3 starts, Pi3X approval is complete and the pill should return to "complete".
+  if (msg.stage >= 3 && pipelineUI.getStageStatus(2) === 'interactive') {
+    pipelineUI.stageComplete(2);
+    stageCtrl.setStageState(2, 'complete');
+    const btn = document.getElementById('pi3x-approve');
+    if (btn) btn.style.display = 'none';
+  }
+
   stageCtrl.activateStage(msg.stage);
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
