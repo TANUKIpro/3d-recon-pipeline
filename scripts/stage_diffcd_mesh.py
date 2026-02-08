@@ -48,6 +48,11 @@ _MIN_DIFFCD_BATCH_SIZE = 500
 _DIFFCD_BATCH_STEP = 100
 _MIN_DIFFCD_N_BATCHES = 1000
 _DEFAULT_AUTO_MIN_N_BATCHES = 10000
+_MESH_SMOOTH_METHODS = {"laplacian", "taubin"}
+_DEFAULT_MESH_SMOOTH_METHOD = "laplacian"
+_DEFAULT_MESH_SMOOTH_ITERATIONS = 2
+_DEFAULT_MESH_SMOOTH_LAMBDA = 0.5
+_DEFAULT_MESH_SMOOTH_TAUBIN_NU = -0.53
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -63,6 +68,16 @@ def _env_float(name: str, default: float) -> float:
         return default
     try:
         return float(value)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
     except ValueError:
         return default
 
@@ -100,6 +115,73 @@ def _emit_progress(
     if progress_cb is None:
         return
     progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _load_mesh(mesh_path: str | Path) -> trimesh.Trimesh:
+    loaded = trimesh.load(str(mesh_path), force="mesh")
+    if isinstance(loaded, trimesh.Scene):
+        geoms = tuple(
+            geom for geom in loaded.geometry.values() if isinstance(geom, trimesh.Trimesh)
+        )
+        if not geoms:
+            raise ValueError(f"No mesh geometry found: {mesh_path}")
+        loaded = trimesh.util.concatenate(geoms)
+
+    if not isinstance(loaded, trimesh.Trimesh):
+        raise ValueError(f"Unsupported mesh type: {type(loaded).__name__}")
+    if len(loaded.vertices) == 0 or len(loaded.faces) == 0:
+        raise ValueError(f"Mesh is empty: {mesh_path}")
+    return loaded
+
+
+def mesh_vertex_face_count(mesh_path: str | Path) -> tuple[int, int]:
+    mesh = _load_mesh(mesh_path)
+    return len(mesh.vertices), len(mesh.faces)
+
+
+def smooth_mesh_file(
+    input_mesh_path: str | Path,
+    output_mesh_path: str | Path,
+    *,
+    method: str = _DEFAULT_MESH_SMOOTH_METHOD,
+    iterations: int = _DEFAULT_MESH_SMOOTH_ITERATIONS,
+    lamb: float = _DEFAULT_MESH_SMOOTH_LAMBDA,
+    taubin_nu: float = _DEFAULT_MESH_SMOOTH_TAUBIN_NU,
+) -> Path:
+    """Apply mesh smoothing and export as PLY."""
+    method_norm = str(method or _DEFAULT_MESH_SMOOTH_METHOD).strip().lower()
+    if method_norm not in _MESH_SMOOTH_METHODS:
+        allowed = ", ".join(sorted(_MESH_SMOOTH_METHODS))
+        raise ValueError(f"Unknown smoothing method '{method_norm}'. Expected one of: {allowed}")
+
+    in_path = Path(input_mesh_path)
+    out_path = Path(output_mesh_path)
+    smoothed = _load_mesh(in_path).copy()
+    iters = max(0, int(iterations))
+
+    if iters > 0:
+        if method_norm == "laplacian":
+            filtered = trimesh.smoothing.filter_laplacian(
+                smoothed,
+                lamb=float(lamb),
+                iterations=iters,
+            )
+        else:
+            taubin_filter = getattr(trimesh.smoothing, "filter_taubin", None)
+            if taubin_filter is None:
+                raise RuntimeError("Taubin smoothing is not available in this trimesh version.")
+            filtered = taubin_filter(
+                smoothed,
+                lamb=float(lamb),
+                nu=float(taubin_nu),
+                iterations=iters,
+            )
+        if isinstance(filtered, trimesh.Trimesh):
+            smoothed = filtered
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    smoothed.export(str(out_path))
+    return out_path
 
 
 def _parse_progress_ratio(line: str) -> float | None:
@@ -522,18 +604,52 @@ def run_diffcd(
     raw_mesh_path = mesh_files[-1]
     print(f"\nDiffCD output: {raw_mesh_path}")
 
-    # Step 4: Post-process (Laplacian smoothing)
-    print("Applying Laplacian smoothing...")
-    _emit_progress(progress_cb, 94.0, "Applying mesh smoothing")
-    mesh = trimesh.load(str(raw_mesh_path))
-    print(f"  Vertices: {len(mesh.vertices):,}, Faces: {len(mesh.faces):,}")
+    # Step 4: Post-process (smoothing)
+    raw_copy_path = output_path / "object_mesh_raw.ply"
+    shutil.copy2(raw_mesh_path, raw_copy_path)
+    raw_vertices, raw_faces = mesh_vertex_face_count(raw_copy_path)
+    print(f"Saved raw mesh: {raw_copy_path}")
+    print(f"  Raw vertices: {raw_vertices:,}, Faces: {raw_faces:,}")
 
-    mesh_smooth = trimesh.smoothing.filter_laplacian(mesh, iterations=2)
+    smooth_method = os.environ.get(
+        "DIFFCD_SMOOTH_METHOD",
+        _DEFAULT_MESH_SMOOTH_METHOD,
+    ).strip().lower()
+    if smooth_method not in _MESH_SMOOTH_METHODS:
+        print(
+            f"Unknown DIFFCD_SMOOTH_METHOD='{smooth_method}', "
+            f"fallback to '{_DEFAULT_MESH_SMOOTH_METHOD}'"
+        )
+        smooth_method = _DEFAULT_MESH_SMOOTH_METHOD
+    smooth_iterations = max(
+        0,
+        _env_int("DIFFCD_SMOOTH_ITERATIONS", _DEFAULT_MESH_SMOOTH_ITERATIONS),
+    )
+    smooth_lambda = _env_float("DIFFCD_SMOOTH_LAMBDA", _DEFAULT_MESH_SMOOTH_LAMBDA)
+    smooth_taubin_nu = _env_float("DIFFCD_SMOOTH_TAUBIN_NU", _DEFAULT_MESH_SMOOTH_TAUBIN_NU)
+
+    detail = (
+        f"Applying {smooth_method} smoothing "
+        f"(iterations={smooth_iterations}, lambda={smooth_lambda:.3f}"
+    )
+    if smooth_method == "taubin":
+        detail += f", nu={smooth_taubin_nu:.3f}"
+    detail += ")..."
+    print(detail)
+    _emit_progress(progress_cb, 94.0, "Applying mesh smoothing")
 
     final_path = output_path / "object_mesh.ply"
-    mesh_smooth.export(str(final_path))
+    smooth_mesh_file(
+        raw_copy_path,
+        final_path,
+        method=smooth_method,
+        iterations=smooth_iterations,
+        lamb=smooth_lambda,
+        taubin_nu=smooth_taubin_nu,
+    )
+    smooth_vertices, smooth_faces = mesh_vertex_face_count(final_path)
     print(f"Saved: {final_path}")
-    print(f"  Vertices: {len(mesh_smooth.vertices):,}, Faces: {len(mesh_smooth.faces):,}")
+    print(f"  Smoothed vertices: {smooth_vertices:,}, Faces: {smooth_faces:,}")
     _emit_progress(progress_cb, 100.0, "DiffCD stage complete")
 
     return final_path

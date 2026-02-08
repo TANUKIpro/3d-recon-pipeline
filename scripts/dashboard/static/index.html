@@ -152,6 +152,20 @@
           <p>Mesh will appear here after Stage 5 completes.</p>
         </div>
         <div id="three-container-5" class="three-container"></div>
+        <div id="mesh-post-toolbar" style="display:none">
+          <label for="mesh-post-method">Smoothing</label>
+          <select id="mesh-post-method">
+            <option value="laplacian" selected>Laplacian</option>
+            <option value="taubin">Taubin</option>
+          </select>
+          <label for="mesh-post-iterations">Iterations</label>
+          <input type="number" id="mesh-post-iterations" value="8" min="0" max="100" step="1">
+          <label for="mesh-post-lambda">&lambda;</label>
+          <input type="number" id="mesh-post-lambda" value="0.50" min="0.01" max="1.50" step="0.01">
+          <button id="mesh-post-apply" class="btn-primary btn-small" type="button">Apply</button>
+          <button id="mesh-post-reset" class="btn-small" type="button">Reset</button>
+          <span id="mesh-post-status" class="toolbar-info"></span>
+        </div>
         <div class="task-confirm-bar idle" data-stage="5" aria-live="polite">
           <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
           <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>

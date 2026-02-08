@@ -50,7 +50,7 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     2: {"dirs": (), "files": ("object_full.ply", "pi3x_cache.npz", "camera_poses.json")},
     3: {"dirs": ("masks",), "files": ("object.ply",)},
     4: {"dirs": (), "files": ("object_denoised.ply",)},
-    5: {"dirs": ("diffcd",), "files": ("object_mesh.ply", "object_points.npy")},
+    5: {"dirs": ("diffcd",), "files": ("object_mesh.ply", "object_mesh_raw.ply", "object_points.npy")},
     6: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
@@ -136,6 +136,7 @@ DENOISE_ALGORITHMS = {
     "radius_only",
     "dbscan_radius",
 }
+MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
 _LEGACY_DIFFCD_DEFAULTS = (3000, 2500, 384)
 
 
@@ -178,6 +179,19 @@ def _parse_float(value: Any, fallback: float) -> float:
 def _parse_choice(value: Any, choices: set[str], fallback: str) -> str:
     candidate = str(value or "").strip()
     return candidate if candidate in choices else fallback
+
+
+def _parse_bool(value: Any, fallback: bool) -> bool:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return value
+    candidate = str(value).strip().lower()
+    if candidate in {"1", "true", "yes", "on", "y"}:
+        return True
+    if candidate in {"0", "false", "no", "off", "n"}:
+        return False
+    return fallback
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -862,6 +876,94 @@ async def pipeline_confirm_next():
         return JSONResponse({"status": "no_waiting_confirmation"})
     session.next_stage_confirm_event.set()
     return JSONResponse({"status": "confirmed"})
+
+
+# ── Mesh post-process API ────────────────────────────────────────
+
+@app.post("/api/mesh/postprocess")
+async def mesh_postprocess(body: dict | None = None):
+    if session.running:
+        waiting_stage5 = (
+            session.next_stage_confirmation_required
+            and session.next_stage_confirmation_from == int(PipelineStage.DIFFCD_MESH)
+        )
+        if not waiting_stage5:
+            return JSONResponse(
+                {
+                    "error": (
+                        "Mesh post-process is available only when the pipeline is idle "
+                        "or paused after Stage 5."
+                    )
+                },
+                status_code=409,
+            )
+
+    raw = body or {}
+    method = _parse_choice(raw.get("method"), MESH_POSTPROCESS_METHODS, "laplacian")
+    iterations = max(0, min(100, _parse_int(raw.get("iterations"), 6)))
+    lamb = max(0.01, min(1.5, _parse_float(raw.get("lamb"), 0.5)))
+    taubin_nu = max(-1.5, min(-0.01, _parse_float(raw.get("taubin_nu"), -0.53)))
+    source = str(raw.get("source") or "raw").strip().lower()
+    if source not in {"raw", "current"}:
+        source = "raw"
+    invalidate_texture = _parse_bool(raw.get("invalidate_texture"), True)
+
+    out = _active_output_dir()
+    mesh_path = out / "object_mesh.ply"
+    if not mesh_path.is_file():
+        return JSONResponse({"error": "object_mesh.ply not found"}, status_code=404)
+
+    source_path = out / "object_mesh_raw.ply" if source == "raw" else mesh_path
+    if not source_path.is_file():
+        source_path = mesh_path
+        source = "current"
+
+    def _apply() -> tuple[int, int]:
+        from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
+
+        smooth_mesh_file(
+            source_path,
+            mesh_path,
+            method=method,
+            iterations=iterations,
+            lamb=lamb,
+            taubin_nu=taubin_nu,
+        )
+        return mesh_vertex_face_count(mesh_path)
+
+    try:
+        vertices, faces = await asyncio.to_thread(_apply)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    texture_invalidated = False
+    if invalidate_texture:
+        texture_outputs = STAGE_RESET_PATHS[int(PipelineStage.TEXTURE_BAKE)]["files"]
+        if any((out / rel).is_file() for rel in texture_outputs):
+            _reset_outputs_from_stage(out, int(PipelineStage.TEXTURE_BAKE))
+            texture_invalidated = True
+
+    session.mesh_ply = str(mesh_path)
+    if not session.running:
+        session.hydrate_from_output_dir(out)
+        await broadcast(session, {"type": "status", **session.to_status_dict()})
+
+    return JSONResponse(
+        {
+            "status": "ok",
+            "method": method,
+            "iterations": iterations,
+            "lamb": lamb,
+            "taubin_nu": taubin_nu,
+            "source": source,
+            "mesh_path": str(mesh_path.relative_to(out)),
+            "vertices": vertices,
+            "faces": faces,
+            "texture_invalidated": texture_invalidated,
+        }
+    )
 
 
 # ── SAM2 API ──────────────────────────────────────────────────────

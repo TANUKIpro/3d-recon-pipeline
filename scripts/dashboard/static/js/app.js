@@ -15,6 +15,7 @@ import { CameraOverlay } from './camera-overlay.js';
 
 const STAGE_COUNT = 6;
 const TRANSITION_STAGE_MAX = 5;
+const DEFAULT_TAUBIN_NU = -0.53;
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -39,6 +40,13 @@ function appendLog(stream, text, opts = {}) {
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 const overallProgressBadge = document.getElementById('overall-progress-badge');
+const meshPostToolbar = document.getElementById('mesh-post-toolbar');
+const meshPostMethodInput = document.getElementById('mesh-post-method');
+const meshPostIterationsInput = document.getElementById('mesh-post-iterations');
+const meshPostLambdaInput = document.getElementById('mesh-post-lambda');
+const meshPostApplyBtn = document.getElementById('mesh-post-apply');
+const meshPostResetBtn = document.getElementById('mesh-post-reset');
+const meshPostStatus = document.getElementById('mesh-post-status');
 
 const _taskConfirmBars = {};
 const _taskConfirmMessages = {};
@@ -48,6 +56,8 @@ let _extractedFrameCount = 0;
 let _hydratedStatusKey = '';
 let _objectLoadRequestId = 0;
 let _waitingConfirmationStage = null;
+let _latestStatusSnapshot = null;
+let _meshPostInFlight = false;
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -59,6 +69,7 @@ for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   }
 }
 resetTaskConfirmBars();
+initMeshPostToolbar();
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -84,12 +95,15 @@ stageCtrl.activateStage(stageCtrl.activeStage);
 config.onObjectSelected = async (objectName) => {
   if (!objectName) {
     _hydratedStatusKey = '';
+    _latestStatusSnapshot = null;
     cameraOverlay.remove();
     sam2.deactivate();
     sam2Verify.hide();
     preview.reset();
     pipelineUI.reset();
     resetTaskConfirmBars();
+    setMeshPostToolbarVisible(false);
+    setMeshPostStatus('');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
     stageCtrl.activateStage(1);
@@ -149,6 +163,9 @@ config.onStart = async (cfg) => {
     pipelineUI.resetFromStage(resumeFromStage);
     _extractedFrameCount = 0;
     _hydratedStatusKey = '';
+    _latestStatusSnapshot = null;
+    setMeshPostToolbarVisible(false);
+    setMeshPostStatus('');
     setOverallProgress(pipelineUI.getOverallProgress());
 
     if (data.object_name) {
@@ -198,6 +215,10 @@ ws.on('stage_start', (msg) => {
   pipelineUI.stageStart(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   appendLog('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`, { stage: msg.stage });
+  setMeshPostToolbarVisible(false);
+  if (!_meshPostInFlight) {
+    setMeshPostStatus('');
+  }
 });
 
 ws.on('extract_frames_result', (msg) => {
@@ -226,6 +247,14 @@ ws.on('stage_complete', async (msg) => {
     await preview.loadPi3xResults(cameraOverlay, 'object.ply');
   } else if (msg.stage >= 4 && msg.stage <= 6) {
     await preview.loadStageResult(msg.stage);
+  }
+
+  if (msg.stage === 5) {
+    setMeshPostToolbarVisible(true);
+    setMeshPostEnabled(true);
+    if (!_meshPostInFlight) {
+      setMeshPostStatus('');
+    }
   }
 });
 
@@ -306,6 +335,8 @@ ws.on('pipeline_complete', (msg) => {
   setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
+  setMeshPostToolbarVisible(true);
+  setMeshPostEnabled(true);
   appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 6 });
 });
 
@@ -328,6 +359,10 @@ ws.on('pipeline_error', (msg) => {
     stageCtrl.setStageState(msg.stage, 'failed');
   }
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
+  setMeshPostToolbarVisible(false);
+  if (!_meshPostInFlight) {
+    setMeshPostStatus('');
+  }
   appendLog('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`, { stage: msg.stage });
 });
 
@@ -363,6 +398,151 @@ setInterval(pollVRAM, 5000);
 pollVRAM();
 
 // ── Helpers ──────────────────────────────────────────────────
+
+function initMeshPostToolbar() {
+  if (!meshPostToolbar) return;
+  setMeshPostToolbarVisible(false);
+  setMeshPostEnabled(false);
+  setMeshPostStatus('');
+
+  meshPostApplyBtn?.addEventListener('click', () => {
+    applyMeshPostprocess({ resetToRaw: false });
+  });
+  meshPostResetBtn?.addEventListener('click', () => {
+    applyMeshPostprocess({ resetToRaw: true });
+  });
+}
+
+function setMeshPostToolbarVisible(visible) {
+  if (!meshPostToolbar) return;
+  meshPostToolbar.style.display = visible ? 'flex' : 'none';
+}
+
+function setMeshPostEnabled(enabled) {
+  const disabled = !enabled;
+  if (meshPostMethodInput) meshPostMethodInput.disabled = disabled;
+  if (meshPostIterationsInput) meshPostIterationsInput.disabled = disabled;
+  if (meshPostLambdaInput) meshPostLambdaInput.disabled = disabled;
+  if (meshPostApplyBtn) meshPostApplyBtn.disabled = disabled;
+  if (meshPostResetBtn) meshPostResetBtn.disabled = disabled;
+}
+
+function setMeshPostStatus(message, tone = '') {
+  if (!meshPostStatus) return;
+  meshPostStatus.textContent = String(message || '');
+  meshPostStatus.classList.remove('error', 'success');
+  if (tone === 'error' || tone === 'success') {
+    meshPostStatus.classList.add(tone);
+  }
+}
+
+function canRunMeshPostprocess(statusMsg) {
+  if (!statusMsg) return true;
+  if (!statusMsg.running) return true;
+  const next = statusMsg.next_stage_confirmation || {};
+  return next.required === true && Number(next.from_stage) === 5;
+}
+
+function syncMeshPostToolbarFromStatus(statusMsg) {
+  if (!statusMsg) return;
+  const ready = Boolean(statusMsg?.object_name) && isStageDone(statusMsg, 5);
+  setMeshPostToolbarVisible(ready);
+  if (!ready) {
+    setMeshPostEnabled(false);
+    if (!_meshPostInFlight) {
+      setMeshPostStatus('');
+    }
+    return;
+  }
+
+  const allowed = canRunMeshPostprocess(statusMsg);
+  setMeshPostEnabled(allowed && !_meshPostInFlight);
+  if (_meshPostInFlight) return;
+
+  if (!allowed) {
+    setMeshPostStatus('Mesh post-process is disabled while pipeline is running.');
+    return;
+  }
+
+  if (meshPostStatus?.textContent === 'Mesh post-process is disabled while pipeline is running.') {
+    setMeshPostStatus('');
+  }
+}
+
+async function applyMeshPostprocess({ resetToRaw = false } = {}) {
+  if (_meshPostInFlight) return;
+
+  const method = resetToRaw ? 'laplacian' : (meshPostMethodInput?.value || 'laplacian');
+  const iterationsRaw = Number.parseInt(meshPostIterationsInput?.value || '8', 10);
+  const iterations = resetToRaw ? 0 : Math.max(0, Math.min(100, Number.isFinite(iterationsRaw) ? iterationsRaw : 8));
+  const lambRaw = Number.parseFloat(meshPostLambdaInput?.value || '0.5');
+  const lamb = Math.max(0.01, Math.min(1.5, Number.isFinite(lambRaw) ? lambRaw : 0.5));
+
+  _meshPostInFlight = true;
+  setMeshPostEnabled(false);
+  setMeshPostStatus(resetToRaw ? 'Resetting to raw mesh...' : 'Applying smoothing...');
+
+  try {
+    const res = await fetch('/api/mesh/postprocess', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        method,
+        iterations,
+        lamb,
+        taubin_nu: DEFAULT_TAUBIN_NU,
+        source: 'raw',
+        invalidate_texture: true,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    await preview.loadStageResult(5);
+    stageCtrl.activateStage(5);
+
+    const vertices = Number(data.vertices) || 0;
+    const faces = Number(data.faces) || 0;
+    let msg = resetToRaw
+      ? `Reset complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`
+      : `Smoothing complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`;
+    if (data.texture_invalidated) {
+      msg += ' Stage 6 artifacts were cleared.';
+    }
+    setMeshPostStatus(msg, 'success');
+
+    appendLog(
+      'stdout',
+      `Mesh post-process: method=${data.method}, iterations=${data.iterations}, lambda=${Number(data.lamb).toFixed(2)}, source=${data.source}\n`,
+      { stage: 5 },
+    );
+    if (data.texture_invalidated) {
+      appendLog('stdout', 'Texture outputs removed. Re-run Stage 6 for updated texturing.\n', { stage: 6 });
+    }
+
+    if (!_latestStatusSnapshot?.running) {
+      _hydratedStatusKey = '';
+      try {
+        const statusRes = await fetch('/api/pipeline/status');
+        if (statusRes.ok) {
+          const status = await statusRes.json();
+          await applyStatusSnapshot(status, { forceHydrate: true });
+          stageCtrl.activateStage(5);
+        }
+      } catch (statusErr) {
+        console.warn('Failed to refresh status after mesh post-process:', statusErr);
+      }
+    }
+  } catch (e) {
+    setMeshPostStatus(`Failed: ${e.message}`, 'error');
+    appendLog('stderr', `Mesh post-process failed: ${e.message}\n`, { stage: 5 });
+  } finally {
+    _meshPostInFlight = false;
+    syncMeshPostToolbarFromStatus(_latestStatusSnapshot);
+  }
+}
 
 function getStageInfo(statusMsg, stage) {
   return statusMsg?.stages?.[String(stage)] || null;
@@ -623,9 +803,11 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 }
 
 async function applyStatusSnapshot(statusMsg, opts = {}) {
+  _latestStatusSnapshot = statusMsg;
   pipelineUI.updateAll(statusMsg);
   syncStageStates(statusMsg);
   syncTaskConfirmBarsFromStatus(statusMsg);
+  syncMeshPostToolbarFromStatus(statusMsg);
   setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
 
   if (statusMsg.object_name) {
