@@ -156,7 +156,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (必要時のみリサイズ) |
-| `CONFIDENCE_THRESHOLD` | `0.1` | 信頼度フィルタ閾値 |
+| `CONFIDENCE_THRESHOLD` | `0.2` | 信頼度フィルタ閾値 |
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
 | `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
 
@@ -164,9 +164,9 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `DIFFCD_BATCH_SIZE` | `3000` | バッチサイズ |
-| `DIFFCD_N_BATCHES` | `25000` | 学習バッチ総数 |
-| `DIFFCD_RESOLUTION` | `384` | Marching Cubes 解像度 |
+| `DIFFCD_BATCH_SIZE` | `5000` | バッチサイズ |
+| `DIFFCD_N_BATCHES` | `40000` | 学習バッチ総数 |
+| `DIFFCD_RESOLUTION` | `512` | Marching Cubes 解像度 |
 | `DIFFCD_AUTO_TUNE` | `1` | GPU VRAM に応じて `BATCH_SIZE/N_BATCHES` を自動調整 |
 | `DIFFCD_AUTO_TUNE_RESPECT_MANUAL` | `1` | 手動値 (`BATCH_SIZE/N_BATCHES/RESOLUTION`) を指定した場合は自動調整を無効化 |
 | `DIFFCD_AUTO_KEEP_EFFECTIVE_SAMPLES` | `1` | `batch_size * n_batches` をなるべく維持して品質低下を防止 |

@@ -78,7 +78,7 @@ class PipelineConfig:
     frame_interval: int = 10
     max_frames: int = 50
     pixel_limit: int = 255_000
-    confidence_threshold: float = 0.1
+    confidence_threshold: float = 0.2
     edge_rtol: float = 0.03
     sam2_model: str = "large"
     denoise_preset: str = "balanced"
@@ -91,9 +91,9 @@ class PipelineConfig:
     denoise_sor_std_ratio: float = 2.0
     denoise_radius_neighbors: int = 8
     denoise_radius_radius_ratio: float = 0.015
-    diffcd_batch_size: int = 3000
-    diffcd_n_batches: int = 25000
-    diffcd_resolution: int = 384
+    diffcd_batch_size: int = 5000
+    diffcd_n_batches: int = 40000
+    diffcd_resolution: int = 512
     texture_size: int = 2048
 
     @classmethod

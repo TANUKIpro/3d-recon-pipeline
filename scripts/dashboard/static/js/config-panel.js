@@ -234,7 +234,7 @@ export class ConfigPanel {
         this._extractDefaults.max_frames,
       ),
       pixel_limit: parseInt(this._inputs.pixel_limit.value) || 255000,
-      confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.1,
+      confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.2,
       edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
       sam2_model: this._inputs.sam2_model.value,
       denoise_preset: this._inputs.denoise_preset.value || 'balanced',
@@ -247,9 +247,9 @@ export class ConfigPanel {
       denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
       denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
       denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
-      diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 3000,
-      diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 25000,
-      diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 384,
+      diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
+      diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 40000,
+      diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
       texture_size: parseInt(this._inputs.texture_size.value) || 2048,
     };
   }
