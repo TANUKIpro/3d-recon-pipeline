@@ -5,6 +5,12 @@ import os
 import subprocess
 import time
 
+# Pi3X inference budgeting defaults (can be overridden via env vars).
+_PI3X_TARGET_VRAM_UTILIZATION = 0.95
+_PI3X_ESTIMATED_MODEL_MB = 5500
+_PI3X_RUNTIME_OVERHEAD_MB = 1200
+_PI3X_FRAME_PIXELS_PER_MB = 800
+
 
 def _parse_nvidia_int(value: str) -> int | None:
     """Parse nvidia-smi numeric fields that may contain N/A."""
@@ -126,6 +132,132 @@ def get_free_vram_mb() -> int | None:
         if isinstance(first, int):
             return first
     return None
+
+
+def _clamp_float(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, value))
+
+
+def _env_float(name: str, fallback: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None:
+        return fallback
+    try:
+        return float(raw)
+    except ValueError:
+        return fallback
+
+
+def _env_int(name: str, fallback: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return fallback
+    try:
+        return int(raw)
+    except ValueError:
+        return fallback
+
+
+def estimate_pi3x_frame_plan(
+    requested_frames: int,
+    pixel_limit: int,
+    target_utilization: float | None = None,
+) -> dict[str, int | float | bool | str | None]:
+    """Estimate Pi3X frame count that fits a VRAM utilization target.
+
+    Returns a JSON-serializable dict suitable for both runtime logging and UI.
+    """
+    req_frames = max(2, int(requested_frames))
+    px_limit = max(1, int(pixel_limit))
+
+    util = (
+        _clamp_float(float(target_utilization), 0.5, 0.99)
+        if target_utilization is not None
+        else _clamp_float(
+            _env_float("PI3X_VRAM_TARGET_UTILIZATION", _PI3X_TARGET_VRAM_UTILIZATION),
+            0.5,
+            0.99,
+        )
+    )
+    model_mb = max(0, _env_int("PI3X_ESTIMATED_MODEL_MB", _PI3X_ESTIMATED_MODEL_MB))
+    runtime_overhead_mb = max(0, _env_int("PI3X_RUNTIME_OVERHEAD_MB", _PI3X_RUNTIME_OVERHEAD_MB))
+    pixels_per_mb = max(1, _env_int("PI3X_FRAME_PIXELS_PER_MB", _PI3X_FRAME_PIXELS_PER_MB))
+
+    inventory = get_gpu_inventory()
+    if not inventory:
+        return {
+            "requested_frames": req_frames,
+            "pixel_limit": px_limit,
+            "auto_target_frames": req_frames,
+            "auto_reduced": False,
+            "target_vram_utilization": util,
+            "gpu_name": None,
+            "gpu_total_mb": None,
+            "gpu_used_mb": None,
+            "gpu_free_mb": None,
+            "target_used_mb": None,
+            "frame_pixel_budget": None,
+            "estimated_input_mb": None,
+            "predicted_used_mb": None,
+            "predicted_used_pct": None,
+            "reason": "nvidia-smi unavailable",
+        }
+
+    gpu = inventory[0]
+    total_mb = int(gpu.get("memory_total_mb") or 0)
+    used_mb = int(gpu.get("memory_used_mb") or 0)
+    free_mb = int(gpu.get("memory_free_mb") or max(total_mb - used_mb, 0))
+
+    if total_mb <= 0:
+        return {
+            "requested_frames": req_frames,
+            "pixel_limit": px_limit,
+            "auto_target_frames": req_frames,
+            "auto_reduced": False,
+            "target_vram_utilization": util,
+            "gpu_name": str(gpu.get("name") or ""),
+            "gpu_total_mb": total_mb,
+            "gpu_used_mb": used_mb,
+            "gpu_free_mb": free_mb,
+            "target_used_mb": None,
+            "frame_pixel_budget": None,
+            "estimated_input_mb": None,
+            "predicted_used_mb": None,
+            "predicted_used_pct": None,
+            "reason": "invalid gpu memory.total from nvidia-smi",
+        }
+
+    target_used_mb = int(total_mb * util)
+    available_for_pi3x_mb = max(target_used_mb - used_mb, 0)
+    input_budget_mb = max(available_for_pi3x_mb - model_mb - runtime_overhead_mb, 0)
+    frame_pixel_budget = max(2 * px_limit, input_budget_mb * pixels_per_mb)
+
+    auto_frames = max(2, frame_pixel_budget // px_limit)
+    auto_frames = min(req_frames, auto_frames)
+    estimated_input_mb = int((auto_frames * px_limit) / pixels_per_mb)
+    predicted_used_mb = min(
+        total_mb,
+        used_mb + model_mb + runtime_overhead_mb + estimated_input_mb,
+    )
+    predicted_used_pct = (100.0 * predicted_used_mb / total_mb) if total_mb > 0 else None
+
+    return {
+        "requested_frames": req_frames,
+        "pixel_limit": px_limit,
+        "auto_target_frames": int(auto_frames),
+        "auto_reduced": bool(auto_frames < req_frames),
+        "target_vram_utilization": util,
+        "gpu_name": str(gpu.get("name") or ""),
+        "gpu_total_mb": total_mb,
+        "gpu_used_mb": used_mb,
+        "gpu_free_mb": free_mb,
+        "target_used_mb": target_used_mb,
+        "frame_pixel_budget": int(frame_pixel_budget),
+        "estimated_input_mb": estimated_input_mb,
+        "predicted_used_mb": int(predicted_used_mb),
+        "predicted_used_pct": float(predicted_used_pct) if predicted_used_pct is not None else None,
+        "reason": "ok",
+    }
 
 
 def ensure_vram_available(

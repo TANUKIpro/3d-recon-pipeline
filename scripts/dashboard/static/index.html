@@ -191,12 +191,12 @@
         <!-- Stage 1+2: shared advanced controls -->
         <div class="config-section" data-stages="1 2">
           <details class="config-advanced">
-            <summary>Advanced (High Impact)</summary>
+            <summary>Frame Budget (Shared: Stage 1 + Pi3X)</summary>
             <div class="config-advanced-body">
               <div class="form-group">
                 <label for="cfg-max-frames">Max Frames</label>
                 <input type="number" id="cfg-max-frames" value="50" min="1" max="100000">
-                <div class="config-note">Shared by Extract Frames and Pi3X.</div>
+                <div id="cfg-frame-budget-note" class="config-note">Shared by Extract Frames and Pi3X.</div>
               </div>
             </div>
           </details>
@@ -207,9 +207,10 @@
           <div class="form-group">
             <label for="cfg-pixel-limit">Pixel Limit</label>
             <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
+            <div id="cfg-pi3x-plan-note" class="config-note"></div>
           </div>
           <details class="config-advanced">
-            <summary>Advanced (High Impact)</summary>
+            <summary>Filtering (Advanced)</summary>
             <div class="config-advanced-body">
               <div class="form-row">
                 <div class="form-group">

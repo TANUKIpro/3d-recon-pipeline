@@ -98,6 +98,8 @@ export class ConfigPanel {
     this._objectArtifacts = document.getElementById('object-artifacts');
     this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
     this._resumeStageInfo = document.getElementById('cfg-resume-stage-info');
+    this._frameBudgetNote = document.getElementById('cfg-frame-budget-note');
+    this._pi3xPlanNote = document.getElementById('cfg-pi3x-plan-note');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
@@ -144,12 +146,15 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this._updatingDenoisePreset = false;
+    this._pi3xPlanRequestId = 0;
+    this._pi3xPlanDebounce = null;
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
     this._updateResumeHint();
+    this._updateFrameBudgetPreview();
   }
 
   setRunning(running) {
@@ -171,6 +176,7 @@ export class ConfigPanel {
       this._sections.forEach(s => s.classList.remove('stage-visible'));
       this._title.innerHTML = 'Configuration';
       this._updateResumeHint();
+      this._updateFrameBudgetPreview();
       return;
     }
 
@@ -185,6 +191,7 @@ export class ConfigPanel {
     this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${STAGE_LABELS[stage] || 'Stage '+stage}</span>`;
     this._startStage = this._clampStage(stage);
     this._updateResumeHint();
+    this._updateFrameBudgetPreview();
   }
 
   setObjectName(name) {
@@ -205,6 +212,7 @@ export class ConfigPanel {
       this._renderArtifacts(null);
     }
     this._updateResumeHint();
+    this._updateFrameBudgetPreview();
   }
 
   getConfig() {
@@ -285,6 +293,7 @@ export class ConfigPanel {
         opt.textContent = 'No videos found in /data/input/';
         this._videoSelect.appendChild(opt);
         this._applySuggestedObjectName();
+        this._updateFrameBudgetPreview();
         return;
       }
 
@@ -298,6 +307,7 @@ export class ConfigPanel {
       this._onVideoChange();
     } catch (e) {
       this._videoSelect.innerHTML = '<option value="">Error loading videos</option>';
+      this._updateFrameBudgetPreview();
     }
   }
 
@@ -320,6 +330,7 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
+    this._inputs.pixel_limit.addEventListener('input', () => this._updateFrameBudgetPreview());
     this._inputs.denoise_preset.addEventListener('change', () => {
       const preset = this._inputs.denoise_preset.value;
       if (preset === DENOISE_CUSTOM_PRESET) {
@@ -366,6 +377,7 @@ export class ConfigPanel {
         this._renderArtifacts(null);
       }
       this._updateResumeHint();
+      this._updateFrameBudgetPreview();
     });
 
     this._objectNameInput.addEventListener('change', () => {
@@ -383,6 +395,7 @@ export class ConfigPanel {
         this._renderObjectSummary(null, normalized);
       }
       this._updateResumeHint();
+      this._updateFrameBudgetPreview();
     });
 
     this._refreshObjectsBtn.addEventListener('click', () => {
@@ -417,6 +430,7 @@ export class ConfigPanel {
       this._renderArtifacts(summary);
       this._refreshObjectInfo(name);
       this._updateResumeHint();
+      this._updateFrameBudgetPreview();
       if (notify && !this._running && this.onObjectSelected) {
         this.onObjectSelected(name);
       }
@@ -438,6 +452,7 @@ export class ConfigPanel {
     }
     this._renderArtifacts(null);
     this._updateResumeHint();
+    this._updateFrameBudgetPreview();
     if (notify && !this._running && this.onObjectSelected) {
       this.onObjectSelected(null);
     }
@@ -463,6 +478,7 @@ export class ConfigPanel {
       this._renderObjectSummary(object, object.name);
       this._renderArtifacts(object);
       this._updateResumeHint();
+      this._updateFrameBudgetPreview();
     } catch (e) {
       // Keep previously rendered summary.
     }
@@ -539,6 +555,7 @@ export class ConfigPanel {
       this._videoInfo.textContent = '';
       this._videoMeta = null;
       this._applySuggestedObjectName();
+      this._updateFrameBudgetPreview();
       return;
     }
     this._videoInfo.textContent = 'Loading...';
@@ -547,12 +564,14 @@ export class ConfigPanel {
       if (!res.ok) {
         this._videoInfo.textContent = 'Failed to load video info';
         this._videoMeta = null;
+        this._updateFrameBudgetPreview();
         return;
       }
       const data = await res.json();
       if (data.error) {
         this._videoInfo.textContent = data.error;
         this._videoMeta = null;
+        this._updateFrameBudgetPreview();
         return;
       }
       this._videoMeta = data;
@@ -579,9 +598,11 @@ export class ConfigPanel {
       this._videoInfo.textContent =
         `${data.width}x${data.height} | ${data.fps} fps | ${data.total_frames} frames | ${dur}`;
       this._applySuggestedObjectName();
+      this._updateFrameBudgetPreview();
     } catch {
       this._videoInfo.textContent = 'Failed to load video info';
       this._videoMeta = null;
+      this._updateFrameBudgetPreview();
     }
   }
 
@@ -632,6 +653,7 @@ export class ConfigPanel {
     this._maxFramesAuto = false;
     this._updateDenoiseControls();
     this._onDenoiseInputChanged();
+    this._updateFrameBudgetPreview();
   }
 
   _applyDenoisePreset(presetName) {
@@ -778,16 +800,19 @@ export class ConfigPanel {
   }
 
   _onFrameIntervalInput() {
-    if (!this._videoMeta) return;
-    const interval = this._parsePositiveInt(
-      this._inputs.frame_interval.value,
-      this._extractDefaults.frame_interval,
-    );
-    this._extractDefaults.frame_interval = interval;
-    if (!this._maxFramesAuto) return;
-    const maxFrames = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
-    this._extractDefaults.max_frames = maxFrames;
-    this._inputs.max_frames.value = String(maxFrames);
+    if (this._videoMeta) {
+      const interval = this._parsePositiveInt(
+        this._inputs.frame_interval.value,
+        this._extractDefaults.frame_interval,
+      );
+      this._extractDefaults.frame_interval = interval;
+      if (this._maxFramesAuto) {
+        const maxFrames = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
+        this._extractDefaults.max_frames = maxFrames;
+        this._inputs.max_frames.value = String(maxFrames);
+      }
+    }
+    this._updateFrameBudgetPreview();
   }
 
   _onMaxFramesInput() {
@@ -801,6 +826,7 @@ export class ConfigPanel {
     if (Number.isFinite(parsed) && parsed > 0) {
       this._maxFramesAuto = false;
     }
+    this._updateFrameBudgetPreview();
   }
 
   _estimateMaxFrames(totalFrames, frameInterval) {
@@ -808,6 +834,88 @@ export class ConfigPanel {
     const interval = this._parsePositiveInt(frameInterval, 1);
     if (total <= 0) return this._extractDefaults.max_frames;
     return Math.max(1, Math.ceil(total / interval));
+  }
+
+  _resolveRequestedPi3xFrames() {
+    const maxFrames = this._parsePositiveInt(
+      this._inputs.max_frames.value,
+      this._extractDefaults.max_frames,
+    );
+    const resumeStage = this._resolveResumeStage();
+    const objectFrameCount = this._parsePositiveInt(this._selectedObjectSummary?.frame_count, 0);
+    if (resumeStage > 1 && objectFrameCount > 0) {
+      return {
+        requestedFrames: Math.max(2, Math.min(maxFrames, objectFrameCount)),
+        source: `resume from existing frames (${objectFrameCount})`,
+      };
+    }
+
+    if (this._videoMeta) {
+      const interval = this._parsePositiveInt(
+        this._inputs.frame_interval.value,
+        this._extractDefaults.frame_interval,
+      );
+      const extractedEstimate = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
+      return {
+        requestedFrames: Math.max(2, Math.min(maxFrames, extractedEstimate)),
+        source: `estimated from video (${extractedEstimate})`,
+      };
+    }
+
+    return {
+      requestedFrames: Math.max(2, maxFrames),
+      source: 'using Max Frames',
+    };
+  }
+
+  _updateFrameBudgetPreview() {
+    const frameInfo = this._resolveRequestedPi3xFrames();
+    if (this._frameBudgetNote) {
+      this._frameBudgetNote.textContent =
+        `Pi3X requested frames before VRAM tuning: ${frameInfo.requestedFrames} (${frameInfo.source}).`;
+    }
+
+    if (!this._pi3xPlanNote) return;
+    const pixelLimit = this._parsePositiveInt(this._inputs.pixel_limit.value, 255000);
+    this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: estimating...';
+    if (this._pi3xPlanDebounce) {
+      clearTimeout(this._pi3xPlanDebounce);
+    }
+    this._pi3xPlanDebounce = setTimeout(() => {
+      this._updatePi3xPlanPreview(frameInfo.requestedFrames, pixelLimit);
+    }, 120);
+  }
+
+  async _updatePi3xPlanPreview(requestedFrames, pixelLimit) {
+    const reqId = ++this._pi3xPlanRequestId;
+    try {
+      const res = await fetch(
+        `/api/pipeline/pi3x-plan?requested_frames=${requestedFrames}&pixel_limit=${pixelLimit}`,
+      );
+      if (reqId !== this._pi3xPlanRequestId) return;
+      if (!res.ok) {
+        this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
+        return;
+      }
+      const data = await res.json();
+      const autoFrames = this._parsePositiveInt(data.auto_target_frames, requestedFrames);
+      const targetPct = Number(data.target_vram_utilization) * 100;
+      const usedPct = Number(data.predicted_used_pct);
+      const parts = [`Auto target: ${autoFrames}/${requestedFrames} frames`];
+      if (Number.isFinite(targetPct) && targetPct > 0) {
+        parts.push(`target VRAM ${targetPct.toFixed(0)}%`);
+      }
+      if (Number.isFinite(usedPct) && usedPct > 0) {
+        parts.push(`estimated ${usedPct.toFixed(1)}%`);
+      }
+      if (data.auto_reduced) {
+        parts.push('auto-reduced');
+      }
+      this._pi3xPlanNote.textContent = parts.join(' | ');
+    } catch {
+      if (reqId !== this._pi3xPlanRequestId) return;
+      this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
+    }
   }
 
   _normalizeObjectName(value) {

@@ -28,6 +28,7 @@ from scripts.dashboard.state import (
     PipelineStage,
     detect_stage_outputs,
 )
+from vram_utils import estimate_pi3x_frame_plan
 
 # ── Globals ───────────────────────────────────────────────────────
 
@@ -654,6 +655,15 @@ async def pipeline_video_info(path: str):
         return JSONResponse(info)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/pipeline/pi3x-plan")
+async def pipeline_pi3x_plan(requested_frames: int, pixel_limit: int):
+    """Estimate Pi3X frame auto-tuning result before pipeline start."""
+    req = max(2, int(requested_frames))
+    px = max(1, int(pixel_limit))
+    plan = await asyncio.to_thread(estimate_pi3x_frame_plan, req, px)
+    return JSONResponse(plan)
 
 
 @app.post("/api/pipeline/start")
