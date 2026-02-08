@@ -6,6 +6,98 @@ import subprocess
 import time
 
 
+def _parse_nvidia_int(value: str) -> int | None:
+    """Parse nvidia-smi numeric fields that may contain N/A."""
+    raw = value.strip()
+    if not raw or raw.upper() == "N/A":
+        return None
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
+
+
+def query_nvidia_smi(
+    fields: list[str],
+    timeout_sec: int = 5,
+) -> list[dict[str, str]] | None:
+    """Query nvidia-smi and return rows as dicts keyed by field name."""
+    if not fields:
+        return []
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--query-gpu={','.join(fields)}",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    rows: list[dict[str, str]] = []
+    for line in result.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < len(fields):
+            continue
+        rows.append({field: parts[i] for i, field in enumerate(fields)})
+    return rows
+
+
+def get_gpu_inventory() -> list[dict[str, str | int | None]]:
+    """Return GPU inventory (one dict per GPU) from nvidia-smi."""
+    fields = [
+        "index",
+        "name",
+        "memory.total",
+        "memory.used",
+        "memory.free",
+        "utilization.gpu",
+        "utilization.memory",
+    ]
+    rows = query_nvidia_smi(fields)
+    if rows is None:
+        return []
+
+    gpus: list[dict[str, str | int | None]] = []
+    for row in rows:
+        gpus.append(
+            {
+                "index": _parse_nvidia_int(row.get("index", "")),
+                "name": row.get("name", ""),
+                "memory_total_mb": _parse_nvidia_int(row.get("memory.total", "")),
+                "memory_used_mb": _parse_nvidia_int(row.get("memory.used", "")),
+                "memory_free_mb": _parse_nvidia_int(row.get("memory.free", "")),
+                "utilization_gpu_pct": _parse_nvidia_int(row.get("utilization.gpu", "")),
+                "utilization_memory_pct": _parse_nvidia_int(
+                    row.get("utilization.memory", "")
+                ),
+            }
+        )
+    return gpus
+
+
+def pick_gpu_with_most_free_vram(
+    inventory: list[dict[str, str | int | None]] | None = None,
+) -> dict[str, str | int | None] | None:
+    """Pick the GPU with the largest free VRAM from *inventory*."""
+    gpus = inventory if inventory is not None else get_gpu_inventory()
+    if not gpus:
+        return None
+
+    def _free(gpu: dict[str, str | int | None]) -> int:
+        value = gpu.get("memory_free_mb")
+        return int(value) if isinstance(value, int) else -1
+
+    return max(gpus, key=_free)
+
+
 def cleanup_pytorch_vram(*models):
     """Release PyTorch models and free GPU memory.
 
@@ -28,16 +120,11 @@ def cleanup_pytorch_vram(*models):
 
 def get_free_vram_mb() -> int | None:
     """Return free GPU VRAM in MB via nvidia-smi, or None if unavailable."""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            return int(result.stdout.strip().split("\n")[0].strip())
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        pass
+    inventory = get_gpu_inventory()
+    if inventory:
+        first = inventory[0].get("memory_free_mb")
+        if isinstance(first, int):
+            return first
     return None
 
 
@@ -111,15 +198,15 @@ def offload_module(module, target: str = "cpu") -> None:
 
 def log_vram(stage_name: str = ""):
     """Log current GPU memory usage via nvidia-smi."""
-    try:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.total,memory.free",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            used, total, free = result.stdout.strip().split(", ")
-            label = f" [{stage_name}]" if stage_name else ""
-            print(f"VRAM{label}: {used}MB / {total}MB (free: {free}MB)", flush=True)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    inventory = get_gpu_inventory()
+    if not inventory:
+        return
+
+    first = inventory[0]
+    used = first.get("memory_used_mb")
+    total = first.get("memory_total_mb")
+    free = first.get("memory_free_mb")
+    if not all(isinstance(v, int) for v in [used, total, free]):
+        return
+    label = f" [{stage_name}]" if stage_name else ""
+    print(f"VRAM{label}: {used}MB / {total}MB (free: {free}MB)", flush=True)

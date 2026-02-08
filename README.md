@@ -58,11 +58,12 @@ docker compose up
 ブラウザで **http://localhost:7860** を開くと Web ダッシュボードが表示される。
 
 1. **Video** ドロップダウンで動画を選択
-2. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
-3. **Start Pipeline** をクリック
-4. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
-5. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
-6. ログ・進捗・3Dプレビューをリアルタイムで確認
+2. **Target Object** で既存オブジェクトを選択、または新規 `Object Name` を入力
+3. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
+4. **Start Pipeline** をクリック
+5. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
+6. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
+7. ログ・進捗・3Dプレビューをリアルタイムで確認
 
 ## 使い方
 
@@ -87,6 +88,8 @@ docker compose down
 **ダッシュボード機能:**
 
 - **動画選択**: `/data/input/` に配置した動画ファイルを自動検出
+- **オブジェクト切替**: `Target Object` で対象オブジェクトを切替、`Object Name` で新規作成
+- **生成物一覧**: 選択中オブジェクトの主要成果物をパネル表示
 - **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
 - **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
 - **進捗バー**: 6ステージの状態をリアルタイム表示 (pending → running → complete)
@@ -162,6 +165,14 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `DIFFCD_BATCH_SIZE` | `3000` | バッチサイズ |
 | `DIFFCD_N_BATCHES` | `25000` | 学習バッチ総数 |
 | `DIFFCD_RESOLUTION` | `384` | Marching Cubes 解像度 |
+| `DIFFCD_AUTO_TUNE` | `1` | GPU VRAM に応じて `BATCH_SIZE/N_BATCHES` を自動調整 |
+| `DIFFCD_AUTO_TUNE_RESPECT_MANUAL` | `1` | 手動値 (`BATCH_SIZE/N_BATCHES/RESOLUTION`) を指定した場合は自動調整を無効化 |
+| `DIFFCD_AUTO_KEEP_EFFECTIVE_SAMPLES` | `1` | `batch_size * n_batches` をなるべく維持して品質低下を防止 |
+| `DIFFCD_AUTO_MIN_N_BATCHES` | `10000` | 自動調整時の `n_batches` 下限 |
+| `DIFFCD_AUTO_SELECT_GPU` | `1` | 複数GPU時に空きVRAM最大のGPUを自動選択 (`CUDA_VISIBLE_DEVICES=all` の場合) |
+| `DIFFCD_GPU_INDEX` | unset | DiffCD を固定GPUで実行したい場合の GPU index |
+| `DIFFCD_XLA_MEM_FRACTION` | auto | JAX メモリ確保率を手動指定 (未指定時は VRAM 余裕から自動設定) |
+| `JAX_COMPILATION_CACHE_DIR` | `/root/.cache/jax_compilation_cache` | JAX コンパイルキャッシュ保存先 (2回目以降の起動高速化) |
 
 ### テクスチャベイキング (Stage 6)
 
@@ -171,21 +182,23 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 ## 出力ファイル
 
-パイプライン完了後、`data/output/` に以下が生成される:
+パイプライン完了後、`data/output/objects/<object_name>/` に以下が生成される:
 
 ```
 data/output/
-├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
-├── textured_mesh.mtl      # マテリアル定義
-├── texture.png            # テクスチャアトラス (2048x2048)
-├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
-├── object_denoised.ply    # デノイズ済み点群
-├── object.ply             # Pi3Xトリプルフィルタ済み点群
-├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
-├── intrinsics.json        # 推定カメラ内部パラメータ
-├── frames/                # 抽出フレーム画像 (JPEG)
-├── masks/                 # SAM2セグメンテーションマスク (PNG)
-└── diffcd/                # DiffCD作業ディレクトリ
+└── objects/
+    └── <object_name>/
+        ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
+        ├── textured_mesh.mtl      # マテリアル定義
+        ├── texture.png            # テクスチャアトラス (2048x2048)
+        ├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
+        ├── object_denoised.ply    # デノイズ済み点群
+        ├── object.ply             # Pi3Xトリプルフィルタ済み点群
+        ├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
+        ├── intrinsics.json        # 推定カメラ内部パラメータ
+        ├── frames/                # 抽出フレーム画像 (JPEG)
+        ├── masks/                 # SAM2セグメンテーションマスク (PNG)
+        └── diffcd/                # DiffCD作業ディレクトリ
 ```
 
 ## アーキテクチャ
@@ -299,6 +312,12 @@ lsof -i :7860
 ### DiffCD が遅い / 解像度を上げたい
 
 `DIFFCD_RESOLUTION=512` は A100 40GB 以上が必要。16GB GPU では `384` が上限。
+
+DiffCD はデフォルトでハードウェア自動チューニング (`DIFFCD_AUTO_TUNE=1`) が有効。まずは自動設定のまま実行し、比較のために固定値へ戻す場合は次を指定:
+
+```bash
+DIFFCD_AUTO_TUNE=0
+```
 
 ### ビルドが失敗する
 

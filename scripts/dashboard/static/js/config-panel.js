@@ -1,6 +1,8 @@
 /**
- * Configuration panel: video selection and parameter inputs.
+ * Configuration panel: video/object selection and parameter inputs.
  */
+
+const NEW_OBJECT_VALUE = '__new__';
 
 export class ConfigPanel {
   constructor() {
@@ -10,6 +12,12 @@ export class ConfigPanel {
 
     this._videoSelect = document.getElementById('video-select');
     this._videoInfo = document.getElementById('video-info');
+    this._objectSelect = document.getElementById('object-select');
+    this._objectNameInput = document.getElementById('cfg-object-name');
+    this._objectInfo = document.getElementById('object-info');
+    this._objectArtifacts = document.getElementById('object-artifacts');
+    this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
+    this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
 
@@ -31,16 +39,22 @@ export class ConfigPanel {
     this._videoMeta = null;
     this._maxFramesAuto = true;
     this._extractDefaults = { frame_interval: 10, max_frames: 50 };
+    this._objects = [];
+    this._objectInfoRequestId = 0;
+    this._objectNameDirty = false;
 
     this._bindEvents();
     this._loadVideos();
+    this.refreshObjects();
   }
 
   setRunning(running) {
     this._startBtn.disabled = running;
     this._cancelBtn.disabled = !running;
-    // Disable all inputs while running
     this._videoSelect.disabled = running;
+    this._objectSelect.disabled = running;
+    this._objectNameInput.disabled = running;
+    this._refreshObjectsBtn.disabled = running;
     for (const inp of Object.values(this._inputs)) {
       inp.disabled = running;
     }
@@ -66,9 +80,31 @@ export class ConfigPanel {
     this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${names[stage] || 'Stage '+stage}</span>`;
   }
 
+  setObjectName(name) {
+    const normalized = this._normalizeObjectName(name);
+    if (!normalized) return;
+    this._objectNameInput.value = normalized;
+    this._objectNameDirty = false;
+    const matched = this._objects.find(o => o.name === normalized);
+    if (matched) {
+      this._objectSelect.value = normalized;
+      this._renderObjectSummary(matched);
+      this._refreshObjectInfo(normalized);
+    } else {
+      this._objectSelect.value = NEW_OBJECT_VALUE;
+      this._renderObjectSummary(null, normalized);
+      this._renderArtifacts(null);
+    }
+  }
+
   getConfig() {
+    const suggestedObject = this._suggestObjectNameFromVideo();
+    const objectName = this._normalizeObjectName(this._objectNameInput.value || suggestedObject || 'object');
+    this._objectNameInput.value = objectName;
+
     return {
       video_path: this._videoSelect.value,
+      object_name: objectName,
       frame_interval: this._parsePositiveInt(
         this._inputs.frame_interval.value,
         this._extractDefaults.frame_interval,
@@ -88,6 +124,31 @@ export class ConfigPanel {
     };
   }
 
+  async refreshObjects() {
+    try {
+      const currentSelect = this._objectSelect.value;
+      const currentInput = this._normalizeObjectName(this._objectNameInput.value);
+      const res = await fetch('/api/pipeline/objects');
+      const data = await res.json();
+      const objects = Array.isArray(data.objects) ? data.objects : [];
+      this._objects = objects;
+      this._populateObjectSelect(objects);
+
+      let target = NEW_OBJECT_VALUE;
+      if (currentSelect && currentSelect !== NEW_OBJECT_VALUE && objects.some(o => o.name === currentSelect)) {
+        target = currentSelect;
+      } else if (currentInput && objects.some(o => o.name === currentInput)) {
+        target = currentInput;
+      } else if (data.active_object && objects.some(o => o.name === data.active_object)) {
+        target = data.active_object;
+      }
+      this._selectObject(target, { keepInput: true });
+    } catch (e) {
+      this._objectInfo.textContent = 'Failed to load objects';
+      this._renderArtifacts(null);
+    }
+  }
+
   async _loadVideos() {
     try {
       const res = await fetch('/api/pipeline/videos');
@@ -99,6 +160,7 @@ export class ConfigPanel {
         opt.value = '';
         opt.textContent = 'No videos found in /data/input/';
         this._videoSelect.appendChild(opt);
+        this._applySuggestedObjectName();
         return;
       }
 
@@ -106,6 +168,7 @@ export class ConfigPanel {
         const opt = document.createElement('option');
         opt.value = v.path;
         opt.textContent = `${v.name} (${v.size_mb} MB)`;
+        opt.dataset.suggestedObjectName = v.suggested_object_name || '';
         this._videoSelect.appendChild(opt);
       }
       this._onVideoChange();
@@ -133,6 +196,167 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
+
+    this._objectSelect.addEventListener('change', () => {
+      this._selectObject(this._objectSelect.value);
+    });
+
+    this._objectNameInput.addEventListener('input', () => {
+      this._objectNameDirty = true;
+      const normalized = this._normalizeObjectName(this._objectNameInput.value);
+      const matched = this._objects.find(o => o.name === normalized);
+      if (matched) {
+        this._objectSelect.value = matched.name;
+        this._renderObjectSummary(matched);
+        this._renderArtifacts(matched);
+      } else {
+        this._objectSelect.value = NEW_OBJECT_VALUE;
+        this._renderObjectSummary(null, normalized);
+        this._renderArtifacts(null);
+      }
+    });
+
+    this._objectNameInput.addEventListener('change', () => {
+      const normalized = this._normalizeObjectName(this._objectNameInput.value || this._suggestObjectNameFromVideo() || 'object');
+      this._objectNameInput.value = normalized;
+      const matched = this._objects.find(o => o.name === normalized);
+      if (matched) {
+        this._objectSelect.value = matched.name;
+        this._objectNameDirty = false;
+        this._refreshObjectInfo(matched.name);
+      } else {
+        this._objectSelect.value = NEW_OBJECT_VALUE;
+        this._renderObjectSummary(null, normalized);
+      }
+    });
+
+    this._refreshObjectsBtn.addEventListener('click', () => {
+      this.refreshObjects();
+    });
+  }
+
+  _populateObjectSelect(objects) {
+    this._objectSelect.innerHTML = '';
+    const createOpt = document.createElement('option');
+    createOpt.value = NEW_OBJECT_VALUE;
+    createOpt.textContent = 'Create New Object';
+    this._objectSelect.appendChild(createOpt);
+
+    for (const o of objects) {
+      const opt = document.createElement('option');
+      opt.value = o.name;
+      opt.textContent = `${o.name} (${o.complete_stages || 0}/6)`;
+      this._objectSelect.appendChild(opt);
+    }
+  }
+
+  _selectObject(name, opts = {}) {
+    if (name && name !== NEW_OBJECT_VALUE) {
+      this._objectSelect.value = name;
+      this._objectNameInput.value = name;
+      this._objectNameDirty = false;
+      const summary = this._objects.find(o => o.name === name) || null;
+      this._renderObjectSummary(summary, name);
+      this._renderArtifacts(summary);
+      this._refreshObjectInfo(name);
+      return;
+    }
+
+    this._objectSelect.value = NEW_OBJECT_VALUE;
+    if (!opts.keepInput || !this._objectNameInput.value.trim()) {
+      this._applySuggestedObjectName(true);
+    }
+
+    const normalized = this._normalizeObjectName(this._objectNameInput.value);
+    if (normalized) {
+      this._objectNameInput.value = normalized;
+      this._renderObjectSummary(null, normalized);
+    } else {
+      this._renderObjectSummary(null, '');
+    }
+    this._renderArtifacts(null);
+  }
+
+  async _refreshObjectInfo(name) {
+    if (!name) return;
+    const reqId = ++this._objectInfoRequestId;
+    try {
+      const res = await fetch(`/api/pipeline/object-info?name=${encodeURIComponent(name)}`);
+      const data = await res.json();
+      if (reqId !== this._objectInfoRequestId) return;
+      if (!res.ok || data.error || !data.object) return;
+      const object = data.object;
+      if (this._objectSelect.value !== object.name) return;
+      this._renderObjectSummary(object, object.name);
+      this._renderArtifacts(object);
+    } catch (e) {
+      // Keep previously rendered summary.
+    }
+  }
+
+  _renderObjectSummary(object, fallbackName = '') {
+    if (object) {
+      const details = [
+        `${object.complete_stages || 0}/6 stages`,
+        `${object.file_count || 0} files`,
+        `${this._formatSize(object.size_mb)}`,
+      ];
+      if (object.video_name) details.push(`video: ${object.video_name}`);
+      this._objectInfo.textContent = details.join(' | ');
+      return;
+    }
+    if (fallbackName) {
+      this._objectInfo.textContent = `New object: ${fallbackName}`;
+      return;
+    }
+    this._objectInfo.textContent = '';
+  }
+
+  _renderArtifacts(object) {
+    this._objectArtifacts.innerHTML = '';
+
+    let artifacts = [];
+    if (object && Array.isArray(object.files)) {
+      artifacts = object.files.filter(
+        f => !f.path.startsWith('frames/') && !f.path.startsWith('masks/')
+      );
+    } else if (object && Array.isArray(object.artifacts)) {
+      artifacts = object.artifacts;
+    }
+
+    if (object?.frame_count > 0) {
+      artifacts.unshift({
+        name: `frames/ (${object.frame_count} jpg)`,
+        size_mb: null,
+      });
+    }
+    if (object?.mask_count > 0) {
+      artifacts.unshift({
+        name: `masks/ (${object.mask_count} png)`,
+        size_mb: null,
+      });
+    }
+
+    const displayItems = artifacts.slice(0, 16);
+    this._objectArtifactsEmpty.style.display = displayItems.length ? 'none' : '';
+
+    for (const f of displayItems) {
+      const li = document.createElement('li');
+      li.className = 'object-artifact-item';
+
+      const name = document.createElement('span');
+      name.className = 'object-artifact-name';
+      name.textContent = f.path || f.name || '';
+      name.title = f.path || f.name || '';
+
+      const size = document.createElement('span');
+      size.className = 'object-artifact-size';
+      size.textContent = this._formatSize(f.size_mb);
+
+      li.appendChild(name);
+      li.appendChild(size);
+      this._objectArtifacts.appendChild(li);
+    }
   }
 
   async _onVideoChange() {
@@ -140,6 +364,7 @@ export class ConfigPanel {
     if (!path) {
       this._videoInfo.textContent = '';
       this._videoMeta = null;
+      this._applySuggestedObjectName();
       return;
     }
     this._videoInfo.textContent = 'Loading...';
@@ -179,10 +404,29 @@ export class ConfigPanel {
       const dur = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
       this._videoInfo.textContent =
         `${data.width}x${data.height} | ${data.fps} fps | ${data.total_frames} frames | ${dur}`;
+      this._applySuggestedObjectName();
     } catch {
       this._videoInfo.textContent = 'Failed to load video info';
       this._videoMeta = null;
     }
+  }
+
+  _applySuggestedObjectName(force = false) {
+    const selectedExisting = this._objectSelect.value && this._objectSelect.value !== NEW_OBJECT_VALUE;
+    if (selectedExisting && !force) return;
+    if (this._objectNameDirty && !force) return;
+    const suggested = this._suggestObjectNameFromVideo();
+    if (!suggested) return;
+    this._objectNameInput.value = suggested;
+    this._objectNameDirty = false;
+    this._renderObjectSummary(null, suggested);
+    this._renderArtifacts(null);
+  }
+
+  _suggestObjectNameFromVideo() {
+    const option = this._videoSelect.selectedOptions?.[0];
+    const raw = option?.dataset?.suggestedObjectName || '';
+    return this._normalizeObjectName(raw);
   }
 
   _onFrameIntervalInput() {
@@ -216,6 +460,26 @@ export class ConfigPanel {
     const interval = this._parsePositiveInt(frameInterval, 1);
     if (total <= 0) return this._extractDefaults.max_frames;
     return Math.max(1, Math.ceil(total / interval));
+  }
+
+  _normalizeObjectName(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    let normalized = raw
+      .replace(/[\\/]/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/[^\p{Letter}\p{Number}_.-]/gu, '-')
+      .replace(/-+/g, '-')
+      .replace(/^[.-]+/, '')
+      .replace(/[.-]+$/, '');
+    if (!normalized) normalized = 'object';
+    return normalized.slice(0, 80);
+  }
+
+  _formatSize(sizeMb) {
+    if (!Number.isFinite(sizeMb)) return '';
+    if (sizeMb < 0.01) return '<0.01 MB';
+    return `${Number(sizeMb).toFixed(2)} MB`;
   }
 
   _parsePositiveInt(value, fallback) {
