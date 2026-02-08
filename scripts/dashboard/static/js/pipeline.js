@@ -104,6 +104,23 @@ export class PipelineUI {
     this._refreshConnectors();
   }
 
+  resetFromStage(startStage = 1) {
+    const start = Math.max(1, Math.min(STAGE_COUNT, Number(startStage) || 1));
+    for (let i = 1; i < start; i++) {
+      this._stopTimer(i);
+    }
+    for (let i = start; i <= STAGE_COUNT; i++) {
+      this._stopTimer(i);
+      this._stageMeta[i] = {
+        status: 'pending',
+        progress: 0,
+        detail: null,
+      };
+      this._setStageState(i, 'pending', null, 0, null);
+    }
+    this._refreshConnectors();
+  }
+
   getOverallProgress() {
     let sum = 0;
     for (let i = 1; i <= STAGE_COUNT; i++) {
