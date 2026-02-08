@@ -93,7 +93,7 @@ class PipelineConfig:
     denoise_radius_neighbors: int = 8
     denoise_radius_radius_ratio: float = 0.015
     diffcd_batch_size: int = 5000
-    diffcd_n_batches: int = 40000
+    diffcd_n_batches: int = 30000
     diffcd_resolution: int = 512
     texture_size: int = 2048
 

@@ -252,7 +252,7 @@ export class ConfigPanel {
       denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
       denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
-      diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 40000,
+      diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
       texture_size: parseInt(this._inputs.texture_size.value) || 2048,
     };

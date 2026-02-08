@@ -165,7 +165,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `DIFFCD_BATCH_SIZE` | `5000` | バッチサイズ |
-| `DIFFCD_N_BATCHES` | `40000` | 学習バッチ総数 |
+| `DIFFCD_N_BATCHES` | `30000` | 学習バッチ総数 |
 | `DIFFCD_RESOLUTION` | `512` | Marching Cubes 解像度 |
 | `DIFFCD_AUTO_TUNE` | `1` | GPU VRAM に応じて `BATCH_SIZE/N_BATCHES` を自動調整 |
 | `DIFFCD_AUTO_TUNE_RESPECT_MANUAL` | `1` | 手動値 (`BATCH_SIZE/N_BATCHES/RESOLUTION`) を指定した場合は自動調整を無効化 |

@@ -197,7 +197,7 @@ def _upgrade_legacy_diffcd_defaults(raw: dict[str, Any]) -> dict[str, Any]:
         return upgraded
 
     upgraded["diffcd_batch_size"] = _env_int("DIFFCD_BATCH_SIZE", 5000)
-    upgraded["diffcd_n_batches"] = _env_int("DIFFCD_N_BATCHES", 40000)
+    upgraded["diffcd_n_batches"] = _env_int("DIFFCD_N_BATCHES", 30000)
     upgraded["diffcd_resolution"] = _env_int("DIFFCD_RESOLUTION", 512)
     return upgraded
 
@@ -405,7 +405,7 @@ def _build_pipeline_config(
         denoise_radius_neighbors=max(1, _parse_int(source.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
         denoise_radius_radius_ratio=max(0.0001, _parse_float(source.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
         diffcd_batch_size=_parse_int(source.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
-        diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 40000)),
+        diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 30000)),
         diffcd_resolution=_parse_int(source.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
         texture_size=_parse_int(source.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
     )
