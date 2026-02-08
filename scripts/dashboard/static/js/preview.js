@@ -192,9 +192,15 @@ export class PreviewPanel {
 
     const stage = this._stages[2];
     if (!stage) return;
+    stage.centerOffset = null;
+    cameraOverlay.remove();
 
     // Load point cloud
-    await this._loadPLYIntoStage(2, plyFile);
+    const loaded = await this._loadPLYIntoStage(2, plyFile);
+    if (!loaded) {
+      console.warn(`Pi3X point cloud not ready: ${plyFile}`);
+      return;
+    }
 
     // Update point count
     if (stage.currentObject?.geometry) {
@@ -268,8 +274,11 @@ export class PreviewPanel {
         if (toggle) {
           toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
+      } else {
+        cameraOverlay.remove();
       }
     } catch (e) {
+      cameraOverlay.remove();
       console.error('Failed to load camera poses:', e);
     }
   }
@@ -466,7 +475,7 @@ export class PreviewPanel {
    */
   async _loadPLYIntoStage(stageNum, relativePath) {
     const stage = this._stages[stageNum];
-    if (!stage) return;
+    if (!stage) return false;
 
     // Remove previous object
     if (stage.currentObject) {
@@ -543,8 +552,11 @@ export class PreviewPanel {
       stage.currentObject = obj;
       stage.sceneRoot.add(obj);
       this._fitCamera(stage, geometry.boundingBox);
+      return true;
     } catch (e) {
       console.error(`Failed to load PLY (stage ${stageNum}):`, e);
+      stage.centerOffset = null;
+      return false;
     }
   }
 
