@@ -36,6 +36,19 @@ SAM2_MODEL_CONFIGS = {
     },
 }
 
+_NORM_UPPER = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
+
+
+def _sanitize_normalized_point(nx: float, ny: float) -> tuple[float, float]:
+    """Clamp normalized coordinates into [0, 1) and handle non-finite input."""
+    if not np.isfinite(nx):
+        nx = 0.0
+    if not np.isfinite(ny):
+        ny = 0.0
+    nx = float(np.clip(nx, 0.0, _NORM_UPPER))
+    ny = float(np.clip(ny, 0.0, _NORM_UPPER))
+    return nx, ny
+
 
 class SAM2Session:
     """Manages SAM2 state for the Gradio UI session."""
@@ -130,7 +143,9 @@ def _create_mask_overlay(
 
     h, w = vis.shape[:2]
     for (nx, ny), label in zip(points, labels):
-        px, py = int(nx * w), int(ny * h)
+        nx, ny = _sanitize_normalized_point(nx, ny)
+        px = int(np.clip(round(nx * w), 0, w - 1))
+        py = int(np.clip(round(ny * h), 0, h - 1))
         c = (0, 255, 0) if label == 1 else (255, 0, 0)
         cv2.circle(vis, (px, py), 8, c, -1)
         cv2.circle(vis, (px, py), 10, (255, 255, 255), 2)
@@ -139,10 +154,10 @@ def _create_mask_overlay(
 
 def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
     """Run SAM2 inference on frame 0 with all accumulated click points."""
-    points_px = [
-        [p[0] * session.img_w, p[1] * session.img_h]
-        for p in session.click_points
-    ]
+    points_px = []
+    for p in session.click_points:
+        nx, ny = _sanitize_normalized_point(p[0], p[1])
+        points_px.append([nx * session.img_w, ny * session.img_h])
     points_np = np.array(points_px, dtype=np.float32)
     labels_np = np.array(session.click_labels, dtype=np.int32)
 
