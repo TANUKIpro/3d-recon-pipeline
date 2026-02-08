@@ -71,6 +71,70 @@ PRIMARY_ARTIFACT_PATHS = (
     "texture.png",
     "intrinsics.json",
 )
+DENOISE_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
+    "balanced": {
+        "denoise_algorithm": "dbscan_sor",
+        "denoise_dbscan_eps": 0.0,
+        "denoise_dbscan_eps_ratio": 0.02,
+        "denoise_dbscan_min_samples": 10,
+        "denoise_dbscan_max_points": 500000,
+        "denoise_sor_neighbors": 20,
+        "denoise_sor_std_ratio": 2.0,
+        "denoise_radius_neighbors": 8,
+        "denoise_radius_radius_ratio": 0.015,
+    },
+    "detail_preserving": {
+        "denoise_algorithm": "sor_only",
+        "denoise_dbscan_eps": 0.0,
+        "denoise_dbscan_eps_ratio": 0.02,
+        "denoise_dbscan_min_samples": 10,
+        "denoise_dbscan_max_points": 500000,
+        "denoise_sor_neighbors": 16,
+        "denoise_sor_std_ratio": 2.6,
+        "denoise_radius_neighbors": 8,
+        "denoise_radius_radius_ratio": 0.015,
+    },
+    "isolate_subject": {
+        "denoise_algorithm": "dbscan_only",
+        "denoise_dbscan_eps": 0.0,
+        "denoise_dbscan_eps_ratio": 0.018,
+        "denoise_dbscan_min_samples": 8,
+        "denoise_dbscan_max_points": 500000,
+        "denoise_sor_neighbors": 20,
+        "denoise_sor_std_ratio": 2.0,
+        "denoise_radius_neighbors": 8,
+        "denoise_radius_radius_ratio": 0.015,
+    },
+    "sparse_noise": {
+        "denoise_algorithm": "radius_only",
+        "denoise_dbscan_eps": 0.0,
+        "denoise_dbscan_eps_ratio": 0.02,
+        "denoise_dbscan_min_samples": 10,
+        "denoise_dbscan_max_points": 500000,
+        "denoise_sor_neighbors": 20,
+        "denoise_sor_std_ratio": 2.0,
+        "denoise_radius_neighbors": 6,
+        "denoise_radius_radius_ratio": 0.012,
+    },
+    "aggressive_cleanup": {
+        "denoise_algorithm": "dbscan_radius",
+        "denoise_dbscan_eps": 0.0,
+        "denoise_dbscan_eps_ratio": 0.024,
+        "denoise_dbscan_min_samples": 14,
+        "denoise_dbscan_max_points": 500000,
+        "denoise_sor_neighbors": 20,
+        "denoise_sor_std_ratio": 2.0,
+        "denoise_radius_neighbors": 10,
+        "denoise_radius_radius_ratio": 0.02,
+    },
+}
+DENOISE_ALGORITHMS = {
+    "dbscan_sor",
+    "dbscan_only",
+    "sor_only",
+    "radius_only",
+    "dbscan_radius",
+}
 
 
 def _utc_iso(ts: float | None = None) -> str:
@@ -107,6 +171,11 @@ def _parse_float(value: Any, fallback: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _parse_choice(value: Any, choices: set[str], fallback: str) -> str:
+    candidate = str(value or "").strip()
+    return candidate if candidate in choices else fallback
 
 
 def _env_int(name: str, fallback: int) -> int:
@@ -266,6 +335,23 @@ def _build_pipeline_config(
     object_name: str,
     output_dir: Path,
 ) -> PipelineConfig:
+    raw_preset = str(raw.get("denoise_preset") or "").strip()
+    if raw_preset == "custom":
+        preset = "custom"
+        denoise_defaults = DENOISE_PRESET_DEFAULTS["balanced"]
+    else:
+        preset = _parse_choice(
+            raw_preset,
+            set(DENOISE_PRESET_DEFAULTS),
+            "balanced",
+        )
+        denoise_defaults = DENOISE_PRESET_DEFAULTS[preset]
+    denoise_algorithm = _parse_choice(
+        raw.get("denoise_algorithm"),
+        DENOISE_ALGORITHMS,
+        str(denoise_defaults["denoise_algorithm"]),
+    )
+
     return PipelineConfig(
         video_path=video_path,
         output_dir=str(output_dir),
@@ -276,6 +362,16 @@ def _build_pipeline_config(
         confidence_threshold=_parse_float(raw.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.1)),
         edge_rtol=_parse_float(raw.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
         sam2_model=str(raw.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
+        denoise_preset=preset,
+        denoise_algorithm=denoise_algorithm,
+        denoise_dbscan_eps=max(0.0, _parse_float(raw.get("denoise_dbscan_eps"), float(denoise_defaults["denoise_dbscan_eps"]))),
+        denoise_dbscan_eps_ratio=max(0.0001, _parse_float(raw.get("denoise_dbscan_eps_ratio"), float(denoise_defaults["denoise_dbscan_eps_ratio"]))),
+        denoise_dbscan_min_samples=max(1, _parse_int(raw.get("denoise_dbscan_min_samples"), int(denoise_defaults["denoise_dbscan_min_samples"]))),
+        denoise_dbscan_max_points=max(1000, _parse_int(raw.get("denoise_dbscan_max_points"), int(denoise_defaults["denoise_dbscan_max_points"]))),
+        denoise_sor_neighbors=max(2, _parse_int(raw.get("denoise_sor_neighbors"), int(denoise_defaults["denoise_sor_neighbors"]))),
+        denoise_sor_std_ratio=max(0.1, _parse_float(raw.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
+        denoise_radius_neighbors=max(1, _parse_int(raw.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
+        denoise_radius_radius_ratio=max(0.0001, _parse_float(raw.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
         diffcd_batch_size=_parse_int(raw.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 3000)),
         diffcd_n_batches=_parse_int(raw.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 25000)),
         diffcd_resolution=_parse_int(raw.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 384)),
@@ -353,6 +449,8 @@ def _summarize_object(
     }
     if include_files:
         item["files"] = files
+        if isinstance(meta.get("config"), dict):
+            item["config"] = meta["config"]
     return item
 
 

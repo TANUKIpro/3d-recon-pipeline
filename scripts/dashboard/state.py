@@ -81,6 +81,16 @@ class PipelineConfig:
     confidence_threshold: float = 0.1
     edge_rtol: float = 0.03
     sam2_model: str = "large"
+    denoise_preset: str = "balanced"
+    denoise_algorithm: str = "dbscan_sor"
+    denoise_dbscan_eps: float = 0.0
+    denoise_dbscan_eps_ratio: float = 0.02
+    denoise_dbscan_min_samples: int = 10
+    denoise_dbscan_max_points: int = 500000
+    denoise_sor_neighbors: int = 20
+    denoise_sor_std_ratio: float = 2.0
+    denoise_radius_neighbors: int = 8
+    denoise_radius_radius_ratio: float = 0.015
     diffcd_batch_size: int = 3000
     diffcd_n_batches: int = 25000
     diffcd_resolution: int = 384
