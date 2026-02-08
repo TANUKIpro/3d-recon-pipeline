@@ -8,7 +8,7 @@ Pipeline stages:
   2. Pi3X 3D reconstruction (GPU)
   3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
   4. Point cloud denoising (CPU)
-  5. DiffCD mesh reconstruction (GPU/JAX subprocess)
+  5. Mesh reconstruction (Classical Poisson or DiffCD)
   6. Texture baking (CPU)
 """
 
@@ -38,10 +38,17 @@ Examples:
     parser.add_argument("--output-dir", default="/data/output", help="Output directory")
     parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 7),
                         help="Skip to stage N (for resuming after interruption)")
+    parser.add_argument(
+        "--mesh-method",
+        default="poisson",
+        choices=["poisson", "diffcd"],
+        help="Mesh method for stage 5 (default: poisson)",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir
     skip_to = args.skip_to
+    mesh_method = str(args.mesh_method or "poisson").strip().lower()
 
     print("=" * 60)
     print("im2pc-pipeline: RGB Video → Textured 3D Mesh")
@@ -125,15 +132,21 @@ Examples:
         denoised_ply = Path(output_dir) / "object_denoised.ply"
 
     # =====================================================================
-    # Stage 5: DiffCD Mesh Reconstruction
+    # Stage 5: Mesh Reconstruction
     # =====================================================================
     if skip_to <= 5:
         print("\n" + "=" * 60)
-        print("Stage 5/6: DiffCD Mesh Reconstruction")
-        print("=" * 60)
-        from stage_diffcd_mesh import run_diffcd
+        if mesh_method == "diffcd":
+            print("Stage 5/6: Learning Mesh Reconstruction (DiffCD)")
+            from stage_diffcd_mesh import run_diffcd
 
-        mesh_ply = run_diffcd(str(denoised_ply), output_dir)
+            mesh_ply = run_diffcd(str(denoised_ply), output_dir)
+        else:
+            print("Stage 5/6: Classical Mesh Reconstruction (Normals + Poisson)")
+            from stage_classical_mesh import run_classical_mesh
+
+            mesh_ply = run_classical_mesh(str(denoised_ply), output_dir)
+        print("=" * 60)
         print(f"  → {mesh_ply}")
     else:
         mesh_ply = Path(output_dir) / "object_mesh.ply"

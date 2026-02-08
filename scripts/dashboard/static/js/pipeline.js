@@ -3,23 +3,44 @@
  */
 
 const STAGE_COUNT = 6;
+const MESH_METHODS = new Set(['diffcd', 'poisson']);
+
+function _isDone(info = {}) {
+  const status = String(info.status || 'pending');
+  if (status === 'complete' || status === 'interactive') return true;
+  return Number(info.progress) >= 100;
+}
 
 export class PipelineUI {
   constructor() {
-    this._pills = [];
-    this._connectors = [];
+    this._pills = {};
+    this._mainConnectors = [];
+    this._poissonConnectors = [];
     this._timers = {}; // stage → interval id
     this._stageMeta = {};
+    this._meshMethod = 'poisson';
 
     for (let i = 1; i <= STAGE_COUNT; i++) {
-      this._pills.push(document.querySelector(`.stage-pill[data-stage="${i}"]`));
+      this._pills[i] = document.querySelector(`.stage-pill[data-stage="${i}"]`);
       this._stageMeta[i] = {
         status: 'pending',
         progress: 0,
         detail: null,
+        elapsed: null,
       };
     }
-    this._connectors = Array.from(document.querySelectorAll('.stage-connector'));
+
+    this._meshPills = {
+      diffcd: document.getElementById('mesh-pill-diffcd'),
+      poisson: document.getElementById('mesh-pill-poisson'),
+    };
+    this._mainConnectors = Array.from(document.querySelectorAll('.stage-connector-main'));
+    this._poissonConnectors = [
+      document.getElementById('mesh-connector-poisson-left'),
+      document.getElementById('mesh-connector-poisson-right'),
+    ].filter(Boolean);
+
+    this.setMeshMethod(this._meshMethod);
   }
 
   /** Update all stages from a status dict. */
@@ -32,16 +53,62 @@ export class PipelineUI {
         status: info.status || 'pending',
         progress: this._normalizeProgress(info.progress),
         detail: info.detail || null,
+        elapsed: info.elapsed ?? null,
       };
       this._setStageState(i, info.status, info.elapsed, info.progress, info.detail);
     }
     this._refreshConnectors();
   }
 
+  setMeshMethod(method) {
+    const next = MESH_METHODS.has(String(method)) ? String(method) : 'poisson';
+    this._meshMethod = next;
+    for (const [key, pill] of Object.entries(this._meshPills)) {
+      if (!pill) continue;
+      pill.classList.toggle('active', key === next);
+    }
+
+    // If Stage 5 tab is currently selected, move selected outline to active method.
+    const stage5Focused = Object.values(this._meshPills).some((pill) => pill?.classList.contains('selected'));
+    if (stage5Focused) {
+      for (const [key, pill] of Object.entries(this._meshPills)) {
+        if (!pill) continue;
+        pill.classList.toggle('selected', key === next);
+      }
+    }
+
+    this._setStageState(
+      5,
+      this._stageMeta[5]?.status,
+      this._stageMeta[5]?.elapsed,
+      this._stageMeta[5]?.progress,
+      this._stageMeta[5]?.detail,
+    );
+    this._refreshConnectors();
+  }
+
+  getMeshMethod() {
+    return this._meshMethod;
+  }
+
+  setMeshMethodEnabled(enabled) {
+    const disabled = !enabled;
+    for (const pill of Object.values(this._meshPills)) {
+      if (!pill) continue;
+      pill.classList.toggle('method-disabled', disabled);
+    }
+    const poissonPill = this._meshPills.poisson;
+    if (poissonPill) {
+      poissonPill.setAttribute('tabindex', disabled ? '-1' : '0');
+      poissonPill.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    }
+  }
+
   stageStart(stage) {
     this._stageMeta[stage].status = 'running';
     this._stageMeta[stage].progress = 0;
     this._stageMeta[stage].detail = 'Starting';
+    this._stageMeta[stage].elapsed = null;
     this._setStageState(stage, 'running', null, 0, 'Starting');
     this._startTimer(stage);
   }
@@ -51,6 +118,7 @@ export class PipelineUI {
     this._stageMeta[stage].status = 'complete';
     this._stageMeta[stage].progress = 100;
     this._stageMeta[stage].detail = null;
+    this._stageMeta[stage].elapsed = elapsed ?? null;
     this._setStageState(stage, 'complete', elapsed, 100, null);
     this._refreshConnectors();
   }
@@ -61,6 +129,7 @@ export class PipelineUI {
     let status = current.status;
     if (status === 'pending') status = 'running';
     this._stageMeta[stage] = {
+      ...current,
       status,
       progress: normalized,
       detail: detail ?? current.detail,
@@ -98,6 +167,7 @@ export class PipelineUI {
         status: 'pending',
         progress: 0,
         detail: null,
+        elapsed: null,
       };
       this._setStageState(i, 'pending', null, 0, null);
     }
@@ -115,6 +185,7 @@ export class PipelineUI {
         status: 'pending',
         progress: 0,
         detail: null,
+        elapsed: null,
       };
       this._setStageState(i, 'pending', null, 0, null);
     }
@@ -133,12 +204,38 @@ export class PipelineUI {
     return this._stageMeta[stage]?.status || 'pending';
   }
 
+  _pillForStage(stage) {
+    if (stage === 5) {
+      return this._meshMethod === 'diffcd'
+        ? this._meshPills.diffcd
+        : this._meshPills.poisson;
+    }
+    return this._pills[stage];
+  }
+
+  _inactiveMeshPill() {
+    return this._meshMethod === 'diffcd'
+      ? this._meshPills.poisson
+      : this._meshPills.diffcd;
+  }
+
   _setStageState(stage, status, elapsed, progress, detail) {
-    const pill = this._pills[stage - 1];
+    const pill = this._pillForStage(stage);
     if (!pill) return;
-    const isSelected = pill.classList.contains('selected');
-    pill.className = 'stage-pill';
-    if (isSelected) pill.classList.add('selected');
+
+    this._applyPillState(pill, status, elapsed, progress, detail);
+
+    // Stage 5 has two visible task pills. Keep inactive path visually pending.
+    if (stage === 5) {
+      const inactivePill = this._inactiveMeshPill();
+      if (inactivePill) {
+        this._applyPillState(inactivePill, 'pending', null, 0, null);
+      }
+    }
+  }
+
+  _applyPillState(pill, status, elapsed, progress, detail) {
+    pill.classList.remove('running', 'complete', 'failed', 'interactive');
     if (status && status !== 'pending') {
       pill.classList.add(status);
     }
@@ -162,24 +259,52 @@ export class PipelineUI {
   }
 
   _refreshConnectors() {
-    for (let i = 0; i < this._connectors.length; i++) {
+    // Linear connectors for stages 1→4.
+    for (let i = 0; i < 3; i++) {
       const stage = i + 2;
-      const conn = this._connectors[i];
+      const conn = this._mainConnectors[i];
       if (!conn) continue;
-      const info = this._stageMeta[stage];
-      const done = info.status === 'complete'
-        || info.status === 'interactive'
-        || this._normalizeProgress(info.progress) >= 100;
-      if (done) conn.classList.add('done');
-      else conn.classList.remove('done');
+      const done = _isDone(this._stageMeta[stage]);
+      conn.classList.toggle('active', false);
+      conn.classList.toggle('done', done);
+    }
+
+    const stage5Done = _isDone(this._stageMeta[5]);
+    const stage6Done = _isDone(this._stageMeta[6]);
+    const diffcdActive = this._meshMethod === 'diffcd';
+    const poissonActive = this._meshMethod === 'poisson';
+
+    // Main mesh path (DiffCD) connectors: index 3 = 4→5, index 4 = 5→6.
+    const diffcdLeft = this._mainConnectors[3];
+    const diffcdRight = this._mainConnectors[4];
+    if (diffcdLeft) {
+      diffcdLeft.classList.toggle('active', diffcdActive);
+      diffcdLeft.classList.toggle('done', diffcdActive && stage5Done);
+    }
+    if (diffcdRight) {
+      diffcdRight.classList.toggle('active', diffcdActive);
+      diffcdRight.classList.toggle('done', diffcdActive && stage6Done);
+    }
+
+    // Classical path (Poisson) connectors.
+    const poissonLeft = this._poissonConnectors[0];
+    const poissonRight = this._poissonConnectors[1];
+    if (poissonLeft) {
+      poissonLeft.classList.toggle('active', poissonActive);
+      poissonLeft.classList.toggle('done', poissonActive && stage5Done);
+    }
+    if (poissonRight) {
+      poissonRight.classList.toggle('active', poissonActive);
+      poissonRight.classList.toggle('done', poissonActive && stage6Done);
     }
   }
 
   _startTimer(stage) {
     this._stopTimer(stage);
-    const pill = this._pills[stage - 1];
+    const pill = this._pillForStage(stage);
     if (!pill) return;
     const timeEl = pill.querySelector('.stage-time');
+    if (!timeEl) return;
     const start = Date.now();
     this._timers[stage] = setInterval(() => {
       const secs = (Date.now() - start) / 1000;

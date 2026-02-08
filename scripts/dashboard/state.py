@@ -34,7 +34,7 @@ STAGE_LABELS: dict[int, str] = {
     PipelineStage.PI3X_RECONSTRUCT: "Pi3X 3D Reconstruction",
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.DENOISE: "Point Cloud Denoise",
-    PipelineStage.DIFFCD_MESH: "DiffCD Mesh",
+    PipelineStage.DIFFCD_MESH: "Mesh Reconstruction",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
 }
 
@@ -92,6 +92,7 @@ class PipelineConfig:
     denoise_sor_std_ratio: float = 2.0
     denoise_radius_neighbors: int = 8
     denoise_radius_radius_ratio: float = 0.015
+    mesh_method: str = "poisson"
     diffcd_batch_size: int = 5000
     diffcd_n_batches: int = 30000
     diffcd_resolution: int = 512
@@ -331,6 +332,7 @@ class PipelineSession:
             "cancelled": self.cancelled,
             "resume_from_stage": int(self.resume_from_stage),
             "object_name": self.config.object_name,
+            "mesh_method": self.config.mesh_method,
             "video_path": self.config.video_path,
             "output_dir": self.config.output_dir,
             "frame_count": self.frame_count,

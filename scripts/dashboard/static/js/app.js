@@ -16,6 +16,8 @@ import { CameraOverlay } from './camera-overlay.js';
 const STAGE_COUNT = 6;
 const TRANSITION_STAGE_MAX = 5;
 const DEFAULT_TAUBIN_NU = -0.53;
+const MESH_METHOD_DEFAULT = 'poisson';
+const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -47,6 +49,10 @@ const meshPostLambdaInput = document.getElementById('mesh-post-lambda');
 const meshPostApplyBtn = document.getElementById('mesh-post-apply');
 const meshPostResetBtn = document.getElementById('mesh-post-reset');
 const meshPostStatus = document.getElementById('mesh-post-status');
+const meshMethodPills = {
+  diffcd: document.getElementById('mesh-pill-diffcd'),
+  poisson: document.getElementById('mesh-pill-poisson'),
+};
 
 const _taskConfirmBars = {};
 const _taskConfirmMessages = {};
@@ -58,6 +64,7 @@ let _objectLoadRequestId = 0;
 let _waitingConfirmationStage = null;
 let _latestStatusSnapshot = null;
 let _meshPostInFlight = false;
+let _meshMethod = MESH_METHOD_DEFAULT;
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -70,6 +77,8 @@ for (let stage = 1; stage <= STAGE_COUNT; stage++) {
 }
 resetTaskConfirmBars();
 initMeshPostToolbar();
+bindMeshMethodPills();
+applyMeshMethod(config.getMeshMethod?.() || MESH_METHOD_DEFAULT, { announce: false });
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -106,6 +115,8 @@ config.onObjectSelected = async (objectName) => {
     setMeshPostStatus('');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
+    pipelineUI.setMeshMethodEnabled(true);
+    applyMeshMethod(MESH_METHOD_DEFAULT, { announce: false });
     stageCtrl.activateStage(1);
     return;
   }
@@ -137,7 +148,9 @@ config.onObjectSelected = async (objectName) => {
 
 config.onStart = async (cfg) => {
   try {
+    applyMeshMethod(cfg.mesh_method || _meshMethod, { announce: false });
     config.setRunning(true);
+    pipelineUI.setMeshMethodEnabled(false);
     setStatus('running', 'Running');
 
     const res = await fetch('/api/pipeline/start', {
@@ -149,6 +162,7 @@ config.onStart = async (cfg) => {
     if (!res.ok || data.error) {
       alert('Start failed: ' + (data.error || res.status));
       config.setRunning(false);
+      pipelineUI.setMeshMethodEnabled(true);
       setStatus('idle', 'Idle');
       return;
     }
@@ -177,6 +191,7 @@ config.onStart = async (cfg) => {
   } catch (e) {
     alert('Start failed: ' + e.message);
     config.setRunning(false);
+    pipelineUI.setMeshMethodEnabled(true);
     setStatus('idle', 'Idle');
   }
 };
@@ -326,6 +341,7 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
 
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
+  pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
   _waitingConfirmationStage = null;
@@ -342,6 +358,7 @@ ws.on('pipeline_complete', (msg) => {
 
 ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
+  pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
   if (_waitingConfirmationStage !== null) {
@@ -398,6 +415,61 @@ setInterval(pollVRAM, 5000);
 pollVRAM();
 
 // ── Helpers ──────────────────────────────────────────────────
+
+function normalizeMeshMethod(value) {
+  const method = String(value || '').trim().toLowerCase();
+  return MESH_METHOD_SET.has(method) ? method : MESH_METHOD_DEFAULT;
+}
+
+function isPipelineRunning() {
+  return _latestStatusSnapshot?.running === true || statusBadge?.classList.contains('badge-running');
+}
+
+function bindMeshMethodPills() {
+  const diffcdPill = meshMethodPills.diffcd;
+  const poissonPill = meshMethodPills.poisson;
+
+  diffcdPill?.addEventListener('click', (event) => {
+    if (isPipelineRunning()) {
+      event.preventDefault();
+      return;
+    }
+    applyMeshMethod('diffcd');
+    stageCtrl.activateStage(5);
+  });
+
+  const choosePoisson = (event) => {
+    if (isPipelineRunning()) {
+      event.preventDefault();
+      return;
+    }
+    applyMeshMethod('poisson');
+    stageCtrl.activateStage(5);
+  };
+  poissonPill?.addEventListener('click', choosePoisson);
+  poissonPill?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      choosePoisson(event);
+    }
+  });
+}
+
+function applyMeshMethod(method, opts = {}) {
+  const resolved = normalizeMeshMethod(method);
+  const changed = resolved !== _meshMethod;
+  _meshMethod = resolved;
+
+  pipelineUI.setMeshMethod(resolved);
+  config.setMeshMethod?.(resolved);
+
+  if (changed && opts.announce !== false) {
+    const label = resolved === 'diffcd'
+      ? 'Learning Mesh (DiffCD)'
+      : 'Classical Mesh (Normals + Poisson)';
+    appendLog('stdout', `Mesh method switched to: ${label}\n`, { stage: 5 });
+  }
+}
 
 function initMeshPostToolbar() {
   if (!meshPostToolbar) return;
@@ -804,6 +876,8 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 
 async function applyStatusSnapshot(statusMsg, opts = {}) {
   _latestStatusSnapshot = statusMsg;
+  applyMeshMethod(statusMsg?.mesh_method || _meshMethod, { announce: false });
+  pipelineUI.setMeshMethodEnabled(statusMsg?.running !== true);
   pipelineUI.updateAll(statusMsg);
   syncStageStates(statusMsg);
   syncTaskConfirmBarsFromStatus(statusMsg);

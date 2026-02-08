@@ -59,6 +59,19 @@ async def _broadcast_stage_progress(
     })
 
 
+def _mesh_method_key(value: str | None) -> str:
+    method = str(value or "").strip().lower()
+    if method == "diffcd":
+        return "diffcd"
+    return "poisson"
+
+
+def _mesh_method_label(method: str) -> str:
+    if method == "diffcd":
+        return "Learning Mesh (DiffCD)"
+    return "Classical Mesh (Normals + Poisson)"
+
+
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
     """Execute the full 6-stage pipeline asynchronously."""
     cfg = session.config
@@ -336,22 +349,31 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             )
             session.denoised_ply = str(Path(output_dir) / "object_denoised.ply")
             _check_cancelled(session)
+            mesh_method = _mesh_method_key(cfg.mesh_method)
+            mesh_label = _mesh_method_label(mesh_method)
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.DENOISE,
                 PipelineStage.DIFFCD_MESH,
-                "Point Cloud Denoise complete. Continue to DiffCD Mesh?",
+                f"Point Cloud Denoise complete. Continue to {mesh_label}?",
             )
 
         if start_stage <= int(PipelineStage.DIFFCD_MESH):
             _require_file(session.denoised_ply, "Denoised point cloud")
-            # ── Stage 5: DiffCD Mesh ──────────────────────────────
+            # ── Stage 5: Mesh Reconstruction ──────────────────────
+            mesh_method = _mesh_method_key(cfg.mesh_method)
+            mesh_label = _mesh_method_label(mesh_method)
+            if mesh_method == "diffcd":
+                stage_fn = _stage_diffcd
+            else:
+                stage_fn = _stage_classical_mesh
             await _run_stage(
                 session,
                 PipelineStage.DIFFCD_MESH,
-                _stage_diffcd,
+                stage_fn,
                 session.denoised_ply,
                 output_dir,
+                label=mesh_label,
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
@@ -359,7 +381,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session,
                 PipelineStage.DIFFCD_MESH,
                 PipelineStage.TEXTURE_BAKE,
-                "DiffCD Mesh complete. Continue to Texture Bake?",
+                f"{mesh_label} complete. Continue to Texture Bake?",
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
@@ -521,13 +543,14 @@ async def _run_stage(
     stage: PipelineStage,
     fn,
     *args,
+    label: str | None = None,
 ) -> None:
     """Run a blocking stage function in a thread with lifecycle broadcasts."""
     session.stage_start(stage)
     await broadcast(session, {
         "type": "stage_start",
         "stage": int(stage),
-        "label": STAGE_LABELS[stage],
+        "label": label or STAGE_LABELS[stage],
     })
     await _broadcast_stage_progress(session, stage, progress=0.0, detail="Starting")
     loop = asyncio.get_running_loop()
@@ -656,6 +679,12 @@ def _stage_denoise(
 def _stage_diffcd(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
     from stage_diffcd_mesh import run_diffcd
     run_diffcd(denoised_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_classical_mesh(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_classical_mesh import run_classical_mesh
+
+    run_classical_mesh(denoised_ply, output_dir, progress_cb=progress_cb)
 
 
 def _stage_texture_bake(

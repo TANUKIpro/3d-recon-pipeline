@@ -50,7 +50,15 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     2: {"dirs": (), "files": ("object_full.ply", "pi3x_cache.npz", "camera_poses.json")},
     3: {"dirs": ("masks",), "files": ("object.ply",)},
     4: {"dirs": (), "files": ("object_denoised.ply",)},
-    5: {"dirs": ("diffcd",), "files": ("object_mesh.ply", "object_mesh_raw.ply", "object_points.npy")},
+    5: {
+        "dirs": ("diffcd", "classical_mesh"),
+        "files": (
+            "object_mesh.ply",
+            "object_mesh_raw.ply",
+            "object_points.npy",
+            "object_points_with_normals.ply",
+        ),
+    },
     6: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
@@ -136,6 +144,7 @@ DENOISE_ALGORITHMS = {
     "radius_only",
     "dbscan_radius",
 }
+MESH_METHODS = {"poisson", "diffcd"}
 MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
 _LEGACY_DIFFCD_DEFAULTS = (3000, 2500, 384)
 
@@ -371,6 +380,7 @@ def _build_pipeline_config(
         if upgrade_legacy_diffcd_defaults
         else raw
     )
+    default_mesh_method = _parse_choice(os.environ.get("MESH_METHOD"), MESH_METHODS, "poisson")
     raw_preset = str(source.get("denoise_preset") or "").strip()
     if raw_preset == "custom":
         preset = "custom"
@@ -418,6 +428,7 @@ def _build_pipeline_config(
         denoise_sor_std_ratio=max(0.1, _parse_float(source.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
         denoise_radius_neighbors=max(1, _parse_int(source.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
         denoise_radius_radius_ratio=max(0.0001, _parse_float(source.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
+        mesh_method=_parse_choice(source.get("mesh_method"), MESH_METHODS, default_mesh_method),
         diffcd_batch_size=_parse_int(source.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
         diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 30000)),
         diffcd_resolution=_parse_int(source.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
