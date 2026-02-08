@@ -141,8 +141,12 @@ class PipelineSession:
     sam2_width: int = 0
     sam2_height: int = 0
 
-    # Pi3X preview approval
-    pi3x_approve_event: asyncio.Event = field(default_factory=asyncio.Event)
+    # Global stage-to-stage approval
+    next_stage_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
+    next_stage_confirmation_required: bool = False
+    next_stage_confirmation_from: int | None = None
+    next_stage_confirmation_to: int | None = None
+    next_stage_confirmation_message: str | None = None
 
     # Pipeline task handle
     _task: asyncio.Task | None = field(default=None, repr=False)
@@ -174,7 +178,11 @@ class PipelineSession:
         self.sam2_confirm_event = asyncio.Event()
         self.sam2_approve_event = asyncio.Event()
         self.sam2_approved = False
-        self.pi3x_approve_event = asyncio.Event()
+        self.next_stage_confirm_event = asyncio.Event()
+        self.next_stage_confirmation_required = False
+        self.next_stage_confirmation_from = None
+        self.next_stage_confirmation_to = None
+        self.next_stage_confirmation_message = None
         self.sam2_frame_count = 0
         self._task = None
         self.frames_dir = None
@@ -240,6 +248,11 @@ class PipelineSession:
         self.sam2_frame_count = 0
         self.sam2_width = 0
         self.sam2_height = 0
+        self.next_stage_confirmation_required = False
+        self.next_stage_confirmation_from = None
+        self.next_stage_confirmation_to = None
+        self.next_stage_confirmation_message = None
+        self.next_stage_confirm_event = asyncio.Event()
         return {
             "stage_complete": stage_complete,
             "frame_count": frame_count,
@@ -274,6 +287,24 @@ class PipelineSession:
         info = self.stages[int(stage)]
         info.status = StageStatus.INTERACTIVE
 
+    def require_next_stage_confirmation(
+        self,
+        from_stage: PipelineStage,
+        to_stage: PipelineStage,
+        message: str,
+    ) -> None:
+        self.next_stage_confirmation_required = True
+        self.next_stage_confirmation_from = int(from_stage)
+        self.next_stage_confirmation_to = int(to_stage)
+        self.next_stage_confirmation_message = str(message)
+        self.next_stage_confirm_event.clear()
+
+    def clear_next_stage_confirmation(self) -> None:
+        self.next_stage_confirmation_required = False
+        self.next_stage_confirmation_from = None
+        self.next_stage_confirmation_to = None
+        self.next_stage_confirmation_message = None
+
     def stage_progress(
         self,
         stage: PipelineStage,
@@ -306,6 +337,12 @@ class PipelineSession:
             "elapsed": (time.time() - self.pipeline_start_time)
             if self.pipeline_start_time
             else None,
+            "next_stage_confirmation": {
+                "required": self.next_stage_confirmation_required,
+                "from_stage": self.next_stage_confirmation_from,
+                "to_stage": self.next_stage_confirmation_to,
+                "message": self.next_stage_confirmation_message,
+            },
             "stages": {
                 str(k): {
                     "status": v.status.value,

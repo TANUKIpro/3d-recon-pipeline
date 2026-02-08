@@ -28,10 +28,37 @@ const cameraOverlay = new CameraOverlay();
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 const overallProgressBadge = document.getElementById('overall-progress-badge');
+const nextStageBar = document.getElementById('next-stage-bar');
+const nextStageMessage = document.getElementById('next-stage-message');
+const nextStageConfirmBtn = document.getElementById('next-stage-confirm');
 
 let _extractedFrameCount = 0;
 let _hydratedStatusKey = '';
 let _objectLoadRequestId = 0;
+
+if (nextStageConfirmBtn) {
+  nextStageConfirmBtn.addEventListener('click', async () => {
+    if (!isNextStageConfirmationPending()) return;
+    nextStageConfirmBtn.disabled = true;
+    nextStageConfirmBtn.textContent = 'Proceeding...';
+    try {
+      const res = await fetch('/api/pipeline/confirm-next', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      if (data.status === 'no_waiting_confirmation') {
+        clearNextStageConfirmation();
+        return;
+      }
+      nextStageConfirmBtn.textContent = 'Waiting...';
+    } catch (e) {
+      nextStageConfirmBtn.disabled = false;
+      nextStageConfirmBtn.textContent = 'Continue';
+      log.append('stderr', `Next-stage confirmation failed: ${e.message}\n`);
+    }
+  });
+}
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -62,7 +89,7 @@ config.onObjectSelected = async (objectName) => {
     sam2Verify.hide();
     preview.reset();
     pipelineUI.reset();
-    hidePi3xApproveButton();
+    clearNextStageConfirmation();
     setOverallProgress(0);
     setStatus('idle', 'Idle');
     stageCtrl.activateStage(1);
@@ -118,7 +145,7 @@ config.onStart = async (cfg) => {
     cameraOverlay.remove();
     sam2.deactivate();
     sam2Verify.hide();
-    hidePi3xApproveButton();
+    clearNextStageConfirmation();
     pipelineUI.resetFromStage(resumeFromStage);
     _extractedFrameCount = 0;
     _hydratedStatusKey = '';
@@ -152,14 +179,14 @@ ws.on('status', async (msg) => {
 });
 
 ws.on('stage_start', (msg) => {
-  // Stage 2 is marked "interactive" while waiting for approval.
-  // Once Stage 3 starts, Pi3X approval is complete and the pill should return to "complete".
+  // Stage 2 is marked "interactive" while waiting for confirmation.
+  // Once Stage 3 starts, Stage 2 confirmation is complete and the pill should return to "complete".
   if (msg.stage >= 3 && pipelineUI.getStageStatus(2) === 'interactive') {
     pipelineUI.stageComplete(2);
     stageCtrl.setStageState(2, 'complete');
-    hidePi3xApproveButton();
   }
 
+  clearNextStageConfirmation();
   stageCtrl.activateStage(msg.stage);
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
@@ -226,15 +253,33 @@ ws.on('sam2_verification_ready', (msg) => {
 
 ws.on('pi3x_preview_ready', () => {
   pipelineUI.stageInteractive(2);
+  stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
-  showPi3xApproveButton();
-  log.append('stdout', 'Pi3X complete. Review the 3D preview and click "Approve & Continue".\n');
+  log.append('stdout', 'Pi3X complete. Review the 3D preview, then use the Continue bar.\n');
+});
+
+ws.on('next_stage_confirmation_required', (msg) => {
+  const fromStage = Number(msg.from_stage);
+  if (fromStage >= 1 && fromStage <= 6) {
+    pipelineUI.stageInteractive(fromStage);
+    stageCtrl.setStageState(fromStage, 'interactive');
+    stageCtrl.activateStage(resolveReviewStageForConfirmation(fromStage));
+  }
+  setNextStageConfirmation({ required: true, ...msg });
+  if (msg.message) {
+    log.append('stdout', `${msg.message}\n`);
+  }
+});
+
+ws.on('next_stage_confirmation_cleared', () => {
+  clearNextStageConfirmation();
 });
 
 ws.on('pipeline_complete', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();
+  clearNextStageConfirmation();
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
@@ -244,6 +289,7 @@ ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();
+  clearNextStageConfirmation();
   const cancelled = /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
   if (msg.stage >= 1 && msg.stage <= 6) {
@@ -314,14 +360,29 @@ function resolvePreferredStage(statusMsg) {
   return 1;
 }
 
+function resolveReviewStageForConfirmation(stage) {
+  const n = Number(stage);
+  if (!Number.isFinite(n) || n < 1 || n > 6) return 1;
+  // Stage 3 output is visualized in the Stage 2 Pi3X panel.
+  if (n === 3) return 2;
+  return n;
+}
+
 function buildStatusKey(statusMsg) {
   const objectName = statusMsg?.object_name || '';
+  const next = statusMsg?.next_stage_confirmation || {};
   const stageState = [];
   for (let i = 1; i <= 6; i++) {
     const info = getStageInfo(statusMsg, i);
     stageState.push(`${info?.status || 'pending'}:${Math.round(Number(info?.progress) || 0)}`);
   }
-  return `${objectName}|${stageState.join('|')}`;
+  return [
+    objectName,
+    stageState.join('|'),
+    next.required ? 'wait' : 'idle',
+    next.from_stage || '',
+    next.to_stage || '',
+  ].join('|');
 }
 
 function syncStageStates(statusMsg) {
@@ -344,7 +405,6 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
   sam2.deactivate();
   sam2Verify.hide();
   preview.reset();
-  hidePi3xApproveButton();
 
   if (isStageDone(statusMsg, 1)) {
     const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -370,6 +430,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   pipelineUI.updateAll(statusMsg);
   syncStageStates(statusMsg);
   setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
+  setNextStageConfirmation(statusMsg.next_stage_confirmation || {});
 
   if (statusMsg.object_name) {
     config.setObjectName(statusMsg.object_name);
@@ -378,18 +439,27 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   if (statusMsg.running) {
     config.setRunning(true);
     setStatus('running', 'Running');
-    stageCtrl.activateStage(resolvePreferredStage(statusMsg));
-
-    // Reconnect-safe: if already waiting for Pi3X approval, show button again.
-    if (getStageInfo(statusMsg, 2)?.status === 'interactive') {
-      await preview.loadPi3xResults(cameraOverlay);
-      showPi3xApproveButton();
+    const waiting = statusMsg?.next_stage_confirmation?.required === true;
+    const waitingFromStage = Number(statusMsg?.next_stage_confirmation?.from_stage);
+    if (waiting) {
+      await hydrateOutputsFromStatus(statusMsg, {
+        force: opts.forceHydrate === true,
+        activate: false,
+      });
+      if (Number.isFinite(waitingFromStage) && waitingFromStage >= 1 && waitingFromStage <= 6) {
+        stageCtrl.activateStage(resolveReviewStageForConfirmation(waitingFromStage));
+      } else {
+        stageCtrl.activateStage(resolvePreferredStage(statusMsg));
+      }
+    } else {
+      stageCtrl.activateStage(resolvePreferredStage(statusMsg));
     }
     return;
   }
 
   config.setRunning(false);
   config.setActiveStage(null);
+  clearNextStageConfirmation();
 
   const allDone = [1, 2, 3, 4, 5, 6].every((stage) => isStageDone(statusMsg, stage));
   if (allDone) setStatus('complete', 'Done');
@@ -403,24 +473,39 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   }
 }
 
-function showPi3xApproveButton() {
-  const btn = document.getElementById('pi3x-approve');
-  if (!btn) return;
-  btn.style.display = 'inline-block';
-  btn.disabled = false;
-  btn.textContent = 'Approve & Continue';
-  btn.onclick = async () => {
-    btn.disabled = true;
-    btn.textContent = 'Proceeding...';
-    await fetch('/api/pi3x/approve', { method: 'POST' });
-    btn.style.display = 'none';
-  };
+function isNextStageConfirmationPending() {
+  return nextStageBar?.dataset.required === '1';
 }
 
-function hidePi3xApproveButton() {
-  const btn = document.getElementById('pi3x-approve');
-  if (!btn) return;
-  btn.style.display = 'none';
+function setNextStageConfirmation(next) {
+  if (!nextStageBar || !nextStageMessage || !nextStageConfirmBtn) return;
+
+  const required = next?.required === true;
+  if (!required) {
+    clearNextStageConfirmation();
+    return;
+  }
+
+  const fromStage = Number(next?.from_stage);
+  const toStage = Number(next?.to_stage);
+  const fromLabel = Number.isFinite(fromStage) ? `Stage ${fromStage}` : 'Current stage';
+  const toLabel = Number.isFinite(toStage) ? `Stage ${toStage}` : 'next stage';
+  const message = String(next?.message || '').trim();
+
+  nextStageBar.dataset.required = '1';
+  nextStageBar.classList.add('waiting');
+  nextStageConfirmBtn.disabled = false;
+  nextStageConfirmBtn.textContent = 'Continue';
+  nextStageMessage.textContent = message || `${fromLabel} complete. Continue to ${toLabel}?`;
+}
+
+function clearNextStageConfirmation() {
+  if (!nextStageBar || !nextStageMessage || !nextStageConfirmBtn) return;
+  nextStageBar.dataset.required = '0';
+  nextStageBar.classList.remove('waiting');
+  nextStageMessage.textContent = 'No stage confirmation pending.';
+  nextStageConfirmBtn.disabled = true;
+  nextStageConfirmBtn.textContent = 'Continue';
 }
 
 function setStatus(state, text) {
