@@ -25,7 +25,6 @@ export class ConfigPanel {
     this._objectInfo = document.getElementById('object-info');
     this._objectArtifacts = document.getElementById('object-artifacts');
     this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
-    this._resumeStageSelect = document.getElementById('cfg-resume-stage');
     this._resumeStageInfo = document.getElementById('cfg-resume-stage-info');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
@@ -55,6 +54,7 @@ export class ConfigPanel {
     this._objectNameDirty = false;
     this._running = false;
     this._selectedObjectSummary = null;
+    this._startStage = 1;
 
     this._bindEvents();
     this._loadVideos();
@@ -69,7 +69,6 @@ export class ConfigPanel {
     this._videoSelect.disabled = running;
     this._objectSelect.disabled = running;
     this._objectNameInput.disabled = running;
-    this._resumeStageSelect.disabled = running;
     this._refreshObjectsBtn.disabled = running;
     for (const inp of Object.values(this._inputs)) {
       inp.disabled = running;
@@ -81,6 +80,7 @@ export class ConfigPanel {
       this._panel.classList.remove('stage-filtered');
       this._sections.forEach(s => s.classList.remove('stage-visible'));
       this._title.innerHTML = 'Configuration';
+      this._updateResumeHint();
       return;
     }
 
@@ -93,6 +93,8 @@ export class ConfigPanel {
     });
 
     this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${STAGE_LABELS[stage] || 'Stage '+stage}</span>`;
+    this._startStage = this._clampStage(stage);
+    this._updateResumeHint();
   }
 
   setObjectName(name) {
@@ -218,7 +220,6 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
-    this._resumeStageSelect.addEventListener('change', () => this._updateResumeHint());
 
     this._objectSelect.addEventListener('change', () => {
       this._selectObject(this._objectSelect.value);
@@ -477,25 +478,7 @@ export class ConfigPanel {
   }
 
   _resolveResumeStage() {
-    const mode = this._resumeStageSelect?.value || 'auto';
-    if (mode !== 'auto') {
-      return this._clampStage(this._parsePositiveInt(mode, 1));
-    }
-    return this._inferAutoResumeStage();
-  }
-
-  _inferAutoResumeStage() {
-    const summary = this._selectedObjectSummary;
-    if (summary && Number.isFinite(summary.resume_from_stage)) {
-      return this._clampStage(summary.resume_from_stage);
-    }
-    if (summary && summary.stages) {
-      for (let stage = 1; stage <= 6; stage++) {
-        if (!summary.stages[String(stage)]) return stage;
-      }
-      return 6;
-    }
-    return 1;
+    return this._clampStage(this._startStage);
   }
 
   _clampStage(stage) {
@@ -505,19 +488,10 @@ export class ConfigPanel {
 
   _updateResumeHint() {
     if (!this._resumeStageInfo) return;
-    const mode = this._resumeStageSelect?.value || 'auto';
-    const autoStage = this._inferAutoResumeStage();
-    const label = STAGE_LABELS[autoStage] || `Stage ${autoStage}`;
-
-    if (mode === 'auto') {
-      this._resumeStageInfo.textContent = `Auto: restart from Stage ${autoStage} (${label}).`;
-      return;
-    }
-
-    const manualStage = this._clampStage(mode);
+    const manualStage = this._resolveResumeStage();
     const manualLabel = STAGE_LABELS[manualStage] || `Stage ${manualStage}`;
     this._resumeStageInfo.textContent =
-      `Manual: rerun from Stage ${manualStage} (${manualLabel}); downstream artifacts will be replaced.`;
+      `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}).`;
   }
 
   _applyObjectVideoPath(path) {
