@@ -17,6 +17,7 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+from scripts.dashboard.log_capture import stage_log_scope
 from scripts.dashboard.state import (
     STAGE_LABELS,
     PipelineStage,
@@ -100,7 +101,8 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         if start_stage <= int(PipelineStage.PI3X_RECONSTRUCT):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
             # VRAM gate: ensure sufficient free VRAM before Pi3X
-            await asyncio.to_thread(_vram_gate)
+            with stage_log_scope(int(PipelineStage.PI3X_RECONSTRUCT)):
+                await asyncio.to_thread(_vram_gate)
 
             # ── Stage 2: Pi3X 3D Reconstruction ───────────────────
             await _run_stage(
@@ -145,155 +147,156 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 detail="Initializing SAM2 model",
             )
 
-            # SAM2 interact → propagate → verify loop (supports redo)
-            while True:
-                # Initialize SAM2 model in a thread
-                meta = await asyncio.to_thread(
-                    sam2_service.initialize,
-                    session.frames_dir,
-                    output_dir,
-                    cfg.sam2_model,
-                )
+            with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
+                # SAM2 interact → propagate → verify loop (supports redo)
+                while True:
+                    # Initialize SAM2 model in a thread
+                    meta = await asyncio.to_thread(
+                        sam2_service.initialize,
+                        session.frames_dir,
+                        output_dir,
+                        cfg.sam2_model,
+                    )
 
-                session.sam2_frame_count = meta["frame_count"]
-                session.sam2_width = meta["width"]
-                session.sam2_height = meta["height"]
+                    session.sam2_frame_count = meta["frame_count"]
+                    session.sam2_width = meta["width"]
+                    session.sam2_height = meta["height"]
 
-                # Signal frontend: SAM2 is ready for interaction
-                session.stage_interactive(PipelineStage.SAM2_SEGMENT)
-                await _broadcast_stage_progress(
-                    session,
-                    PipelineStage.SAM2_SEGMENT,
-                    progress=20.0,
-                    detail="Waiting for interactive clicks",
-                )
-                await broadcast(session, {
-                    "type": "sam2_ready",
-                    "frame_count": meta["frame_count"],
-                    "width": meta["width"],
-                    "height": meta["height"],
-                })
+                    # Signal frontend: SAM2 is ready for interaction
+                    session.stage_interactive(PipelineStage.SAM2_SEGMENT)
+                    await _broadcast_stage_progress(
+                        session,
+                        PipelineStage.SAM2_SEGMENT,
+                        progress=20.0,
+                        detail="Waiting for interactive clicks",
+                    )
+                    await broadcast(session, {
+                        "type": "sam2_ready",
+                        "frame_count": meta["frame_count"],
+                        "width": meta["width"],
+                        "height": meta["height"],
+                    })
 
-                # Wait for user to confirm segmentation via REST API
-                session.sam2_confirm_event.clear()
-                await session.sam2_confirm_event.wait()
-                _check_cancelled(session)
+                    # Wait for user to confirm segmentation via REST API
+                    session.sam2_confirm_event.clear()
+                    await session.sam2_confirm_event.wait()
+                    _check_cancelled(session)
 
-                # Propagate masks
-                await _broadcast_stage_progress(
-                    session,
-                    PipelineStage.SAM2_SEGMENT,
-                    progress=30.0,
-                    detail="Propagating masks",
-                )
-                await broadcast(session, {"type": "sam2_propagating"})
+                    # Propagate masks
+                    await _broadcast_stage_progress(
+                        session,
+                        PipelineStage.SAM2_SEGMENT,
+                        progress=30.0,
+                        detail="Propagating masks",
+                    )
+                    await broadcast(session, {"type": "sam2_propagating"})
 
+                    loop = asyncio.get_event_loop()
+
+                    def _propagate_cb(frame_idx: int, total: int) -> None:
+                        total = max(total, 1)
+                        ratio = (frame_idx + 1) / total
+                        progress = 30.0 + ratio * 40.0
+                        detail = f"Propagating masks ({frame_idx + 1}/{total})"
+
+                        def _push() -> None:
+                            session.stage_progress(
+                                PipelineStage.SAM2_SEGMENT,
+                                progress=progress,
+                                detail=detail,
+                            )
+                            overall = session.overall_progress()
+                            asyncio.create_task(
+                                broadcast(session, {
+                                    "type": "sam2_propagate_progress",
+                                    "frame": frame_idx + 1,
+                                    "total": total,
+                                    "progress": round(progress, 1),
+                                    "overall_progress": overall,
+                                })
+                            )
+                            asyncio.create_task(
+                                broadcast(session, {
+                                    "type": "stage_progress",
+                                    "stage": int(PipelineStage.SAM2_SEGMENT),
+                                    "progress": round(progress, 1),
+                                    "detail": detail,
+                                    "overall_progress": overall,
+                                })
+                            )
+
+                        loop.call_soon_threadsafe(_push)
+
+                    mask_dir = await asyncio.to_thread(
+                        sam2_service.propagate_and_save, _propagate_cb
+                    )
+                    session.mask_dir = mask_dir
+                    session.mask_count = len(list(Path(mask_dir).glob("*.png")))
+
+                    # Release SAM2 model
+                    await asyncio.to_thread(sam2_service.release)
+
+                    # Clear event BEFORE notifying frontend to avoid race condition
+                    session.sam2_approve_event.clear()
+                    session.sam2_approved = False
+
+                    # Signal frontend: verification strip ready
+                    await _broadcast_stage_progress(
+                        session,
+                        PipelineStage.SAM2_SEGMENT,
+                        progress=72.0,
+                        detail="Waiting for mask verification",
+                    )
+                    await broadcast(session, {
+                        "type": "sam2_verification_ready",
+                        "frame_count": meta["frame_count"],
+                    })
+
+                    # Wait for user to approve or redo
+                    await session.sam2_approve_event.wait()
+                    _check_cancelled(session)
+
+                    if session.sam2_approved:
+                        break
+                    # User chose redo — loop back to re-init SAM2
+                    await _broadcast_stage_progress(
+                        session,
+                        PipelineStage.SAM2_SEGMENT,
+                        progress=15.0,
+                        detail="Redoing SAM2 interaction",
+                    )
+
+                # Apply SAM2 masks to Pi3X cache
                 loop = asyncio.get_event_loop()
 
-                def _propagate_cb(frame_idx: int, total: int) -> None:
-                    total = max(total, 1)
-                    ratio = (frame_idx + 1) / total
-                    progress = 30.0 + ratio * 40.0
-                    detail = f"Propagating masks ({frame_idx + 1}/{total})"
+                def _mask_progress_cb(progress: float, detail: str | None = None) -> None:
+                    mapped_progress = 72.0 + (max(0.0, min(100.0, progress)) * 0.28)
 
                     def _push() -> None:
                         session.stage_progress(
                             PipelineStage.SAM2_SEGMENT,
-                            progress=progress,
+                            progress=mapped_progress,
                             detail=detail,
-                        )
-                        overall = session.overall_progress()
-                        asyncio.create_task(
-                            broadcast(session, {
-                                "type": "sam2_propagate_progress",
-                                "frame": frame_idx + 1,
-                                "total": total,
-                                "progress": round(progress, 1),
-                                "overall_progress": overall,
-                            })
                         )
                         asyncio.create_task(
                             broadcast(session, {
                                 "type": "stage_progress",
                                 "stage": int(PipelineStage.SAM2_SEGMENT),
-                                "progress": round(progress, 1),
+                                "progress": round(mapped_progress, 1),
                                 "detail": detail,
-                                "overall_progress": overall,
+                                "overall_progress": session.overall_progress(),
                             })
                         )
 
                     loop.call_soon_threadsafe(_push)
 
-                mask_dir = await asyncio.to_thread(
-                    sam2_service.propagate_and_save, _propagate_cb
+                await asyncio.to_thread(
+                    _stage_apply_masks,
+                    session.pi3x_cache_path,
+                    session.mask_dir,
+                    output_dir,
+                    progress_cb=_mask_progress_cb,
                 )
-                session.mask_dir = mask_dir
-                session.mask_count = len(list(Path(mask_dir).glob("*.png")))
-
-                # Release SAM2 model
-                await asyncio.to_thread(sam2_service.release)
-
-                # Clear event BEFORE notifying frontend to avoid race condition
-                session.sam2_approve_event.clear()
-                session.sam2_approved = False
-
-                # Signal frontend: verification strip ready
-                await _broadcast_stage_progress(
-                    session,
-                    PipelineStage.SAM2_SEGMENT,
-                    progress=72.0,
-                    detail="Waiting for mask verification",
-                )
-                await broadcast(session, {
-                    "type": "sam2_verification_ready",
-                    "frame_count": meta["frame_count"],
-                })
-
-                # Wait for user to approve or redo
-                await session.sam2_approve_event.wait()
-                _check_cancelled(session)
-
-                if session.sam2_approved:
-                    break
-                # User chose redo — loop back to re-init SAM2
-                await _broadcast_stage_progress(
-                    session,
-                    PipelineStage.SAM2_SEGMENT,
-                    progress=15.0,
-                    detail="Redoing SAM2 interaction",
-                )
-
-            # Apply SAM2 masks to Pi3X cache
-            loop = asyncio.get_event_loop()
-
-            def _mask_progress_cb(progress: float, detail: str | None = None) -> None:
-                mapped_progress = 72.0 + (max(0.0, min(100.0, progress)) * 0.28)
-
-                def _push() -> None:
-                    session.stage_progress(
-                        PipelineStage.SAM2_SEGMENT,
-                        progress=mapped_progress,
-                        detail=detail,
-                    )
-                    asyncio.create_task(
-                        broadcast(session, {
-                            "type": "stage_progress",
-                            "stage": int(PipelineStage.SAM2_SEGMENT),
-                            "progress": round(mapped_progress, 1),
-                            "detail": detail,
-                            "overall_progress": session.overall_progress(),
-                        })
-                    )
-
-                loop.call_soon_threadsafe(_push)
-
-            await asyncio.to_thread(
-                _stage_apply_masks,
-                session.pi3x_cache_path,
-                session.mask_dir,
-                output_dir,
-                progress_cb=_mask_progress_cb,
-            )
             session.ply_path = str(Path(output_dir) / "object.ply")
 
             session.stage_complete(PipelineStage.SAM2_SEGMENT)
@@ -544,8 +547,12 @@ async def _run_stage(
 
         loop.call_soon_threadsafe(_push)
 
+    def _run_with_stage_scope() -> None:
+        with stage_log_scope(int(stage)):
+            fn(*args, progress_cb=_progress_cb)
+
     try:
-        await asyncio.to_thread(fn, *args, progress_cb=_progress_cb)
+        await asyncio.to_thread(_run_with_stage_scope)
     except Exception as e:
         session.stage_failed(stage, str(e))
         await broadcast(session, {

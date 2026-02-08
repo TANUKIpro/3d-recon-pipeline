@@ -511,7 +511,17 @@ def _list_objects(base_output: Path) -> list[dict[str, Any]]:
 async def _startup() -> None:
     global log_broadcaster
     loop = asyncio.get_event_loop()
-    log_broadcaster = LogBroadcaster(loop)
+
+    def _resolve_current_stage() -> int | None:
+        try:
+            stage = int(session.current_stage)
+        except Exception:
+            return None
+        if 1 <= stage <= 6:
+            return stage
+        return None
+
+    log_broadcaster = LogBroadcaster(loop, stage_resolver=_resolve_current_stage)
     log_broadcaster.install()
     asyncio.create_task(log_broadcaster.drain(session.ws_clients))
     try:

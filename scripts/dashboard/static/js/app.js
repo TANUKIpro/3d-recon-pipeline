@@ -28,6 +28,14 @@ const stageCtrl = new StageController();
 const sam2Verify = new SAM2Verification();
 const cameraOverlay = new CameraOverlay();
 
+function appendLog(stream, text, opts = {}) {
+  const stage = Number(opts.stage);
+  log.append(stream, text, {
+    ...opts,
+    stage: Number.isFinite(stage) ? stage : stageCtrl.activeStage,
+  });
+}
+
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 const overallProgressBadge = document.getElementById('overall-progress-badge');
@@ -98,18 +106,18 @@ config.onObjectSelected = async (objectName) => {
     const data = await res.json();
     if (reqId !== _objectLoadRequestId) return;
     if (!res.ok || data.error) {
-      log.append('stderr', `Failed to load object ${objectName}: ${data.error || res.status}\n`);
+      appendLog('stderr', `Failed to load object ${objectName}: ${data.error || res.status}\n`);
       return;
     }
 
     const status = data.pipeline_status;
     if (status) {
       await applyStatusSnapshot(status, { forceHydrate: true });
-      log.append('stdout', `Loaded object: ${objectName}\n`);
+      appendLog('stdout', `Loaded object: ${objectName}\n`);
     }
   } catch (e) {
     if (reqId !== _objectLoadRequestId) return;
-    log.append('stderr', `Failed to load object ${objectName}: ${e.message}\n`);
+    appendLog('stderr', `Failed to load object ${objectName}: ${e.message}\n`);
   }
 };
 
@@ -145,7 +153,7 @@ config.onStart = async (cfg) => {
 
     if (data.object_name) {
       config.setObjectName(data.object_name);
-      log.append('stdout', `Target object: ${data.object_name}\n`);
+      appendLog('stdout', `Target object: ${data.object_name}\n`);
     }
     config.refreshObjects();
     stageCtrl.activateStage(resumeFromStage);
@@ -189,7 +197,7 @@ ws.on('stage_start', (msg) => {
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  log.append('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`);
+  appendLog('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`, { stage: msg.stage });
 });
 
 ws.on('extract_frames_result', (msg) => {
@@ -231,29 +239,29 @@ ws.on('sam2_ready', (msg) => {
   sam2.activate(msg.frame_count, msg.width, msg.height);
   sam2Verify.hide();
   stageCtrl.activateStage(3);
-  log.append('stdout', `SAM2 ready: ${msg.frame_count} frames (${msg.width}x${msg.height})\n`);
-  log.append('stdout', 'Click on the object to segment. Right-click for negative points.\n');
+  appendLog('stdout', `SAM2 ready: ${msg.frame_count} frames (${msg.width}x${msg.height})\n`, { stage: 3 });
+  appendLog('stdout', 'Click on the object to segment. Right-click for negative points.\n', { stage: 3 });
 });
 
 ws.on('sam2_propagating', () => {
   sam2.deactivate();
-  log.append('stdout', 'Propagating masks to all frames...\n');
+  appendLog('stdout', 'Propagating masks to all frames...\n', { stage: 3 });
 });
 
 ws.on('sam2_propagate_progress', (msg) => {
-  log.append('stdout', `  Propagating frame ${msg.frame}/${msg.total}\n`);
+  appendLog('stdout', `Propagating frame ${msg.frame}/${msg.total}`, { stage: 3, progress: true });
 });
 
 ws.on('sam2_verification_ready', (msg) => {
   sam2Verify.show(msg.frame_count);
-  log.append('stdout', 'Mask propagation complete. Please verify the results.\n');
+  appendLog('stdout', 'Mask propagation complete. Please verify the results.\n', { stage: 3 });
 });
 
 ws.on('pi3x_preview_ready', () => {
   pipelineUI.stageInteractive(2);
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
-  log.append('stdout', 'Pi3X complete. Review the 3D preview, then confirm on Stage 2.\n');
+  appendLog('stdout', 'Pi3X complete. Review the 3D preview, then confirm on Stage 2.\n', { stage: 2 });
 });
 
 ws.on('next_stage_confirmation_required', (msg) => {
@@ -273,7 +281,7 @@ ws.on('next_stage_confirmation_required', (msg) => {
     setTaskConfirmState(fromStage, 'waiting', String(msg.message || defaultTaskConfirmWaitingMessage(fromStage)));
   }
   if (msg.message) {
-    log.append('stdout', `${msg.message}\n`);
+    appendLog('stdout', `${msg.message}\n`, { stage: fromStage });
   }
 });
 
@@ -298,7 +306,7 @@ ws.on('pipeline_complete', (msg) => {
   setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
-  log.append('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`);
+  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 6 });
 });
 
 ws.on('pipeline_error', (msg) => {
@@ -320,19 +328,19 @@ ws.on('pipeline_error', (msg) => {
     stageCtrl.setStageState(msg.stage, 'failed');
   }
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  log.append('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`);
+  appendLog('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`, { stage: msg.stage });
 });
 
 ws.on('log', (msg) => {
-  log.append(msg.stream, msg.text);
+  appendLog(msg.stream, msg.text, { stage: msg.stage });
 });
 
 ws.on('_open', () => {
-  log.append('stdout', '[Dashboard connected]\n');
+  appendLog('stdout', '[Dashboard connected]\n');
 });
 
 ws.on('_close', () => {
-  log.append('stderr', '[Dashboard disconnected — reconnecting...]\n');
+  appendLog('stderr', '[Dashboard disconnected — reconnecting...]\n');
 });
 
 // ── VRAM polling ─────────────────────────────────────────────
@@ -576,7 +584,7 @@ async function confirmNextStage(stage) {
     // Keep "sending" state until backend emits stage start or cleared event.
   } catch (e) {
     setTaskConfirmState(stage, 'waiting', `${defaultTaskConfirmWaitingMessage(stage)} (${e.message})`);
-    log.append('stderr', `Next-stage confirmation failed at stage ${stage}: ${e.message}\n`);
+    appendLog('stderr', `Next-stage confirmation failed at stage ${stage}: ${e.message}\n`, { stage });
   }
 }
 
