@@ -762,7 +762,7 @@ def run_pi3x_inference(
     output_path.mkdir(parents=True, exist_ok=True)
     _emit_progress(progress_cb, 3.0, "Scanning input frames")
 
-    # --- Count frames and apply frame budget before inference ---
+    # --- Count frames and resolve requested frame target ---
     frame_files = sorted(Path(frames_dir).glob("*.jpg"))
     num_frames = len(frame_files)
     if num_frames < 2:
@@ -770,18 +770,25 @@ def run_pi3x_inference(
 
     target_frames_requested = max(2, min(max_frames, num_frames))
     frame_plan = estimate_pi3x_frame_plan(target_frames_requested, pixel_limit)
-    target_frames = min(
+    recommended_frames = min(
         target_frames_requested,
         int(frame_plan.get("auto_target_frames") or target_frames_requested),
     )
+    # Manual/UI frame target is authoritative. VRAM auto-plan is advisory only.
+    target_frames = target_frames_requested
     vram_target_pct = int(round(float(frame_plan.get("target_vram_utilization") or 0.95) * 100))
     if frame_plan.get("reason") == "ok":
         print(
-            f"VRAM auto-plan ({vram_target_pct}% target): "
-            f"{target_frames_requested}→{target_frames} frames "
+            f"VRAM recommendation ({vram_target_pct}% target): "
+            f"auto={recommended_frames}/{target_frames_requested} frames "
             f"(pixel_limit={pixel_limit}, "
             f"est={frame_plan.get('predicted_used_pct', 0.0):.1f}% VRAM)"
         )
+        if recommended_frames < target_frames_requested:
+            print(
+                "Using requested frame target "
+                f"({target_frames_requested}); auto target is advisory."
+            )
     else:
         print(
             "VRAM auto-plan unavailable; using requested frame target "
@@ -790,7 +797,7 @@ def run_pi3x_inference(
     _emit_progress(
         progress_cb,
         8.0,
-        f"Selected up to {target_frames} frames (VRAM target {vram_target_pct}%)",
+        f"Selected up to {target_frames} frames (VRAM target {vram_target_pct}% advisory)",
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
