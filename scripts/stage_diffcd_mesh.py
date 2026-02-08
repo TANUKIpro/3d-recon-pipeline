@@ -6,17 +6,25 @@ Converts denoised PLY to NPY, runs DiffCD fit_implicit.py as a subprocess
 Based on im2pc/colab_diffcd.md and tmp/DiffCD.ipynb patterns.
 """
 
+import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+from collections import deque
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import trimesh
 
-from vram_utils import prepare_for_jax, log_vram
+from vram_utils import (
+    get_gpu_inventory,
+    log_vram,
+    pick_gpu_with_most_free_vram,
+    prepare_for_jax,
+)
 
 ProgressCallback = Callable[[float, str | None], None]
 _TQDM_PERCENT_RE = re.compile(r"(\d{1,3})%\|")
@@ -25,6 +33,63 @@ _ITER_FRACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_FRACTION_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
+_OOM_MARKERS = (
+    "out of memory",
+    "resource exhausted",
+    "cuda_error_out_of_memory",
+    "cudnn_status_alloc_failed",
+    "std::bad_alloc",
+)
+
+_DEFAULT_DIFFCD_BATCH_SIZE = 3000
+_DEFAULT_DIFFCD_N_BATCHES = 25000
+_DEFAULT_DIFFCD_RESOLUTION = 384
+_MIN_DIFFCD_BATCH_SIZE = 500
+_DIFFCD_BATCH_STEP = 100
+_MIN_DIFFCD_N_BATCHES = 1000
+_DEFAULT_AUTO_MIN_N_BATCHES = 10000
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def _extract_int(row: dict[str, str | int | None], key: str) -> int | None:
+    value = row.get(key)
+    return value if isinstance(value, int) else None
+
+
+def _round_batch_size(value: float) -> int:
+    rounded = int(round(value / _DIFFCD_BATCH_STEP) * _DIFFCD_BATCH_STEP)
+    return max(_MIN_DIFFCD_BATCH_SIZE, rounded)
+
+
+def _gpu_summary(gpu: dict[str, str | int | None] | None) -> str:
+    if not gpu:
+        return "nvidia-smi unavailable"
+    idx = gpu.get("index")
+    name = gpu.get("name") or "unknown"
+    total = gpu.get("memory_total_mb")
+    free = gpu.get("memory_free_mb")
+    used = gpu.get("memory_used_mb")
+    util = gpu.get("utilization_gpu_pct")
+    return (
+        f"GPU[{idx}] {name} "
+        f"(used={used}MB, free={free}MB, total={total}MB, util={util}%)"
+    )
 
 
 def _emit_progress(
@@ -60,7 +125,11 @@ def _parse_progress_ratio(line: str) -> float | None:
     return min(1.0, max(0.0, ratio))
 
 
-def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_000) -> Path:
+def _downsample_to_npy(
+    ply_path: str,
+    npy_path: str,
+    target_points: int = 1_000_000,
+) -> tuple[Path, int]:
     """Convert PLY to downsampled NPY (xyz float32) for DiffCD.
 
     Args:
@@ -69,7 +138,7 @@ def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_
         target_points: Target number of points after downsampling.
 
     Returns:
-        Path to the NPY file.
+        Tuple of output NPY path and number of points.
     """
     import open3d as o3d
 
@@ -85,7 +154,7 @@ def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_
 
         pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
 
-        # Iterative adjustment to get within ±10% of target
+        # Iterative adjustment to get within +-10% of target.
         for _ in range(10):
             n = len(pcd_down.points)
             if target_points * 0.9 <= n <= target_points * 1.1:
@@ -104,7 +173,203 @@ def _downsample_to_npy(ply_path: str, npy_path: str, target_points: int = 1_000_
     points = np.asarray(pcd_down.points, dtype=np.float32)
     np.save(str(npy_path), points)
     print(f"Saved: {npy_path} ({points.shape})")
-    return Path(npy_path)
+    return Path(npy_path), int(points.shape[0])
+
+
+def _looks_like_oom(line: str) -> bool:
+    lower = line.lower()
+    return any(marker in lower for marker in _OOM_MARKERS)
+
+
+def _auto_tune_diffcd_params(
+    batch_size: int,
+    n_batches: int,
+    resolution: int,
+    gpu: dict[str, str | int | None] | None,
+) -> tuple[int, int, str]:
+    """Auto-tune DiffCD parameters from hardware while preserving fidelity."""
+    if not _env_flag("DIFFCD_AUTO_TUNE", True):
+        return batch_size, n_batches, "auto-tune disabled"
+
+    if _env_flag("DIFFCD_AUTO_TUNE_RESPECT_MANUAL", True):
+        if (
+            batch_size != _DEFAULT_DIFFCD_BATCH_SIZE
+            or n_batches != _DEFAULT_DIFFCD_N_BATCHES
+            or resolution != _DEFAULT_DIFFCD_RESOLUTION
+        ):
+            return batch_size, n_batches, "manual DiffCD parameters detected"
+
+    total_mb = _extract_int(gpu or {}, "memory_total_mb")
+    free_mb = _extract_int(gpu or {}, "memory_free_mb")
+    if total_mb is None or free_mb is None:
+        return batch_size, n_batches, "GPU memory metrics unavailable"
+
+    # Conservative heuristic from VRAM capacity and free memory.
+    scale_total = max(0.75, (total_mb / 16_384) ** 0.9)
+    scale_free = max(0.75, (free_mb / 12_000) ** 0.7)
+    scale = min(scale_total, scale_free)
+
+    if resolution >= 512:
+        scale *= 0.92
+    elif resolution <= 256:
+        scale *= 1.05
+
+    scale = min(
+        _env_float("DIFFCD_AUTO_MAX_BATCH_SCALE", 2.4),
+        max(_env_float("DIFFCD_AUTO_MIN_BATCH_SCALE", 0.75), scale),
+    )
+
+    tuned_batch = _round_batch_size(batch_size * scale)
+    if tuned_batch <= int(batch_size * 1.08):
+        return batch_size, n_batches, "GPU profile suggests default batch size"
+
+    tuned_n_batches = n_batches
+    if _env_flag("DIFFCD_AUTO_KEEP_EFFECTIVE_SAMPLES", True):
+        baseline_samples = max(1, batch_size) * max(1, n_batches)
+        computed = int(math.ceil(baseline_samples / max(1, tuned_batch)))
+        min_n_batches = max(
+            _MIN_DIFFCD_N_BATCHES,
+            int(os.environ.get("DIFFCD_AUTO_MIN_N_BATCHES", _DEFAULT_AUTO_MIN_N_BATCHES)),
+        )
+        tuned_n_batches = min(n_batches, max(min_n_batches, computed))
+
+    detail = (
+        f"auto-tuned batch {batch_size}->{tuned_batch}, "
+        f"n_batches {n_batches}->{tuned_n_batches} "
+        f"(free={free_mb}MB, total={total_mb}MB, scale={scale:.2f})"
+    )
+    return tuned_batch, tuned_n_batches, detail
+
+
+def _build_diffcd_attempts(
+    primary_batch: int,
+    primary_n_batches: int,
+    baseline_batch: int,
+    baseline_n_batches: int,
+) -> list[tuple[int, int, str]]:
+    attempts: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+
+    def _add(batch: int, n_batches: int, reason: str) -> None:
+        b = _round_batch_size(batch)
+        n = max(_MIN_DIFFCD_N_BATCHES, int(n_batches))
+        key = (b, n)
+        if key in seen:
+            return
+        seen.add(key)
+        attempts.append((b, n, reason))
+
+    _add(primary_batch, primary_n_batches, "auto/baseline")
+    _add(baseline_batch, baseline_n_batches, "baseline")
+
+    for ratio in (0.85, 0.70, 0.55):
+        fallback_batch = int(baseline_batch * ratio)
+        if fallback_batch < baseline_batch:
+            _add(fallback_batch, baseline_n_batches, f"OOM fallback x{ratio:.2f}")
+
+    return attempts
+
+
+def _select_runtime_env(
+    gpu_inventory: list[dict[str, str | int | None]],
+    preferred_gpu: dict[str, str | int | None] | None,
+) -> tuple[dict[str, str], str]:
+    env = {**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+
+    # If user specifies explicit XLA fraction, honor it. Otherwise scale by headroom.
+    mem_fraction = os.environ.get("DIFFCD_XLA_MEM_FRACTION")
+    mem_fraction = mem_fraction.strip() if mem_fraction is not None else None
+    if not mem_fraction:
+        total_mb = _extract_int(preferred_gpu or {}, "memory_total_mb")
+        free_mb = _extract_int(preferred_gpu or {}, "memory_free_mb")
+        ratio = (free_mb / total_mb) if total_mb and free_mb else 0.0
+        if ratio >= 0.90:
+            mem_fraction = "0.92"
+        elif ratio >= 0.75:
+            mem_fraction = "0.88"
+        else:
+            mem_fraction = "0.80"
+    env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = mem_fraction
+
+    cache_dir = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR",
+        "/root/.cache/jax_compilation_cache",
+    )
+    if cache_dir:
+        try:
+            Path(cache_dir).mkdir(parents=True, exist_ok=True)
+            env["JAX_COMPILATION_CACHE_DIR"] = cache_dir
+        except OSError:
+            pass
+
+    gpu_note = "using existing CUDA_VISIBLE_DEVICES"
+    explicit_gpu = os.environ.get("DIFFCD_GPU_INDEX")
+    if explicit_gpu:
+        env["CUDA_VISIBLE_DEVICES"] = explicit_gpu.strip()
+        gpu_note = f"forced CUDA_VISIBLE_DEVICES={explicit_gpu.strip()}"
+    else:
+        visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip().lower()
+        if (
+            _env_flag("DIFFCD_AUTO_SELECT_GPU", True)
+            and len(gpu_inventory) > 1
+            and visible in {"", "all"}
+        ):
+            gpu = preferred_gpu or pick_gpu_with_most_free_vram(gpu_inventory)
+            gpu_idx = _extract_int(gpu or {}, "index")
+            if gpu_idx is not None:
+                env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+                gpu_note = f"auto-selected CUDA_VISIBLE_DEVICES={gpu_idx}"
+
+    return env, gpu_note
+
+
+def _run_diffcd_subprocess(
+    cmd: list[str],
+    env: dict[str, str],
+    progress_cb: ProgressCallback | None = None,
+    attempt_idx: int = 1,
+    total_attempts: int = 1,
+) -> tuple[int, bool, list[str]]:
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        cwd="/opt/diffcd",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    last_reported = 20.0
+    saw_oom = False
+    tail_lines: deque[str] = deque(maxlen=80)
+
+    if process.stdout is not None:
+        for line in process.stdout:
+            print(line, end="")
+            tail_lines.append(line.rstrip())
+            if _looks_like_oom(line):
+                saw_oom = True
+
+            ratio = _parse_progress_ratio(line)
+            if ratio is None:
+                continue
+
+            stage_pct = 20.0 + ratio * 65.0
+            if stage_pct - last_reported >= 0.5:
+                suffix = (
+                    f", attempt {attempt_idx}/{total_attempts}"
+                    if total_attempts > 1
+                    else ""
+                )
+                _emit_progress(
+                    progress_cb,
+                    stage_pct,
+                    f"DiffCD fitting ({int(ratio * 100)}%{suffix})",
+                )
+                last_reported = stage_pct
+
+    return process.wait(), saw_oom, list(tail_lines)
 
 
 def run_diffcd(
@@ -134,8 +399,8 @@ def run_diffcd(
     npy_path = output_path / "object_points.npy"
     print("=== DiffCD: Preparing point cloud ===")
     _emit_progress(progress_cb, 5.0, "Preparing point cloud for DiffCD")
-    _downsample_to_npy(denoised_ply, str(npy_path))
-    _emit_progress(progress_cb, 15.0, "Point cloud prepared")
+    npy_file, n_points = _downsample_to_npy(denoised_ply, str(npy_path))
+    _emit_progress(progress_cb, 15.0, f"Point cloud prepared ({n_points:,} points)")
 
     # Step 2: Run DiffCD as subprocess
     print("\n=== DiffCD: Running implicit surface fitting ===")
@@ -143,50 +408,102 @@ def run_diffcd(
     prepare_for_jax()
     log_vram("before DiffCD")
 
-    cmd = [
-        sys.executable, "/opt/diffcd/fit_implicit.py",
-        "--output-dir", str(diffcd_dir),
-        f"--dataset.path", str(npy_path),
-        "--batch-size", str(batch_size),
-        "--n-batches", str(n_batches),
-        "--final-mesh-points-per-axis", str(resolution),
-    ]
+    gpu_inventory = get_gpu_inventory()
+    preferred_gpu = pick_gpu_with_most_free_vram(gpu_inventory)
+    print(f"DiffCD hardware: {_gpu_summary(preferred_gpu)}")
 
-    print(f"Running: {' '.join(cmd)}")
-    env = {
-        **os.environ,
-        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
-        "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.8",
-    }
-
-    process = subprocess.Popen(
-        cmd,
-        env=env,
-        cwd="/opt/diffcd",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+    tuned_batch, tuned_n_batches, tune_detail = _auto_tune_diffcd_params(
+        batch_size,
+        n_batches,
+        resolution,
+        preferred_gpu,
     )
-    last_reported = 20.0
-    if process.stdout is not None:
-        for line in process.stdout:
-            print(line, end="")
-            ratio = _parse_progress_ratio(line)
-            if ratio is None:
-                continue
-            stage_pct = 20.0 + ratio * 65.0
-            if stage_pct - last_reported >= 0.5:
-                _emit_progress(
-                    progress_cb,
-                    stage_pct,
-                    f"DiffCD fitting ({int(ratio * 100)}%)",
-                )
-                last_reported = stage_pct
+    print(f"DiffCD tuning: {tune_detail}")
 
-    return_code = process.wait()
-    if return_code != 0:
-        raise RuntimeError(f"DiffCD failed with return code {return_code}")
+    attempts = _build_diffcd_attempts(
+        tuned_batch,
+        tuned_n_batches,
+        batch_size,
+        n_batches,
+    )
+    env, gpu_note = _select_runtime_env(gpu_inventory, preferred_gpu)
+    print(
+        "DiffCD runtime: "
+        f"{gpu_note}, "
+        f"XLA_PYTHON_CLIENT_MEM_FRACTION={env.get('XLA_PYTHON_CLIENT_MEM_FRACTION')}, "
+        f"JAX_COMPILATION_CACHE_DIR={env.get('JAX_COMPILATION_CACHE_DIR', '(disabled)')}"
+    )
+
+    success_dir: Path | None = None
+    last_error_tail: list[str] = []
+    total_attempts = len(attempts)
+    for i, (try_batch, try_n_batches, reason) in enumerate(attempts, start=1):
+        attempt_dir = diffcd_dir / f"run_{i:02d}_b{try_batch}_n{try_n_batches}"
+        if attempt_dir.exists():
+            shutil.rmtree(attempt_dir)
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            sys.executable,
+            "/opt/diffcd/fit_implicit.py",
+            "--output-dir",
+            str(attempt_dir),
+            "--dataset.path",
+            str(npy_file),
+            "--batch-size",
+            str(try_batch),
+            "--n-batches",
+            str(try_n_batches),
+            "--final-mesh-points-per-axis",
+            str(resolution),
+        ]
+
+        print(
+            f"\nDiffCD attempt {i}/{total_attempts} "
+            f"({reason}; batch={try_batch}, n_batches={try_n_batches})"
+        )
+        print(f"Running: {' '.join(cmd)}")
+        _emit_progress(
+            progress_cb,
+            20.0,
+            f"Running DiffCD fitting (attempt {i}/{total_attempts})",
+        )
+
+        return_code, saw_oom, tail_lines = _run_diffcd_subprocess(
+            cmd,
+            env,
+            progress_cb=progress_cb,
+            attempt_idx=i,
+            total_attempts=total_attempts,
+        )
+
+        if return_code == 0:
+            success_dir = attempt_dir
+            batch_size = try_batch
+            n_batches = try_n_batches
+            break
+
+        last_error_tail = tail_lines
+        if saw_oom and i < total_attempts:
+            print(
+                f"DiffCD attempt {i} failed with OOM-like error. "
+                "Retrying with a safer batch size..."
+            )
+            continue
+
+        tail_preview = "\n".join(last_error_tail[-20:])
+        raise RuntimeError(
+            f"DiffCD failed with return code {return_code} on attempt {i}/{total_attempts}.\n"
+            f"{tail_preview}"
+        )
+
+    if success_dir is None:
+        tail_preview = "\n".join(last_error_tail[-20:])
+        raise RuntimeError(f"DiffCD failed after retries.\n{tail_preview}")
+
+    print(
+        f"DiffCD complete (batch={batch_size}, n_batches={n_batches}, resolution={resolution})"
+    )
 
     log_vram("after DiffCD")
     _emit_progress(progress_cb, 87.0, "Collecting DiffCD outputs")
@@ -194,13 +511,13 @@ def run_diffcd(
     # Step 3: Find output mesh
     # DiffCD puts output in a timestamped subdir: {out}/experiment.../meshes/mesh_N.ply
     # and also {out}/experiment.../mesh_final_N.ply
-    mesh_files = sorted(diffcd_dir.rglob("mesh_final_*.ply"))
+    mesh_files = sorted(success_dir.rglob("mesh_final_*.ply"))
     if not mesh_files:
-        mesh_files = sorted(diffcd_dir.rglob("mesh_final.ply"))
+        mesh_files = sorted(success_dir.rglob("mesh_final.ply"))
     if not mesh_files:
-        mesh_files = sorted(diffcd_dir.rglob("meshes/mesh_*.ply"))
+        mesh_files = sorted(success_dir.rglob("meshes/mesh_*.ply"))
     if not mesh_files:
-        raise FileNotFoundError(f"DiffCD output mesh not found in {diffcd_dir}")
+        raise FileNotFoundError(f"DiffCD output mesh not found in {success_dir}")
 
     raw_mesh_path = mesh_files[-1]
     print(f"\nDiffCD output: {raw_mesh_path}")
