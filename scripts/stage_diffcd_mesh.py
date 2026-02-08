@@ -41,9 +41,9 @@ _OOM_MARKERS = (
     "std::bad_alloc",
 )
 
-_DEFAULT_DIFFCD_BATCH_SIZE = 3000
-_DEFAULT_DIFFCD_N_BATCHES = 25000
-_DEFAULT_DIFFCD_RESOLUTION = 384
+_DEFAULT_DIFFCD_BATCH_SIZE = 5000
+_DEFAULT_DIFFCD_N_BATCHES = 40000
+_DEFAULT_DIFFCD_RESOLUTION = 512
 _MIN_DIFFCD_BATCH_SIZE = 500
 _DIFFCD_BATCH_STEP = 100
 _MIN_DIFFCD_N_BATCHES = 1000
@@ -386,9 +386,9 @@ def run_diffcd(
     Returns:
         Path to the final mesh PLY file.
     """
-    batch_size = int(os.environ.get("DIFFCD_BATCH_SIZE", "3000"))
-    n_batches = int(os.environ.get("DIFFCD_N_BATCHES", "25000"))
-    resolution = int(os.environ.get("DIFFCD_RESOLUTION", "384"))
+    batch_size = int(os.environ.get("DIFFCD_BATCH_SIZE", "5000"))
+    n_batches = int(os.environ.get("DIFFCD_N_BATCHES", "40000"))
+    resolution = int(os.environ.get("DIFFCD_RESOLUTION", "512"))
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)

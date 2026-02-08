@@ -360,7 +360,7 @@ def _build_pipeline_config(
         frame_interval=_parse_int(raw.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
         max_frames=_parse_int(raw.get("max_frames"), _env_int("MAX_FRAMES", 50)),
         pixel_limit=_parse_int(raw.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
-        confidence_threshold=_parse_float(raw.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.1)),
+        confidence_threshold=_parse_float(raw.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.2)),
         edge_rtol=_parse_float(raw.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
         sam2_model=str(raw.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
         denoise_preset=preset,
@@ -373,9 +373,9 @@ def _build_pipeline_config(
         denoise_sor_std_ratio=max(0.1, _parse_float(raw.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
         denoise_radius_neighbors=max(1, _parse_int(raw.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
         denoise_radius_radius_ratio=max(0.0001, _parse_float(raw.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
-        diffcd_batch_size=_parse_int(raw.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 3000)),
-        diffcd_n_batches=_parse_int(raw.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 25000)),
-        diffcd_resolution=_parse_int(raw.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 384)),
+        diffcd_batch_size=_parse_int(raw.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
+        diffcd_n_batches=_parse_int(raw.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 40000)),
+        diffcd_resolution=_parse_int(raw.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
         texture_size=_parse_int(raw.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
     )
 

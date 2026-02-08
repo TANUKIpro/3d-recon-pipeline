@@ -748,7 +748,7 @@ def run_pi3x_inference(
     if max_frames is None:
         max_frames = int(os.environ.get("MAX_FRAMES", "50"))
     if conf_threshold is None:
-        conf_threshold = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.1"))
+        conf_threshold = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.2"))
     if edge_rtol is None:
         edge_rtol = float(os.environ.get("EDGE_RTOL", "0.03"))
     if align_camera_plane is None:
