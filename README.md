@@ -2,7 +2,7 @@
 
 RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker 完結型パイプライン。
 
-SAM2 によるインタラクティブ物体セグメンテーション、Pi3X による多視点3D再構成、DiffCD による暗黙表面メッシュ化、マルチビューテクスチャベイキングを1コンテナで実行する。
+SAM2 によるインタラクティブ物体セグメンテーション、Pi3X による多視点3D再構成、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、マルチビューテクスチャベイキングを1コンテナで実行する。
 
 ## パイプライン概要
 
@@ -21,8 +21,9 @@ SAM2 によるインタラクティブ物体セグメンテーション、Pi3X �
   ├─ Stage 4: 点群デノイズ (CPU)
   │    DBSCAN クラスタリング + Statistical Outlier Removal
   │
-  ├─ Stage 5: DiffCD メッシュ再構成 (GPU/JAX)
-  │    暗黙表面フィッティング → Marching Cubes → Laplacian 平滑化
+  ├─ Stage 5: メッシュ再構成 (Classical or DiffCD)
+  │    Classical(既定): 法線推定 → Screened Poisson → 平滑化
+  │    Learning(DiffCD): 暗黙表面フィッティング → Marching Cubes → 平滑化
   │
   └─ Stage 6: テクスチャベイキング (CPU)
        カメラ内部パラメータ推定 → xatlas UV展開 → マルチビューテクスチャ投影
@@ -93,7 +94,7 @@ docker compose down
 - **生成物一覧**: 選択中オブジェクトの主要成果物をパネル表示
 - **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
 - **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
-- **進捗バー**: 6ステージの状態をリアルタイム表示 (pending → running → complete)
+- **進捗バー**: 6ステージの状態をリアルタイム表示 (Stage 5 は Classical / DiffCD の分岐切替対応)
 - **再開操作**: 停止中は、現在選択中のステージタブから `Start Pipeline` で再開
 - **ログビューア**: WebSocket 経由でリアルタイムストリーミング
 - **3D プレビュー**: three.js による点群・メッシュのインタラクティブ表示 (回転・ズーム)
@@ -160,7 +161,21 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
 | `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
 
-### DiffCD メッシュ再構成 (Stage 5)
+### メッシュ再構成 (Stage 5)
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `MESH_METHOD` | `poisson` | Stage 5 の既定手法 (`poisson` or `diffcd`) |
+
+#### Classical (Normals + Poisson)
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `POISSON_DEPTH` | `9` | Poisson 再構成の深さ |
+| `POISSON_NORMAL_RADIUS_RATIO` | `0.02` | 法線推定半径の bbox 対角比 |
+| `POISSON_DENSITY_TRIM_QUANTILE` | `0.02` | 低密度頂点を除去する分位点 |
+
+#### DiffCD
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
@@ -193,13 +208,15 @@ data/output/
         ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
         ├── textured_mesh.mtl      # マテリアル定義
         ├── texture.png            # テクスチャアトラス (2048x2048)
-        ├── object_mesh.ply        # DiffCD出力メッシュ (平滑化済み)
+        ├── object_mesh.ply        # Stage 5出力メッシュ (平滑化済み)
+        ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ
         ├── object_denoised.ply    # デノイズ済み点群
         ├── object.ply             # Pi3Xトリプルフィルタ済み点群
         ├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
         ├── intrinsics.json        # 推定カメラ内部パラメータ
         ├── frames/                # 抽出フレーム画像 (JPEG)
         ├── masks/                 # SAM2セグメンテーションマスク (PNG)
+        ├── classical_mesh/        # Classical( Poisson ) 作業ディレクトリ
         └── diffcd/                # DiffCD作業ディレクトリ
 ```
 

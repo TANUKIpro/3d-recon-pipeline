@@ -19,7 +19,7 @@
   --radius: 8px;
   --radius-sm: 4px;
   --header-h: 48px;
-  --stage-bar-h: 52px;
+  --stage-bar-h: 104px;
   --font: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
 }
 
@@ -65,13 +65,14 @@ html, body {
 /* ── Stage Progress Bar ───────────────────────────────────── */
 #stage-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   height: var(--stage-bar-h);
-  padding: 0 20px;
+  padding: 10px 20px 8px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
   gap: 0;
+  overflow: visible;
 }
 
 .stage-pill {
@@ -128,6 +129,68 @@ html, body {
   height: 2px;
   background: var(--border);
   transition: background 0.3s ease;
+}
+
+.stage-connector-main {
+  margin-top: 20px;
+}
+
+#mesh-branch-slot {
+  position: relative;
+  width: 184px;
+  height: 74px;
+  overflow: visible;
+}
+
+.mesh-method-pill {
+  min-width: 160px;
+  justify-content: flex-start;
+}
+
+#mesh-pill-diffcd {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+#mesh-pill-poisson {
+  position: absolute;
+  top: 38px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.mesh-method-pill:not(.active) {
+  opacity: 0.5;
+}
+
+.mesh-method-pill.active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.mesh-method-pill.method-disabled {
+  opacity: 0.72;
+}
+
+.stage-connector-branch {
+  position: absolute;
+  top: 52px;
+  width: 20px;
+  opacity: 0.5;
+}
+
+#mesh-connector-poisson-left {
+  left: -20px;
+}
+
+#mesh-connector-poisson-right {
+  right: -20px;
+}
+
+.stage-connector.active {
+  background: var(--accent);
 }
 
 /* Stage states */
@@ -776,6 +839,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 900px) {
+  #stage-bar {
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: visible;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
   #main { flex-direction: column; }
   #viewport-section { flex: 1; border-right: none; border-bottom: 1px solid var(--border); }
   #right-panel { max-width: none; flex: 1; }

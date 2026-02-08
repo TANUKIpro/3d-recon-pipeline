@@ -8,7 +8,7 @@ const STAGE_LABELS = {
   2: 'Pi3X',
   3: 'SAM2',
   4: 'Denoise',
-  5: 'DiffCD Mesh',
+  5: 'Mesh Reconstruction',
   6: 'Texture Bake',
 };
 const DENOISE_CUSTOM_PRESET = 'custom';
@@ -123,6 +123,7 @@ export class ConfigPanel {
       denoise_sor_std_ratio: document.getElementById('cfg-denoise-sor-std'),
       denoise_radius_neighbors: document.getElementById('cfg-denoise-radius-neighbors'),
       denoise_radius_radius_ratio: document.getElementById('cfg-denoise-radius-ratio'),
+      mesh_method: document.getElementById('cfg-mesh-method'),
       diffcd_batch_size: document.getElementById('cfg-diffcd-batch'),
       diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
       diffcd_resolution: document.getElementById('cfg-diffcd-res'),
@@ -134,6 +135,9 @@ export class ConfigPanel {
       sor: document.getElementById('cfg-denoise-sor'),
       radius: document.getElementById('cfg-denoise-radius'),
     };
+    this._meshMethodSummary = document.getElementById('cfg-mesh-method-summary');
+    this._poissonSummary = document.getElementById('cfg-poisson-summary');
+    this._diffcdControls = document.getElementById('cfg-diffcd-controls');
 
     this.onStart = null;  // callback(config)
     this.onCancel = null; // callback()
@@ -154,6 +158,7 @@ export class ConfigPanel {
     this._pi3xPlanDebounce = null;
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
+    this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
@@ -219,6 +224,31 @@ export class ConfigPanel {
     this._updateFrameBudgetPreview();
   }
 
+  setMeshMethod(method) {
+    const normalized = String(method || '').trim().toLowerCase();
+    const resolved = normalized === 'diffcd' ? 'diffcd' : 'poisson';
+    if (this._inputs.mesh_method) {
+      this._inputs.mesh_method.value = resolved;
+    }
+
+    const isDiffcd = resolved === 'diffcd';
+    if (this._meshMethodSummary) {
+      this._meshMethodSummary.textContent = isDiffcd
+        ? 'Learning Mesh (DiffCD) is active.'
+        : 'Classical Mesh (Normals + PoissonRecon) is active.';
+    }
+    if (this._poissonSummary) {
+      this._poissonSummary.style.display = isDiffcd ? 'none' : '';
+    }
+    if (this._diffcdControls) {
+      this._diffcdControls.style.display = isDiffcd ? '' : 'none';
+    }
+  }
+
+  getMeshMethod() {
+    return this._inputs.mesh_method?.value || 'poisson';
+  }
+
   getConfig() {
     const suggestedObject = this._suggestObjectNameFromVideo();
     const objectName = this._normalizeObjectName(this._objectNameInput.value || suggestedObject || 'object');
@@ -251,6 +281,7 @@ export class ConfigPanel {
       denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
       denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
       denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
+      mesh_method: this.getMeshMethod(),
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
       diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
@@ -634,6 +665,7 @@ export class ConfigPanel {
     if (cfg.sam2_model != null) {
       this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
     }
+    this.setMeshMethod(String(cfg.mesh_method || this.getMeshMethod() || 'poisson'));
 
     const preset = String(cfg.denoise_preset || '');
     if (preset && preset !== DENOISE_CUSTOM_PRESET && DENOISE_PRESETS[preset]) {

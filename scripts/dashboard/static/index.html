@@ -28,35 +28,52 @@
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
-    <div class="stage-connector"></div>
+    <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="2">
       <span class="stage-dot"></span>
       <span class="stage-label">Pi3X</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
-    <div class="stage-connector"></div>
+    <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="3">
       <span class="stage-dot"></span>
       <span class="stage-label">SAM2</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
-    <div class="stage-connector"></div>
+    <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="4">
       <span class="stage-dot"></span>
       <span class="stage-label">Denoise</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
-    <div class="stage-connector"></div>
-    <div class="stage-pill" data-stage="5">
-      <span class="stage-dot"></span>
-      <span class="stage-label">Mesh</span>
-      <span class="stage-progress">0%</span>
-      <span class="stage-time"></span>
+    <div class="stage-connector stage-connector-main"></div>
+    <div id="mesh-branch-slot">
+      <div id="mesh-pill-diffcd" class="stage-pill mesh-method-pill" data-stage="5" data-mesh-method="diffcd">
+        <span class="stage-dot"></span>
+        <span class="stage-label">Learning Mesh</span>
+        <span class="stage-progress">0%</span>
+        <span class="stage-time"></span>
+      </div>
+      <div
+        id="mesh-pill-poisson"
+        class="stage-pill mesh-method-pill mesh-method-branch active"
+        data-mesh-method="poisson"
+        role="button"
+        tabindex="0"
+        aria-label="Select classical mesh reconstruction"
+      >
+        <span class="stage-dot"></span>
+        <span class="stage-label">Classical Mesh</span>
+        <span class="stage-progress">0%</span>
+        <span class="stage-time"></span>
+      </div>
+      <div id="mesh-connector-poisson-left" class="stage-connector stage-connector-branch active"></div>
+      <div id="mesh-connector-poisson-right" class="stage-connector stage-connector-branch active"></div>
     </div>
-    <div class="stage-connector"></div>
+    <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="6">
       <span class="stage-dot"></span>
       <span class="stage-label">Texture</span>
@@ -146,10 +163,10 @@
         </div>
       </div>
 
-      <!-- Stage 5: DiffCD Mesh -->
+      <!-- Stage 5: Mesh Reconstruction -->
       <div id="stage-panel-5" class="stage-panel">
         <div class="stage-panel-empty" id="stage-5-empty">
-          <p>Mesh will appear here after Stage 5 completes.</p>
+          <p>Selected mesh result will appear here after Stage 5 completes.</p>
         </div>
         <div id="three-container-5" class="three-container"></div>
         <div id="mesh-post-toolbar" style="display:none">
@@ -355,27 +372,36 @@
           </details>
         </div>
 
-        <!-- Stage 5: DiffCD easy controls -->
+        <!-- Stage 5: Mesh method -->
         <div class="config-section" data-stages="5">
-          <div class="form-group">
-            <label for="cfg-diffcd-res">DiffCD Resolution</label>
-            <input type="number" id="cfg-diffcd-res" value="512" min="64" step="64">
+          <input type="hidden" id="cfg-mesh-method" value="poisson">
+          <div id="cfg-mesh-method-summary" class="config-note">
+            Classical Mesh (Normals + PoissonRecon) is active.
           </div>
-          <details class="config-advanced">
-            <summary>Advanced (High Impact)</summary>
-            <div class="config-advanced-body">
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-diffcd-batch">DiffCD Batch</label>
-                  <input type="number" id="cfg-diffcd-batch" value="5000" min="100" step="100">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
-                  <input type="number" id="cfg-diffcd-nbatches" value="30000" min="1000" step="1000">
+          <div id="cfg-poisson-summary" class="config-note">
+            Classical path runs normal estimation first, then Screened Poisson reconstruction.
+          </div>
+          <div id="cfg-diffcd-controls" style="display:none">
+            <div class="form-group">
+              <label for="cfg-diffcd-res">DiffCD Resolution</label>
+              <input type="number" id="cfg-diffcd-res" value="512" min="64" step="64">
+            </div>
+            <details class="config-advanced">
+              <summary>Advanced (High Impact)</summary>
+              <div class="config-advanced-body">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-diffcd-batch">DiffCD Batch</label>
+                    <input type="number" id="cfg-diffcd-batch" value="5000" min="100" step="100">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
+                    <input type="number" id="cfg-diffcd-nbatches" value="30000" min="1000" step="1000">
+                  </div>
                 </div>
               </div>
-            </div>
-          </details>
+            </details>
+          </div>
         </div>
 
         <!-- Stage 6: Texture Size -->
