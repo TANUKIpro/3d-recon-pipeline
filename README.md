@@ -165,6 +165,14 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `DIFFCD_BATCH_SIZE` | `3000` | バッチサイズ |
 | `DIFFCD_N_BATCHES` | `25000` | 学習バッチ総数 |
 | `DIFFCD_RESOLUTION` | `384` | Marching Cubes 解像度 |
+| `DIFFCD_AUTO_TUNE` | `1` | GPU VRAM に応じて `BATCH_SIZE/N_BATCHES` を自動調整 |
+| `DIFFCD_AUTO_TUNE_RESPECT_MANUAL` | `1` | 手動値 (`BATCH_SIZE/N_BATCHES/RESOLUTION`) を指定した場合は自動調整を無効化 |
+| `DIFFCD_AUTO_KEEP_EFFECTIVE_SAMPLES` | `1` | `batch_size * n_batches` をなるべく維持して品質低下を防止 |
+| `DIFFCD_AUTO_MIN_N_BATCHES` | `10000` | 自動調整時の `n_batches` 下限 |
+| `DIFFCD_AUTO_SELECT_GPU` | `1` | 複数GPU時に空きVRAM最大のGPUを自動選択 (`CUDA_VISIBLE_DEVICES=all` の場合) |
+| `DIFFCD_GPU_INDEX` | unset | DiffCD を固定GPUで実行したい場合の GPU index |
+| `DIFFCD_XLA_MEM_FRACTION` | auto | JAX メモリ確保率を手動指定 (未指定時は VRAM 余裕から自動設定) |
+| `JAX_COMPILATION_CACHE_DIR` | `/root/.cache/jax_compilation_cache` | JAX コンパイルキャッシュ保存先 (2回目以降の起動高速化) |
 
 ### テクスチャベイキング (Stage 6)
 
@@ -304,6 +312,12 @@ lsof -i :7860
 ### DiffCD が遅い / 解像度を上げたい
 
 `DIFFCD_RESOLUTION=512` は A100 40GB 以上が必要。16GB GPU では `384` が上限。
+
+DiffCD はデフォルトでハードウェア自動チューニング (`DIFFCD_AUTO_TUNE=1`) が有効。まずは自動設定のまま実行し、比較のために固定値へ戻す場合は次を指定:
+
+```bash
+DIFFCD_AUTO_TUNE=0
+```
 
 ### ビルドが失敗する
 
