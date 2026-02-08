@@ -256,13 +256,9 @@ export class PreviewPanel {
     await this.initSceneForStage(2);
     this.activateStage(2);
 
-    // Hide empty placeholder
     const empty = document.getElementById('stage-2-empty');
-    if (empty) empty.classList.add('hidden');
-
-    // Show toolbar
     const toolbar = document.getElementById('pi3x-toolbar');
-    if (toolbar) toolbar.style.display = 'flex';
+    if (toolbar) toolbar.style.display = 'none';
 
     const stage = this._stages[2];
     if (!stage) return;
@@ -273,17 +269,21 @@ export class PreviewPanel {
     const loaded = await this._loadPLYIntoStage(2, plyFile);
     if (!loaded) {
       console.warn(`Pi3X point cloud not ready: ${plyFile}`);
-      return;
-    }
-
-    // Update point count
-    if (stage.currentObject?.geometry) {
-      const count = stage.currentObject.geometry.attributes.position?.count || 0;
-      const el = document.getElementById('pi3x-point-count');
-      if (el) el.textContent = `${count.toLocaleString()} points`;
+      if (empty) empty.classList.remove('hidden');
+      const pointCountEl = document.getElementById('pi3x-point-count');
+      if (pointCountEl) pointCountEl.textContent = '';
+    } else {
+      if (empty) empty.classList.add('hidden');
+      if (toolbar) toolbar.style.display = 'flex';
+      if (stage.currentObject?.geometry) {
+        const count = stage.currentObject.geometry.attributes.position?.count || 0;
+        const el = document.getElementById('pi3x-point-count');
+        if (el) el.textContent = `${count.toLocaleString()} points`;
+      }
     }
 
     // Load camera poses
+    let cameraLoaded = false;
     try {
       const res = await fetch('/api/preview/file/camera_poses.json');
       if (res.ok) {
@@ -333,6 +333,8 @@ export class PreviewPanel {
         console.info('Camera overlay forwardSign:', forwardSign, forwardSignSource);
 
         cameraOverlay.create(THREE, stage.sceneRoot, poseArray, { forwardSign });
+        cameraLoaded = true;
+        stage.container?.classList.add('visible');
 
         // Apply same centering offset as point cloud
         if (stage.centerOffset) {
@@ -348,12 +350,24 @@ export class PreviewPanel {
         if (toggle) {
           toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
+        if (empty) empty.classList.add('hidden');
+        if (toolbar) toolbar.style.display = 'flex';
       } else {
         cameraOverlay.remove();
       }
     } catch (e) {
       cameraOverlay.remove();
       console.error('Failed to load camera poses:', e);
+    }
+
+    if (!cameraLoaded) {
+      const countEl = document.getElementById('pi3x-camera-count');
+      if (countEl) countEl.textContent = '';
+    }
+    if (!loaded && !cameraLoaded) {
+      if (empty) empty.classList.remove('hidden');
+      if (toolbar) toolbar.style.display = 'none';
+      stage.container?.classList.remove('visible');
     }
   }
 
@@ -625,6 +639,8 @@ export class PreviewPanel {
 
       stage.currentObject = obj;
       stage.sceneRoot.add(obj);
+      // clearFromStage() can hide initialized containers; show it again on successful load.
+      stage.container?.classList.add('visible');
       this._fitCamera(stage, geometry.boundingBox);
       return true;
     } catch (e) {
@@ -675,6 +691,8 @@ export class PreviewPanel {
 
       stage.currentObject = object;
       stage.sceneRoot.add(object);
+      // clearFromStage() can hide initialized containers; show it again on successful load.
+      stage.container?.classList.add('visible');
       this._fitCamera(stage, box);
     } catch (e) {
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
