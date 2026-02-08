@@ -112,6 +112,10 @@ export class PipelineUI {
     return Math.round((sum / STAGE_COUNT) * 10) / 10;
   }
 
+  getStageStatus(stage) {
+    return this._stageMeta[stage]?.status || 'pending';
+  }
+
   _setStageState(stage, status, elapsed, progress, detail) {
     const pill = this._pills[stage - 1];
     if (!pill) return;

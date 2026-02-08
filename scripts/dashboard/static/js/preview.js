@@ -94,11 +94,10 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
-    // Stage-specific axis conversion:
-    // Pi3X keeps the legacy X-flip fallback until pose metadata resolves it.
-    // Stages 4-6 are already aligned in world coordinates and should not flip.
+    // Use OpenCV->OpenGL X-axis flip by default for all 3D stage scenes.
+    // Pi3X (stage 2) may override this after pose metadata is loaded.
     const sceneRoot = new THREE.Group();
-    sceneRoot.rotation.x = stageNum === 2 ? Math.PI : 0;
+    sceneRoot.rotation.x = Math.PI;
     scene.add(sceneRoot);
 
     // Show container
@@ -500,12 +499,12 @@ export class PreviewPanel {
       geometry.computeBoundingBox();
 
       let obj;
-      if (geometry.index && geometry.index.count > 0) {
+      const renderAsMesh = stageNum === 5 || (geometry.index && geometry.index.count > 0);
+      if (renderAsMesh) {
         // Mesh
-        // Fallback shading for meshes without baked normals/textures.
-        if (!geometry.hasAttribute('normal')) {
-          geometry.computeVertexNormals();
-        }
+        // Rebuild normals to avoid flat-looking shading from broken/stale attributes.
+        geometry.computeVertexNormals();
+        geometry.normalizeNormals();
 
         const hasColor = geometry.hasAttribute('color');
         const meshMat = new THREE.MeshStandardMaterial({
