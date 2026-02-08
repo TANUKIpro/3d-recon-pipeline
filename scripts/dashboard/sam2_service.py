@@ -46,13 +46,14 @@ class SAM2Service:
 
     def add_click(self, norm_x: float, norm_y: float, label: int) -> bytes:
         """Add a click point and return the mask overlay as PNG bytes."""
-        from stage_sam2_ui import _run_single_frame_inference
+        from stage_sam2_ui import _run_single_frame_inference, _sanitize_normalized_point
 
         with self._lock:
             s = self._session
             if s is None:
                 raise RuntimeError("SAM2 not initialized")
-            s.click_points.append((norm_x, norm_y))
+            nx, ny = _sanitize_normalized_point(norm_x, norm_y)
+            s.click_points.append((nx, ny))
             s.click_labels.append(label)
             self._current_mask = _run_single_frame_inference(s)
             return self._render_overlay_png()
