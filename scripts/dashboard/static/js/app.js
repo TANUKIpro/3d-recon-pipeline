@@ -102,6 +102,7 @@ stageCtrl.activateStage(stageCtrl.activeStage);
 // ── Config panel callbacks ───────────────────────────────────
 
 config.onObjectSelected = async (objectName) => {
+  const reqId = ++_objectLoadRequestId;
   if (!objectName) {
     _hydratedStatusKey = '';
     _latestStatusSnapshot = null;
@@ -121,7 +122,6 @@ config.onObjectSelected = async (objectName) => {
     return;
   }
 
-  const reqId = ++_objectLoadRequestId;
   try {
     const res = await fetch('/api/pipeline/load-object', {
       method: 'POST',
@@ -148,6 +148,8 @@ config.onObjectSelected = async (objectName) => {
 
 config.onStart = async (cfg) => {
   try {
+    // Ignore late responses from previous object-load requests while starting a new run.
+    _objectLoadRequestId += 1;
     applyMeshMethod(cfg.mesh_method || _meshMethod, { announce: false });
     config.setRunning(true);
     pipelineUI.setMeshMethodEnabled(false);

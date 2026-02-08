@@ -22,6 +22,7 @@ export class PreviewPanel {
     this._activeStage = null;
     this._animating = false;
     this._sceneFlipX = null;
+    this._previewAssetRevision = 0;
   }
 
   reset() {
@@ -765,9 +766,11 @@ export class PreviewPanel {
    */
   async loadGallery(frameCount) {
     try {
-      const res = await fetch('/api/preview/outputs');
+      const res = await fetch('/api/preview/outputs', { cache: 'no-store' });
       const data = await res.json();
       this._galleryGrid.innerHTML = '';
+      this._previewAssetRevision += 1;
+      const rev = this._previewAssetRevision;
 
       const images = data.files.filter(
         f => ['.png', '.jpg'].includes(f.ext) && f.path.startsWith('frames/')
@@ -796,7 +799,7 @@ export class PreviewPanel {
       for (const f of selected) {
         const img = document.createElement('img');
         img.className = 'gallery-thumb';
-        img.src = `/api/preview/file/${f.path}`;
+        img.src = `/api/preview/file/${f.path}?rev=${rev}`;
         img.alt = f.name;
         img.title = f.path;
         img.loading = 'lazy';
