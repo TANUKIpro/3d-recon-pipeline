@@ -136,6 +136,7 @@ DENOISE_ALGORITHMS = {
     "radius_only",
     "dbscan_radius",
 }
+_LEGACY_DIFFCD_DEFAULTS = (3000, 2500, 384)
 
 
 def _utc_iso(ts: float | None = None) -> str:
@@ -185,6 +186,20 @@ def _env_int(name: str, fallback: int) -> int:
 
 def _env_float(name: str, fallback: float) -> float:
     return _parse_float(os.environ.get(name, fallback), fallback)
+
+
+def _upgrade_legacy_diffcd_defaults(raw: dict[str, Any]) -> dict[str, Any]:
+    upgraded = dict(raw)
+    batch = _parse_int(upgraded.get("diffcd_batch_size"), -1)
+    n_batches = _parse_int(upgraded.get("diffcd_n_batches"), -1)
+    resolution = _parse_int(upgraded.get("diffcd_resolution"), -1)
+    if (batch, n_batches, resolution) != _LEGACY_DIFFCD_DEFAULTS:
+        return upgraded
+
+    upgraded["diffcd_batch_size"] = _env_int("DIFFCD_BATCH_SIZE", 5000)
+    upgraded["diffcd_n_batches"] = _env_int("DIFFCD_N_BATCHES", 40000)
+    upgraded["diffcd_resolution"] = _env_int("DIFFCD_RESOLUTION", 512)
+    return upgraded
 
 
 def _sanitize_object_name(name: str) -> str:
@@ -335,8 +350,14 @@ def _build_pipeline_config(
     video_path: str,
     object_name: str,
     output_dir: Path,
+    upgrade_legacy_diffcd_defaults: bool = False,
 ) -> PipelineConfig:
-    raw_preset = str(raw.get("denoise_preset") or "").strip()
+    source = (
+        _upgrade_legacy_diffcd_defaults(raw)
+        if upgrade_legacy_diffcd_defaults
+        else raw
+    )
+    raw_preset = str(source.get("denoise_preset") or "").strip()
     if raw_preset == "custom":
         preset = "custom"
         denoise_defaults = DENOISE_PRESET_DEFAULTS["balanced"]
@@ -348,7 +369,7 @@ def _build_pipeline_config(
         )
         denoise_defaults = DENOISE_PRESET_DEFAULTS[preset]
     denoise_algorithm = _parse_choice(
-        raw.get("denoise_algorithm"),
+        source.get("denoise_algorithm"),
         DENOISE_ALGORITHMS,
         str(denoise_defaults["denoise_algorithm"]),
     )
@@ -357,26 +378,26 @@ def _build_pipeline_config(
         video_path=video_path,
         output_dir=str(output_dir),
         object_name=object_name,
-        frame_interval=_parse_int(raw.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
-        max_frames=_parse_int(raw.get("max_frames"), _env_int("MAX_FRAMES", 50)),
-        pixel_limit=_parse_int(raw.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
-        confidence_threshold=_parse_float(raw.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.2)),
-        edge_rtol=_parse_float(raw.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
-        sam2_model=str(raw.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
+        frame_interval=_parse_int(source.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
+        max_frames=_parse_int(source.get("max_frames"), _env_int("MAX_FRAMES", 50)),
+        pixel_limit=_parse_int(source.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
+        confidence_threshold=_parse_float(source.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.2)),
+        edge_rtol=_parse_float(source.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
+        sam2_model=str(source.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
         denoise_preset=preset,
         denoise_algorithm=denoise_algorithm,
-        denoise_dbscan_eps=max(0.0, _parse_float(raw.get("denoise_dbscan_eps"), float(denoise_defaults["denoise_dbscan_eps"]))),
-        denoise_dbscan_eps_ratio=max(0.0001, _parse_float(raw.get("denoise_dbscan_eps_ratio"), float(denoise_defaults["denoise_dbscan_eps_ratio"]))),
-        denoise_dbscan_min_samples=max(1, _parse_int(raw.get("denoise_dbscan_min_samples"), int(denoise_defaults["denoise_dbscan_min_samples"]))),
-        denoise_dbscan_max_points=max(1000, _parse_int(raw.get("denoise_dbscan_max_points"), int(denoise_defaults["denoise_dbscan_max_points"]))),
-        denoise_sor_neighbors=max(2, _parse_int(raw.get("denoise_sor_neighbors"), int(denoise_defaults["denoise_sor_neighbors"]))),
-        denoise_sor_std_ratio=max(0.1, _parse_float(raw.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
-        denoise_radius_neighbors=max(1, _parse_int(raw.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
-        denoise_radius_radius_ratio=max(0.0001, _parse_float(raw.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
-        diffcd_batch_size=_parse_int(raw.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
-        diffcd_n_batches=_parse_int(raw.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 40000)),
-        diffcd_resolution=_parse_int(raw.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
-        texture_size=_parse_int(raw.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
+        denoise_dbscan_eps=max(0.0, _parse_float(source.get("denoise_dbscan_eps"), float(denoise_defaults["denoise_dbscan_eps"]))),
+        denoise_dbscan_eps_ratio=max(0.0001, _parse_float(source.get("denoise_dbscan_eps_ratio"), float(denoise_defaults["denoise_dbscan_eps_ratio"]))),
+        denoise_dbscan_min_samples=max(1, _parse_int(source.get("denoise_dbscan_min_samples"), int(denoise_defaults["denoise_dbscan_min_samples"]))),
+        denoise_dbscan_max_points=max(1000, _parse_int(source.get("denoise_dbscan_max_points"), int(denoise_defaults["denoise_dbscan_max_points"]))),
+        denoise_sor_neighbors=max(2, _parse_int(source.get("denoise_sor_neighbors"), int(denoise_defaults["denoise_sor_neighbors"]))),
+        denoise_sor_std_ratio=max(0.1, _parse_float(source.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
+        denoise_radius_neighbors=max(1, _parse_int(source.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
+        denoise_radius_radius_ratio=max(0.0001, _parse_float(source.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
+        diffcd_batch_size=_parse_int(source.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
+        diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 40000)),
+        diffcd_resolution=_parse_int(source.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
+        texture_size=_parse_int(source.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
     )
 
 
@@ -410,6 +431,7 @@ def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, A
         video_path=str(meta.get("video_path", "")),
         object_name=object_name,
         output_dir=object_dir,
+        upgrade_legacy_diffcd_defaults=True,
     )
 
     session.reset()
@@ -451,7 +473,14 @@ def _summarize_object(
     if include_files:
         item["files"] = files
         if isinstance(meta.get("config"), dict):
-            item["config"] = meta["config"]
+            cfg = _build_pipeline_config(
+                meta["config"],
+                video_path=str(meta.get("video_path", "")),
+                object_name=object_name,
+                output_dir=object_dir,
+                upgrade_legacy_diffcd_defaults=True,
+            )
+            item["config"] = cfg.to_dict()
     return item
 
 
@@ -722,11 +751,16 @@ async def pipeline_start(body: dict | None = None):
     if isinstance(existing_meta.get("config"), dict):
         cfg_source.update(existing_meta["config"])
     cfg_source.update(raw)
+    explicit_diffcd = any(
+        key in raw
+        for key in ("diffcd_batch_size", "diffcd_n_batches", "diffcd_resolution")
+    )
     cfg = _build_pipeline_config(
         cfg_source,
         video_path=video_path,
         object_name=object_name,
         output_dir=object_output_dir,
+        upgrade_legacy_diffcd_defaults=not explicit_diffcd,
     )
 
     session.reset()
