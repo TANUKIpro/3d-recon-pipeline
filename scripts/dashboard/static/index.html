@@ -183,6 +183,19 @@
             <ul id="object-artifacts"></ul>
           </div>
           <div class="form-group">
+            <label for="cfg-resume-stage">Restart From Stage</label>
+            <select id="cfg-resume-stage">
+              <option value="auto" selected>Auto (next incomplete stage)</option>
+              <option value="1">Stage 1: Extract Frames</option>
+              <option value="2">Stage 2: Pi3X</option>
+              <option value="3">Stage 3: SAM2</option>
+              <option value="4">Stage 4: Denoise</option>
+              <option value="5">Stage 5: DiffCD Mesh</option>
+              <option value="6">Stage 6: Texture Bake</option>
+            </select>
+            <div id="cfg-resume-stage-info" class="config-note"></div>
+          </div>
+          <div class="form-group">
             <label for="cfg-frame-interval">Frame Interval</label>
             <input type="number" id="cfg-frame-interval" value="10" min="1" max="1000">
           </div>

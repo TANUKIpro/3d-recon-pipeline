@@ -20,9 +20,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from scripts.dashboard.log_capture import LogBroadcaster
-from scripts.dashboard.pipeline_runner import run_pipeline
+from scripts.dashboard.pipeline_runner import broadcast, run_pipeline
 from scripts.dashboard.sam2_service import SAM2Service
-from scripts.dashboard.state import PipelineConfig, PipelineSession
+from scripts.dashboard.state import (
+    PipelineConfig,
+    PipelineSession,
+    PipelineStage,
+    detect_stage_outputs,
+)
 
 # ── Globals ───────────────────────────────────────────────────────
 
@@ -39,20 +44,23 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
 PREVIEW_FILE_EXTENSIONS = {".ply", ".obj", ".mtl", ".png", ".jpg", ".json"}
 OBJECTS_SUBDIR = "objects"
 OBJECT_META_FILE = "object_meta.json"
-OBJECT_RESET_DIRS = ("frames", "masks", "diffcd")
-OBJECT_RESET_FILES = (
-    "object_full.ply",
-    "pi3x_cache.npz",
-    "camera_poses.json",
-    "object.ply",
-    "object_denoised.ply",
-    "object_mesh.ply",
-    "textured_mesh.obj",
-    "textured_mesh.mtl",
-    "texture.png",
-    "intrinsics.json",
-    "object_points.npy",
-)
+STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
+    1: {"dirs": ("frames",), "files": ()},
+    2: {"dirs": (), "files": ("object_full.ply", "pi3x_cache.npz", "camera_poses.json")},
+    3: {"dirs": ("masks",), "files": ("object.ply",)},
+    4: {"dirs": (), "files": ("object_denoised.ply",)},
+    5: {"dirs": ("diffcd",), "files": ("object_mesh.ply", "object_points.npy")},
+    6: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+}
+
+RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
+    2: {"dirs": ("frames",), "files": ()},
+    3: {"dirs": ("frames",), "files": ("object_full.ply", "camera_poses.json", "pi3x_cache.npz")},
+    4: {"dirs": (), "files": ("object.ply",)},
+    5: {"dirs": (), "files": ("object_denoised.ply",)},
+    6: {"dirs": ("frames", "masks"), "files": ("object_mesh.ply", "camera_poses.json")},
+}
+
 PRIMARY_ARTIFACT_PATHS = (
     "object_full.ply",
     "camera_poses.json",
@@ -85,6 +93,28 @@ def _safe_json_load(path: Path) -> dict[str, Any]:
     except Exception:
         pass
     return {}
+
+
+def _parse_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _parse_float(value: Any, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _env_int(name: str, fallback: int) -> int:
+    return _parse_int(os.environ.get(name, fallback), fallback)
+
+
+def _env_float(name: str, fallback: float) -> float:
+    return _parse_float(os.environ.get(name, fallback), fallback)
 
 
 def _sanitize_object_name(name: str) -> str:
@@ -165,24 +195,9 @@ def _list_preview_files(out: Path) -> list[dict[str, Any]]:
     return files
 
 
-def _count_indexed_files(dir_path: Path, suffix: str) -> int:
-    if not dir_path.is_dir():
-        return 0
-    return sum(1 for _ in dir_path.glob(f"*{suffix}"))
-
-
 def _stage_completion_flags(out: Path) -> tuple[dict[str, bool], int, int]:
-    frame_count = _count_indexed_files(out / "frames", ".jpg")
-    mask_count = _count_indexed_files(out / "masks", ".png")
-    stages = {
-        "1": frame_count > 0,
-        "2": (out / "object_full.ply").is_file() and (out / "camera_poses.json").is_file(),
-        "3": (out / "object.ply").is_file() and mask_count > 0,
-        "4": (out / "object_denoised.ply").is_file(),
-        "5": (out / "object_mesh.ply").is_file(),
-        "6": (out / "textured_mesh.obj").is_file(),
-    }
-    return stages, frame_count, mask_count
+    stages, frame_count, mask_count = detect_stage_outputs(out)
+    return {str(k): v for k, v in stages.items()}, frame_count, mask_count
 
 
 def _latest_update_ts(out: Path, fallback: str | None) -> str | None:
@@ -199,21 +214,81 @@ def _latest_update_ts(out: Path, fallback: str | None) -> str | None:
 
 
 def _prepare_object_output_dir(out: Path) -> None:
+    _reset_outputs_from_stage(out, int(PipelineStage.EXTRACT_FRAMES))
+
+
+def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    for rel in OBJECT_RESET_DIRS:
-        target = out / rel
-        if target.is_dir():
-            shutil.rmtree(target)
-    for rel in OBJECT_RESET_FILES:
-        target = out / rel
-        if target.is_file():
-            target.unlink()
+    for stage in range(max(1, start_stage), 7):
+        plan = STAGE_RESET_PATHS.get(stage, {})
+        for rel in plan.get("dirs", ()):
+            target = out / rel
+            if target.is_dir():
+                shutil.rmtree(target)
+        for rel in plan.get("files", ()):
+            target = out / rel
+            if target.is_file():
+                target.unlink()
+
+
+def _infer_resume_stage(out: Path) -> int:
+    stage_complete, _, _ = detect_stage_outputs(out)
+    for stage in range(1, 7):
+        if not stage_complete.get(stage, False):
+            return stage
+    return int(PipelineStage.TEXTURE_BAKE)
+
+
+def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
+    issues: list[str] = []
+    req = RESUME_PREREQUISITES.get(start_stage)
+    if not req:
+        return issues
+
+    for rel in req.get("dirs", ()):
+        path = out / rel
+        if not path.is_dir():
+            issues.append(f"missing directory: {rel}/")
+            continue
+        suffix = ".jpg" if rel == "frames" else ".png" if rel == "masks" else None
+        if suffix is not None and not any(path.glob(f"*{suffix}")):
+            issues.append(f"empty directory: {rel}/ ({suffix})")
+    for rel in req.get("files", ()):
+        if not (out / rel).is_file():
+            issues.append(f"missing file: {rel}")
+    return issues
+
+
+def _build_pipeline_config(
+    raw: dict[str, Any],
+    *,
+    video_path: str,
+    object_name: str,
+    output_dir: Path,
+) -> PipelineConfig:
+    return PipelineConfig(
+        video_path=video_path,
+        output_dir=str(output_dir),
+        object_name=object_name,
+        frame_interval=_parse_int(raw.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
+        max_frames=_parse_int(raw.get("max_frames"), _env_int("MAX_FRAMES", 50)),
+        pixel_limit=_parse_int(raw.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
+        confidence_threshold=_parse_float(raw.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.1)),
+        edge_rtol=_parse_float(raw.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
+        sam2_model=str(raw.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
+        diffcd_batch_size=_parse_int(raw.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 3000)),
+        diffcd_n_batches=_parse_int(raw.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 25000)),
+        diffcd_resolution=_parse_int(raw.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 384)),
+        texture_size=_parse_int(raw.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
+    )
 
 
 def _write_object_meta(
     object_name: str,
     object_dir: Path,
     video_path: str,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> None:
     meta_path = object_dir / OBJECT_META_FILE
     existing = _safe_json_load(meta_path)
@@ -224,9 +299,27 @@ def _write_object_meta(
         "output_dir": str(object_dir),
         "created_at": existing.get("created_at", now),
         "updated_at": now,
+        "config": config if isinstance(config, dict) else existing.get("config", {}),
     }
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, Any]:
+    meta = _safe_json_load(object_dir / OBJECT_META_FILE)
+    raw_cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
+    cfg = _build_pipeline_config(
+        raw_cfg,
+        video_path=str(meta.get("video_path", "")),
+        object_name=object_name,
+        output_dir=object_dir,
+    )
+
+    session.reset()
+    session.config = cfg
+    session.hydrate_from_output_dir(object_dir)
+    session.resume_from_stage = PipelineStage(_infer_resume_stage(object_dir))
+    return _summarize_object(object_name, object_dir, include_files=True)
 
 
 def _summarize_object(
@@ -256,6 +349,7 @@ def _summarize_object(
         "file_count": len(files),
         "size_mb": round(total_bytes / 1024 / 1024, 2),
         "artifacts": primary_files,
+        "resume_from_stage": _infer_resume_stage(object_dir),
     }
     if include_files:
         item["files"] = files
@@ -282,6 +376,15 @@ async def _startup() -> None:
     log_broadcaster = LogBroadcaster(loop)
     log_broadcaster.install()
     asyncio.create_task(log_broadcaster.drain(session.ws_clients))
+    try:
+        base_output = _resolve_output_root(OUTPUT_DIR)
+        objects = _list_objects(base_output)
+        if objects:
+            latest = objects[0]["name"]
+            _load_object_into_session(latest, _object_dir(latest, base_output))
+    except Exception:
+        # Best-effort auto-load only.
+        pass
 
 
 @app.on_event("shutdown")
@@ -375,6 +478,33 @@ async def pipeline_object_info(name: str):
     return JSONResponse({"object": _summarize_object(object_name, out, include_files=True)})
 
 
+@app.post("/api/pipeline/load-object")
+async def pipeline_load_object(body: dict | None = None):
+    if session.running:
+        return JSONResponse({"error": "Cannot switch object while pipeline is running"}, status_code=409)
+
+    raw = body or {}
+    try:
+        object_name = _validate_object_name(str(raw.get("name", "")).strip())
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    base_output = _resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
+    out = _object_dir(object_name, base_output)
+    if not out.is_dir():
+        return JSONResponse({"error": "Object not found"}, status_code=404)
+
+    obj = _load_object_into_session(object_name, out)
+    await broadcast(session, {"type": "status", **session.to_status_dict()})
+    return JSONResponse(
+        {
+            "status": "loaded",
+            "object": obj,
+            "pipeline_status": session.to_status_dict(),
+        }
+    )
+
+
 @app.get("/api/pipeline/video-info")
 async def pipeline_video_info(path: str):
     """Return metadata (fps, frames, resolution, duration) for a video file."""
@@ -433,8 +563,6 @@ async def pipeline_start(body: dict | None = None):
     if session.running:
         return JSONResponse({"error": "Pipeline already running"}, status_code=409)
 
-    session.reset()
-
     raw = body or {}
     video_path = str(raw.get("video_path", "")).strip()
     requested_object = str(raw.get("object_name", "")).strip()
@@ -446,31 +574,63 @@ async def pipeline_start(body: dict | None = None):
     else:
         object_name = _suggest_object_name(video_path)
 
-    if not video_path:
-        return JSONResponse({"error": "video_path is required"}, status_code=400)
-
     output_root = _resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
     object_output_dir = _object_dir(object_name, output_root)
-    _prepare_object_output_dir(object_output_dir)
-    _write_object_meta(object_name, object_output_dir, video_path)
+    existing_meta = _safe_json_load(object_output_dir / OBJECT_META_FILE)
+    if not video_path:
+        video_path = str(existing_meta.get("video_path", "")).strip()
 
-    # Build config from body + env defaults
-    cfg = PipelineConfig(
-        video_path=video_path,
-        output_dir=str(object_output_dir),
-        object_name=object_name,
-        frame_interval=int(raw.get("frame_interval", os.environ.get("FRAME_INTERVAL", 10))),
-        max_frames=int(raw.get("max_frames", os.environ.get("MAX_FRAMES", 50))),
-        pixel_limit=int(raw.get("pixel_limit", os.environ.get("PIXEL_LIMIT", 255000))),
-        confidence_threshold=float(raw.get("confidence_threshold", os.environ.get("CONFIDENCE_THRESHOLD", 0.1))),
-        edge_rtol=float(raw.get("edge_rtol", os.environ.get("EDGE_RTOL", 0.03))),
-        sam2_model=raw.get("sam2_model", os.environ.get("SAM2_MODEL", "large")),
-        diffcd_batch_size=int(raw.get("diffcd_batch_size", os.environ.get("DIFFCD_BATCH_SIZE", 3000))),
-        diffcd_n_batches=int(raw.get("diffcd_n_batches", os.environ.get("DIFFCD_N_BATCHES", 25000))),
-        diffcd_resolution=int(raw.get("diffcd_resolution", os.environ.get("DIFFCD_RESOLUTION", 384))),
-        texture_size=int(raw.get("texture_size", os.environ.get("TEXTURE_SIZE", 2048))),
+    inferred_stage = (
+        _infer_resume_stage(object_output_dir)
+        if object_output_dir.is_dir()
+        else int(PipelineStage.EXTRACT_FRAMES)
     )
+    start_stage = _parse_int(raw.get("resume_from_stage"), inferred_stage)
+    if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.TEXTURE_BAKE):
+        return JSONResponse({"error": "resume_from_stage must be between 1 and 6"}, status_code=400)
+
+    if start_stage == int(PipelineStage.EXTRACT_FRAMES) and not video_path:
+        return JSONResponse({"error": "video_path is required for stage 1 restart"}, status_code=400)
+
+    if start_stage > int(PipelineStage.EXTRACT_FRAMES):
+        if not object_output_dir.is_dir():
+            return JSONResponse({"error": "Object output does not exist for resume"}, status_code=400)
+        missing = _validate_resume_prerequisites(object_output_dir, start_stage)
+        if missing:
+            return JSONResponse(
+                {
+                    "error": "Cannot resume from selected stage due to missing artifacts",
+                    "missing": missing,
+                },
+                status_code=400,
+            )
+
+    if start_stage == int(PipelineStage.EXTRACT_FRAMES):
+        _prepare_object_output_dir(object_output_dir)
+    else:
+        _reset_outputs_from_stage(object_output_dir, start_stage)
+
+    cfg_source = {}
+    if isinstance(existing_meta.get("config"), dict):
+        cfg_source.update(existing_meta["config"])
+    cfg_source.update(raw)
+    cfg = _build_pipeline_config(
+        cfg_source,
+        video_path=video_path,
+        object_name=object_name,
+        output_dir=object_output_dir,
+    )
+
+    session.reset()
     session.config = cfg
+    session.resume_from_stage = PipelineStage(start_stage)
+    session.hydrate_from_output_dir(object_output_dir)
+    _write_object_meta(
+        object_name,
+        object_output_dir,
+        cfg.video_path,
+        config=cfg.to_dict(),
+    )
 
     # Set env vars that stages read directly
     os.environ["DIFFCD_BATCH_SIZE"] = str(cfg.diffcd_batch_size)
@@ -485,6 +645,7 @@ async def pipeline_start(body: dict | None = None):
             "status": "started",
             "object_name": cfg.object_name,
             "output_dir": cfg.output_dir,
+            "resume_from_stage": int(session.resume_from_stage),
         }
     )
 
@@ -493,12 +654,31 @@ async def pipeline_start(body: dict | None = None):
 async def pipeline_cancel():
     if not session.running:
         return JSONResponse({"error": "No pipeline running"}, status_code=409)
+
     session.cancelled = True
+    stage_num = int(session.current_stage)
+    if int(PipelineStage.EXTRACT_FRAMES) <= stage_num <= int(PipelineStage.TEXTURE_BAKE):
+        stage = PipelineStage(stage_num)
+        session.stage_progress(
+            stage,
+            detail="Cancellation requested. Waiting for a safe stop point.",
+        )
+        await broadcast(
+            session,
+            {
+                "type": "stage_progress",
+                "stage": stage_num,
+                "progress": round(session.stages[stage_num].progress, 1),
+                "detail": session.stages[stage_num].detail,
+                "overall_progress": session.overall_progress(),
+            },
+        )
+
     # If waiting for SAM2 or Pi3X confirmation/approval, unblock it
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
     session.pi3x_approve_event.set()
-    return JSONResponse({"status": "cancelling"})
+    return JSONResponse({"status": "cancelling", "stage": stage_num})
 
 
 # ── Pi3X API ──────────────────────────────────────────────────────

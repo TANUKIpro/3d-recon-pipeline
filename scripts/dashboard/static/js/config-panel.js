@@ -3,6 +3,14 @@
  */
 
 const NEW_OBJECT_VALUE = '__new__';
+const STAGE_LABELS = {
+  1: 'Extract Frames',
+  2: 'Pi3X',
+  3: 'SAM2',
+  4: 'Denoise',
+  5: 'DiffCD Mesh',
+  6: 'Texture Bake',
+};
 
 export class ConfigPanel {
   constructor() {
@@ -17,6 +25,8 @@ export class ConfigPanel {
     this._objectInfo = document.getElementById('object-info');
     this._objectArtifacts = document.getElementById('object-artifacts');
     this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
+    this._resumeStageSelect = document.getElementById('cfg-resume-stage');
+    this._resumeStageInfo = document.getElementById('cfg-resume-stage-info');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
@@ -36,24 +46,30 @@ export class ConfigPanel {
 
     this.onStart = null;  // callback(config)
     this.onCancel = null; // callback()
+    this.onObjectSelected = null; // callback(objectName|null)
     this._videoMeta = null;
     this._maxFramesAuto = true;
     this._extractDefaults = { frame_interval: 10, max_frames: 50 };
     this._objects = [];
     this._objectInfoRequestId = 0;
     this._objectNameDirty = false;
+    this._running = false;
+    this._selectedObjectSummary = null;
 
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
+    this._updateResumeHint();
   }
 
   setRunning(running) {
+    this._running = running;
     this._startBtn.disabled = running;
     this._cancelBtn.disabled = !running;
     this._videoSelect.disabled = running;
     this._objectSelect.disabled = running;
     this._objectNameInput.disabled = running;
+    this._resumeStageSelect.disabled = running;
     this._refreshObjectsBtn.disabled = running;
     for (const inp of Object.values(this._inputs)) {
       inp.disabled = running;
@@ -70,14 +86,13 @@ export class ConfigPanel {
 
     this._panel.classList.add('stage-filtered');
     const stageStr = String(stage);
-    const names = { 1:'Extract Frames', 2:'Pi3X', 3:'SAM2', 4:'Denoise', 5:'DiffCD Mesh', 6:'Texture Bake' };
 
     this._sections.forEach(s => {
       const stages = s.dataset.stages.split(/\s+/);
       s.classList.toggle('stage-visible', stages.includes(stageStr));
     });
 
-    this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${names[stage] || 'Stage '+stage}</span>`;
+    this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${STAGE_LABELS[stage] || 'Stage '+stage}</span>`;
   }
 
   setObjectName(name) {
@@ -88,23 +103,28 @@ export class ConfigPanel {
     const matched = this._objects.find(o => o.name === normalized);
     if (matched) {
       this._objectSelect.value = normalized;
+      this._selectedObjectSummary = matched;
       this._renderObjectSummary(matched);
       this._refreshObjectInfo(normalized);
     } else {
       this._objectSelect.value = NEW_OBJECT_VALUE;
+      this._selectedObjectSummary = null;
       this._renderObjectSummary(null, normalized);
       this._renderArtifacts(null);
     }
+    this._updateResumeHint();
   }
 
   getConfig() {
     const suggestedObject = this._suggestObjectNameFromVideo();
     const objectName = this._normalizeObjectName(this._objectNameInput.value || suggestedObject || 'object');
     this._objectNameInput.value = objectName;
+    const resumeFromStage = this._resolveResumeStage();
 
     return {
       video_path: this._videoSelect.value,
       object_name: objectName,
+      resume_from_stage: resumeFromStage,
       frame_interval: this._parsePositiveInt(
         this._inputs.frame_interval.value,
         this._extractDefaults.frame_interval,
@@ -142,10 +162,12 @@ export class ConfigPanel {
       } else if (data.active_object && objects.some(o => o.name === data.active_object)) {
         target = data.active_object;
       }
-      this._selectObject(target, { keepInput: true });
+      this._selectObject(target, { keepInput: true, notify: false });
     } catch (e) {
       this._objectInfo.textContent = 'Failed to load objects';
+      this._selectedObjectSummary = null;
       this._renderArtifacts(null);
+      this._updateResumeHint();
     }
   }
 
@@ -181,8 +203,8 @@ export class ConfigPanel {
     this._startBtn.addEventListener('click', () => {
       if (this.onStart) {
         const cfg = this.getConfig();
-        if (!cfg.video_path) {
-          alert('Please select a video file.');
+        if (!cfg.video_path && cfg.resume_from_stage === 1) {
+          alert('Please select a video file for stage 1 restart.');
           return;
         }
         this.onStart(cfg);
@@ -196,6 +218,7 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
+    this._resumeStageSelect.addEventListener('change', () => this._updateResumeHint());
 
     this._objectSelect.addEventListener('change', () => {
       this._selectObject(this._objectSelect.value);
@@ -207,13 +230,16 @@ export class ConfigPanel {
       const matched = this._objects.find(o => o.name === normalized);
       if (matched) {
         this._objectSelect.value = matched.name;
+        this._selectedObjectSummary = matched;
         this._renderObjectSummary(matched);
         this._renderArtifacts(matched);
       } else {
         this._objectSelect.value = NEW_OBJECT_VALUE;
+        this._selectedObjectSummary = null;
         this._renderObjectSummary(null, normalized);
         this._renderArtifacts(null);
       }
+      this._updateResumeHint();
     });
 
     this._objectNameInput.addEventListener('change', () => {
@@ -223,11 +249,14 @@ export class ConfigPanel {
       if (matched) {
         this._objectSelect.value = matched.name;
         this._objectNameDirty = false;
+        this._selectedObjectSummary = matched;
         this._refreshObjectInfo(matched.name);
       } else {
         this._objectSelect.value = NEW_OBJECT_VALUE;
+        this._selectedObjectSummary = null;
         this._renderObjectSummary(null, normalized);
       }
+      this._updateResumeHint();
     });
 
     this._refreshObjectsBtn.addEventListener('click', () => {
@@ -251,18 +280,25 @@ export class ConfigPanel {
   }
 
   _selectObject(name, opts = {}) {
+    const notify = opts.notify !== false;
     if (name && name !== NEW_OBJECT_VALUE) {
       this._objectSelect.value = name;
       this._objectNameInput.value = name;
       this._objectNameDirty = false;
       const summary = this._objects.find(o => o.name === name) || null;
+      this._selectedObjectSummary = summary;
       this._renderObjectSummary(summary, name);
       this._renderArtifacts(summary);
       this._refreshObjectInfo(name);
+      this._updateResumeHint();
+      if (notify && !this._running && this.onObjectSelected) {
+        this.onObjectSelected(name);
+      }
       return;
     }
 
     this._objectSelect.value = NEW_OBJECT_VALUE;
+    this._selectedObjectSummary = null;
     if (!opts.keepInput || !this._objectNameInput.value.trim()) {
       this._applySuggestedObjectName(true);
     }
@@ -275,6 +311,10 @@ export class ConfigPanel {
       this._renderObjectSummary(null, '');
     }
     this._renderArtifacts(null);
+    this._updateResumeHint();
+    if (notify && !this._running && this.onObjectSelected) {
+      this.onObjectSelected(null);
+    }
   }
 
   async _refreshObjectInfo(name) {
@@ -287,8 +327,13 @@ export class ConfigPanel {
       if (!res.ok || data.error || !data.object) return;
       const object = data.object;
       if (this._objectSelect.value !== object.name) return;
+      this._selectedObjectSummary = object;
+      if (object.video_path) {
+        this._applyObjectVideoPath(object.video_path);
+      }
       this._renderObjectSummary(object, object.name);
       this._renderArtifacts(object);
+      this._updateResumeHint();
     } catch (e) {
       // Keep previously rendered summary.
     }
@@ -419,14 +464,70 @@ export class ConfigPanel {
     if (!suggested) return;
     this._objectNameInput.value = suggested;
     this._objectNameDirty = false;
+    this._selectedObjectSummary = null;
     this._renderObjectSummary(null, suggested);
     this._renderArtifacts(null);
+    this._updateResumeHint();
   }
 
   _suggestObjectNameFromVideo() {
     const option = this._videoSelect.selectedOptions?.[0];
     const raw = option?.dataset?.suggestedObjectName || '';
     return this._normalizeObjectName(raw);
+  }
+
+  _resolveResumeStage() {
+    const mode = this._resumeStageSelect?.value || 'auto';
+    if (mode !== 'auto') {
+      return this._clampStage(this._parsePositiveInt(mode, 1));
+    }
+    return this._inferAutoResumeStage();
+  }
+
+  _inferAutoResumeStage() {
+    const summary = this._selectedObjectSummary;
+    if (summary && Number.isFinite(summary.resume_from_stage)) {
+      return this._clampStage(summary.resume_from_stage);
+    }
+    if (summary && summary.stages) {
+      for (let stage = 1; stage <= 6; stage++) {
+        if (!summary.stages[String(stage)]) return stage;
+      }
+      return 6;
+    }
+    return 1;
+  }
+
+  _clampStage(stage) {
+    const n = Number(stage) || 1;
+    return Math.max(1, Math.min(6, Math.round(n)));
+  }
+
+  _updateResumeHint() {
+    if (!this._resumeStageInfo) return;
+    const mode = this._resumeStageSelect?.value || 'auto';
+    const autoStage = this._inferAutoResumeStage();
+    const label = STAGE_LABELS[autoStage] || `Stage ${autoStage}`;
+
+    if (mode === 'auto') {
+      this._resumeStageInfo.textContent = `Auto: restart from Stage ${autoStage} (${label}).`;
+      return;
+    }
+
+    const manualStage = this._clampStage(mode);
+    const manualLabel = STAGE_LABELS[manualStage] || `Stage ${manualStage}`;
+    this._resumeStageInfo.textContent =
+      `Manual: rerun from Stage ${manualStage} (${manualLabel}); downstream artifacts will be replaced.`;
+  }
+
+  _applyObjectVideoPath(path) {
+    if (!path) return;
+    const target = String(path);
+    const matched = Array.from(this._videoSelect.options || []).some((opt) => opt.value === target);
+    if (!matched) return;
+    if (this._videoSelect.value === target) return;
+    this._videoSelect.value = target;
+    this._onVideoChange();
   }
 
   _onFrameIntervalInput() {

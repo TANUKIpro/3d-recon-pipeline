@@ -23,6 +23,52 @@ export class PreviewPanel {
     this._animating = false;
   }
 
+  reset() {
+    this.clearFromStage(1);
+  }
+
+  clearFromStage(startStage = 1) {
+    const start = Math.max(1, Math.min(6, Number(startStage) || 1));
+
+    if (start <= 1) {
+      const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
+      if (empty) empty.classList.remove('hidden');
+      const headerEl = document.getElementById('frame-count-header');
+      if (headerEl) headerEl.style.display = 'none';
+      if (this._galleryGrid) this._galleryGrid.innerHTML = '';
+    }
+
+    if (start <= 2) {
+      this._clearStageScene(2);
+      const empty = document.getElementById('stage-2-empty');
+      if (empty) empty.classList.remove('hidden');
+      const toolbar = document.getElementById('pi3x-toolbar');
+      if (toolbar) toolbar.style.display = 'none';
+      const pointCount = document.getElementById('pi3x-point-count');
+      if (pointCount) pointCount.textContent = '';
+      const cameraCount = document.getElementById('pi3x-camera-count');
+      if (cameraCount) cameraCount.textContent = '';
+    }
+
+    if (start <= 4) {
+      this._clearStageScene(4);
+      const empty = document.getElementById('stage-4-empty');
+      if (empty) empty.classList.remove('hidden');
+    }
+
+    if (start <= 5) {
+      this._clearStageScene(5);
+      const empty = document.getElementById('stage-5-empty');
+      if (empty) empty.classList.remove('hidden');
+    }
+
+    if (start <= 6) {
+      this._clearStageScene(6);
+      const empty = document.getElementById('stage-6-empty');
+      if (empty) empty.classList.remove('hidden');
+    }
+  }
+
   /**
    * Load three.js and addons (once).
    */
@@ -170,6 +216,35 @@ export class PreviewPanel {
     if (!stage || !this._renderer) return;
     stage.controls.update();
     this._renderer.render(stage.scene, stage.camera);
+  }
+
+  _clearStageScene(stageNum) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
+    if (stage.currentObject) {
+      this._disposeObject(stage.currentObject);
+      stage.sceneRoot.remove(stage.currentObject);
+      stage.currentObject = null;
+    }
+    stage.centerOffset = null;
+    stage.container?.classList.remove('visible');
+  }
+
+  _disposeObject(object3d) {
+    if (!object3d) return;
+    object3d.traverse((node) => {
+      if (node.geometry && typeof node.geometry.dispose === 'function') {
+        node.geometry.dispose();
+      }
+      if (!node.material) return;
+      if (Array.isArray(node.material)) {
+        for (const material of node.material) {
+          if (material && typeof material.dispose === 'function') material.dispose();
+        }
+        return;
+      }
+      if (typeof node.material.dispose === 'function') node.material.dispose();
+    });
   }
 
   /**
