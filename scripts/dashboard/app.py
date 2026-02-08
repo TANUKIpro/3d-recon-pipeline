@@ -785,7 +785,7 @@ async def pipeline_cancel():
     # If waiting for SAM2 or Pi3X confirmation/approval, unblock it
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
-    session.pi3x_approve_event.set()
+    session.next_stage_confirm_event.set()
     return JSONResponse({"status": "cancelling", "stage": stage_num})
 
 
@@ -793,8 +793,21 @@ async def pipeline_cancel():
 
 @app.post("/api/pi3x/approve")
 async def pi3x_approve():
-    session.pi3x_approve_event.set()
+    # Backward-compatible alias for global stage transition approval.
+    session.next_stage_confirm_event.set()
     return JSONResponse({"status": "approved"})
+
+
+# ── Global stage-transition approval API ───────────────────────────
+
+@app.post("/api/pipeline/confirm-next")
+async def pipeline_confirm_next():
+    if not session.running:
+        return JSONResponse({"error": "No pipeline running"}, status_code=409)
+    if not session.next_stage_confirmation_required:
+        return JSONResponse({"status": "no_waiting_confirmation"})
+    session.next_stage_confirm_event.set()
+    return JSONResponse({"status": "confirmed"})
 
 
 # ── SAM2 API ──────────────────────────────────────────────────────

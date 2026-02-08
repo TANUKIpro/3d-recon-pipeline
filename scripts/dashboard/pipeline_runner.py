@@ -90,6 +90,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 "frame_count": frame_count,
             })
             _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.EXTRACT_FRAMES,
+                PipelineStage.PI3X_RECONSTRUCT,
+                "Extract Frames complete. Continue to Pi3X 3D Reconstruction?",
+            )
 
         if start_stage <= int(PipelineStage.PI3X_RECONSTRUCT):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
@@ -112,16 +118,14 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             session.poses_path = str(Path(output_dir) / "camera_poses.json")
             session.pi3x_cache_path = str(Path(output_dir) / "pi3x_cache.npz")
 
-            # Pi3X preview approval — pause for user to review 3D preview
-            await _broadcast_stage_progress(
+            # Pause for user to review the 3D preview before moving to Stage 3.
+            await broadcast(session, {"type": "pi3x_preview_ready"})
+            await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.PI3X_RECONSTRUCT,
-                detail="Waiting for preview approval",
+                PipelineStage.SAM2_SEGMENT,
+                "Pi3X 3D Reconstruction complete. Continue to SAM2 Segmentation?",
             )
-            await broadcast(session, {"type": "pi3x_preview_ready"})
-            session.pi3x_approve_event.clear()
-            await session.pi3x_approve_event.wait()
-            _check_cancelled(session)
 
         if start_stage <= int(PipelineStage.SAM2_SEGMENT):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
@@ -300,6 +304,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 "overall_progress": session.overall_progress(),
             })
             _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.SAM2_SEGMENT,
+                PipelineStage.DENOISE,
+                "SAM2 Segmentation complete. Continue to Point Cloud Denoise?",
+            )
 
         if start_stage <= int(PipelineStage.DENOISE):
             _require_file(session.ply_path, "Masked point cloud")
@@ -323,6 +333,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             )
             session.denoised_ply = str(Path(output_dir) / "object_denoised.ply")
             _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.DENOISE,
+                PipelineStage.DIFFCD_MESH,
+                "Point Cloud Denoise complete. Continue to DiffCD Mesh?",
+            )
 
         if start_stage <= int(PipelineStage.DIFFCD_MESH):
             _require_file(session.denoised_ply, "Denoised point cloud")
@@ -336,6 +352,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.DIFFCD_MESH,
+                PipelineStage.TEXTURE_BAKE,
+                "DiffCD Mesh complete. Continue to Texture Bake?",
+            )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
             _require_file(session.mesh_ply, "Mesh point cloud")
@@ -404,6 +426,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await asyncio.to_thread(sam2_service.release)
         except Exception:
             pass
+        session.clear_next_stage_confirmation()
         session.running = False
         session._task = None
         if cancelled:
@@ -452,6 +475,42 @@ def _require_dir(path: str | None, label: str, must_have_suffix: str | None = No
 def _check_cancelled(session: PipelineSession) -> None:
     if session.cancelled:
         raise _CancelledError()
+
+
+async def _wait_for_next_stage_confirmation(
+    session: PipelineSession,
+    from_stage: PipelineStage,
+    to_stage: PipelineStage,
+    message: str,
+) -> None:
+    session.require_next_stage_confirmation(from_stage, to_stage, message)
+    await _broadcast_stage_progress(
+        session,
+        from_stage,
+        detail="Waiting for next-stage confirmation",
+    )
+    await broadcast(
+        session,
+        {
+            "type": "next_stage_confirmation_required",
+            "from_stage": int(from_stage),
+            "to_stage": int(to_stage),
+            "message": message,
+            "overall_progress": session.overall_progress(),
+        },
+    )
+    await session.next_stage_confirm_event.wait()
+    session.clear_next_stage_confirmation()
+    await broadcast(
+        session,
+        {
+            "type": "next_stage_confirmation_cleared",
+            "from_stage": int(from_stage),
+            "to_stage": int(to_stage),
+            "overall_progress": session.overall_progress(),
+        },
+    )
+    _check_cancelled(session)
 
 
 async def _run_stage(
