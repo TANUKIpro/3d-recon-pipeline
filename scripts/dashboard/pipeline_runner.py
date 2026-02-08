@@ -310,6 +310,16 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 _stage_denoise,
                 session.ply_path,
                 output_dir,
+                cfg.denoise_preset,
+                cfg.denoise_algorithm,
+                cfg.denoise_dbscan_eps,
+                cfg.denoise_dbscan_eps_ratio,
+                cfg.denoise_dbscan_min_samples,
+                cfg.denoise_dbscan_max_points,
+                cfg.denoise_sor_neighbors,
+                cfg.denoise_sor_std_ratio,
+                cfg.denoise_radius_neighbors,
+                cfg.denoise_radius_radius_ratio,
             )
             session.denoised_ply = str(Path(output_dir) / "object_denoised.ply")
             _check_cancelled(session)
@@ -544,9 +554,37 @@ def _stage_apply_masks(
     apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
 
 
-def _stage_denoise(ply_path: str, output_dir: str, progress_cb=None) -> None:
+def _stage_denoise(
+    ply_path: str,
+    output_dir: str,
+    denoise_preset: str,
+    denoise_algorithm: str,
+    denoise_dbscan_eps: float,
+    denoise_dbscan_eps_ratio: float,
+    denoise_dbscan_min_samples: int,
+    denoise_dbscan_max_points: int,
+    denoise_sor_neighbors: int,
+    denoise_sor_std_ratio: float,
+    denoise_radius_neighbors: int,
+    denoise_radius_radius_ratio: float,
+    progress_cb=None,
+) -> None:
     from stage_denoise import denoise
-    denoise(ply_path, output_dir, progress_cb=progress_cb)
+    denoise(
+        ply_path,
+        output_dir,
+        preset=denoise_preset,
+        algorithm=denoise_algorithm,
+        dbscan_eps=denoise_dbscan_eps,
+        dbscan_eps_ratio=denoise_dbscan_eps_ratio,
+        dbscan_min_samples=denoise_dbscan_min_samples,
+        dbscan_max_points=denoise_dbscan_max_points,
+        sor_neighbors=denoise_sor_neighbors,
+        sor_std_ratio=denoise_sor_std_ratio,
+        radius_neighbors=denoise_radius_neighbors,
+        radius_ratio=denoise_radius_radius_ratio,
+        progress_cb=progress_cb,
+    )
 
 
 def _stage_diffcd(denoised_ply: str, output_dir: str, progress_cb=None) -> None:

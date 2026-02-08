@@ -11,6 +11,78 @@ const STAGE_LABELS = {
   5: 'DiffCD Mesh',
   6: 'Texture Bake',
 };
+const DENOISE_CUSTOM_PRESET = 'custom';
+const DENOISE_ALGO_LABELS = {
+  dbscan_sor: 'DBSCAN + SOR',
+  dbscan_only: 'DBSCAN',
+  sor_only: 'SOR',
+  radius_only: 'Radius Outlier Removal',
+  dbscan_radius: 'DBSCAN + Radius Outlier Removal',
+};
+const DENOISE_ALGO_STEPS = {
+  dbscan_sor: { dbscan: true, sor: true, radius: false },
+  dbscan_only: { dbscan: true, sor: false, radius: false },
+  sor_only: { dbscan: false, sor: true, radius: false },
+  radius_only: { dbscan: false, sor: false, radius: true },
+  dbscan_radius: { dbscan: true, sor: false, radius: true },
+};
+const DENOISE_PRESETS = {
+  balanced: {
+    denoise_algorithm: 'dbscan_sor',
+    denoise_dbscan_eps: 0.0,
+    denoise_dbscan_eps_ratio: 0.02,
+    denoise_dbscan_min_samples: 10,
+    denoise_dbscan_max_points: 500000,
+    denoise_sor_neighbors: 20,
+    denoise_sor_std_ratio: 2.0,
+    denoise_radius_neighbors: 8,
+    denoise_radius_radius_ratio: 0.015,
+  },
+  detail_preserving: {
+    denoise_algorithm: 'sor_only',
+    denoise_dbscan_eps: 0.0,
+    denoise_dbscan_eps_ratio: 0.02,
+    denoise_dbscan_min_samples: 10,
+    denoise_dbscan_max_points: 500000,
+    denoise_sor_neighbors: 16,
+    denoise_sor_std_ratio: 2.6,
+    denoise_radius_neighbors: 8,
+    denoise_radius_radius_ratio: 0.015,
+  },
+  isolate_subject: {
+    denoise_algorithm: 'dbscan_only',
+    denoise_dbscan_eps: 0.0,
+    denoise_dbscan_eps_ratio: 0.018,
+    denoise_dbscan_min_samples: 8,
+    denoise_dbscan_max_points: 500000,
+    denoise_sor_neighbors: 20,
+    denoise_sor_std_ratio: 2.0,
+    denoise_radius_neighbors: 8,
+    denoise_radius_radius_ratio: 0.015,
+  },
+  sparse_noise: {
+    denoise_algorithm: 'radius_only',
+    denoise_dbscan_eps: 0.0,
+    denoise_dbscan_eps_ratio: 0.02,
+    denoise_dbscan_min_samples: 10,
+    denoise_dbscan_max_points: 500000,
+    denoise_sor_neighbors: 20,
+    denoise_sor_std_ratio: 2.0,
+    denoise_radius_neighbors: 6,
+    denoise_radius_radius_ratio: 0.012,
+  },
+  aggressive_cleanup: {
+    denoise_algorithm: 'dbscan_radius',
+    denoise_dbscan_eps: 0.0,
+    denoise_dbscan_eps_ratio: 0.024,
+    denoise_dbscan_min_samples: 14,
+    denoise_dbscan_max_points: 500000,
+    denoise_sor_neighbors: 20,
+    denoise_sor_std_ratio: 2.0,
+    denoise_radius_neighbors: 10,
+    denoise_radius_radius_ratio: 0.02,
+  },
+};
 
 export class ConfigPanel {
   constructor() {
@@ -37,10 +109,26 @@ export class ConfigPanel {
       confidence_threshold: document.getElementById('cfg-conf-threshold'),
       edge_rtol: document.getElementById('cfg-edge-rtol'),
       sam2_model: document.getElementById('cfg-sam2-model'),
+      denoise_preset: document.getElementById('cfg-denoise-preset'),
+      denoise_algorithm: document.getElementById('cfg-denoise-algorithm'),
+      denoise_dbscan_eps: document.getElementById('cfg-denoise-dbscan-eps'),
+      denoise_dbscan_eps_ratio: document.getElementById('cfg-denoise-dbscan-eps-ratio'),
+      denoise_dbscan_min_samples: document.getElementById('cfg-denoise-dbscan-min-samples'),
+      denoise_dbscan_max_points: document.getElementById('cfg-denoise-dbscan-max-points'),
+      denoise_sor_neighbors: document.getElementById('cfg-denoise-sor-neighbors'),
+      denoise_sor_std_ratio: document.getElementById('cfg-denoise-sor-std'),
+      denoise_radius_neighbors: document.getElementById('cfg-denoise-radius-neighbors'),
+      denoise_radius_radius_ratio: document.getElementById('cfg-denoise-radius-ratio'),
       diffcd_batch_size: document.getElementById('cfg-diffcd-batch'),
       diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
       diffcd_resolution: document.getElementById('cfg-diffcd-res'),
       texture_size: document.getElementById('cfg-texture-size'),
+    };
+    this._denoiseSummary = document.getElementById('cfg-denoise-summary');
+    this._denoiseGroups = {
+      dbscan: document.getElementById('cfg-denoise-dbscan'),
+      sor: document.getElementById('cfg-denoise-sor'),
+      radius: document.getElementById('cfg-denoise-radius'),
     };
 
     this.onStart = null;  // callback(config)
@@ -55,7 +143,9 @@ export class ConfigPanel {
     this._running = false;
     this._selectedObjectSummary = null;
     this._startStage = 1;
+    this._updatingDenoisePreset = false;
 
+    this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
@@ -139,6 +229,16 @@ export class ConfigPanel {
       confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.1,
       edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
       sam2_model: this._inputs.sam2_model.value,
+      denoise_preset: this._inputs.denoise_preset.value || 'balanced',
+      denoise_algorithm: this._inputs.denoise_algorithm.value || 'dbscan_sor',
+      denoise_dbscan_eps: this._parseNonNegativeFloat(this._inputs.denoise_dbscan_eps.value, 0.0),
+      denoise_dbscan_eps_ratio: this._parsePositiveFloat(this._inputs.denoise_dbscan_eps_ratio.value, 0.02),
+      denoise_dbscan_min_samples: this._parsePositiveInt(this._inputs.denoise_dbscan_min_samples.value, 10),
+      denoise_dbscan_max_points: this._parsePositiveInt(this._inputs.denoise_dbscan_max_points.value, 500000),
+      denoise_sor_neighbors: this._parsePositiveInt(this._inputs.denoise_sor_neighbors.value, 20),
+      denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
+      denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
+      denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 3000,
       diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 25000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 384,
@@ -220,6 +320,31 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
+    this._inputs.denoise_preset.addEventListener('change', () => {
+      const preset = this._inputs.denoise_preset.value;
+      if (preset === DENOISE_CUSTOM_PRESET) {
+        this._updateDenoiseControls();
+        this._updateDenoiseSummary();
+        return;
+      }
+      this._applyDenoisePreset(preset);
+    });
+    this._inputs.denoise_algorithm.addEventListener('change', () => {
+      this._updateDenoiseControls();
+      this._onDenoiseInputChanged();
+    });
+    for (const key of [
+      'denoise_dbscan_eps',
+      'denoise_dbscan_eps_ratio',
+      'denoise_dbscan_min_samples',
+      'denoise_dbscan_max_points',
+      'denoise_sor_neighbors',
+      'denoise_sor_std_ratio',
+      'denoise_radius_neighbors',
+      'denoise_radius_radius_ratio',
+    ]) {
+      this._inputs[key].addEventListener('input', () => this._onDenoiseInputChanged());
+    }
 
     this._objectSelect.addEventListener('change', () => {
       this._selectObject(this._objectSelect.value);
@@ -330,7 +455,10 @@ export class ConfigPanel {
       if (this._objectSelect.value !== object.name) return;
       this._selectedObjectSummary = object;
       if (object.video_path) {
-        this._applyObjectVideoPath(object.video_path);
+        await this._applyObjectVideoPath(object.video_path);
+      }
+      if (object.config && typeof object.config === 'object') {
+        this._applyConfig(object.config);
       }
       this._renderObjectSummary(object, object.name);
       this._renderArtifacts(object);
@@ -457,6 +585,151 @@ export class ConfigPanel {
     }
   }
 
+  _applyConfig(rawCfg) {
+    const cfg = rawCfg || {};
+    for (const key of [
+      'frame_interval',
+      'max_frames',
+      'pixel_limit',
+      'confidence_threshold',
+      'edge_rtol',
+      'diffcd_batch_size',
+      'diffcd_n_batches',
+      'diffcd_resolution',
+      'texture_size',
+    ]) {
+      if (cfg[key] == null || !this._inputs[key]) continue;
+      this._inputs[key].value = String(cfg[key]);
+    }
+    if (cfg.sam2_model != null) {
+      this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
+    }
+
+    const preset = String(cfg.denoise_preset || '');
+    if (preset && preset !== DENOISE_CUSTOM_PRESET && DENOISE_PRESETS[preset]) {
+      this._applyDenoisePreset(preset);
+    } else {
+      this._inputs.denoise_preset.value = DENOISE_CUSTOM_PRESET;
+    }
+
+    if (cfg.denoise_algorithm != null) {
+      this._setSelectValue(this._inputs.denoise_algorithm, String(cfg.denoise_algorithm));
+    }
+    for (const key of [
+      'denoise_dbscan_eps',
+      'denoise_dbscan_eps_ratio',
+      'denoise_dbscan_min_samples',
+      'denoise_dbscan_max_points',
+      'denoise_sor_neighbors',
+      'denoise_sor_std_ratio',
+      'denoise_radius_neighbors',
+      'denoise_radius_radius_ratio',
+    ]) {
+      if (cfg[key] == null || !this._inputs[key]) continue;
+      this._inputs[key].value = String(cfg[key]);
+    }
+
+    this._maxFramesAuto = false;
+    this._updateDenoiseControls();
+    this._onDenoiseInputChanged();
+  }
+
+  _applyDenoisePreset(presetName) {
+    const preset = DENOISE_PRESETS[presetName] || DENOISE_PRESETS.balanced;
+    const resolvedName = DENOISE_PRESETS[presetName] ? presetName : 'balanced';
+    this._updatingDenoisePreset = true;
+    try {
+      this._inputs.denoise_preset.value = resolvedName;
+      for (const [key, value] of Object.entries(preset)) {
+        if (!this._inputs[key]) continue;
+        this._inputs[key].value = String(value);
+      }
+    } finally {
+      this._updatingDenoisePreset = false;
+    }
+    this._updateDenoiseControls();
+    this._updateDenoiseSummary();
+  }
+
+  _onDenoiseInputChanged() {
+    this._updateDenoiseControls();
+    if (!this._updatingDenoisePreset) {
+      const matched = this._findMatchingDenoisePreset();
+      this._inputs.denoise_preset.value = matched || DENOISE_CUSTOM_PRESET;
+    }
+    this._updateDenoiseSummary();
+  }
+
+  _findMatchingDenoisePreset() {
+    const current = this._readDenoiseConfig();
+    for (const [name, preset] of Object.entries(DENOISE_PRESETS)) {
+      if (preset.denoise_algorithm !== current.denoise_algorithm) continue;
+      let same = true;
+      for (const key of [
+        'denoise_dbscan_eps',
+        'denoise_dbscan_eps_ratio',
+        'denoise_dbscan_min_samples',
+        'denoise_dbscan_max_points',
+        'denoise_sor_neighbors',
+        'denoise_sor_std_ratio',
+        'denoise_radius_neighbors',
+        'denoise_radius_radius_ratio',
+      ]) {
+        if (!this._valuesAlmostEqual(current[key], preset[key])) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return name;
+    }
+    return null;
+  }
+
+  _readDenoiseConfig() {
+    return {
+      denoise_algorithm: this._inputs.denoise_algorithm.value || 'dbscan_sor',
+      denoise_dbscan_eps: this._parseNonNegativeFloat(this._inputs.denoise_dbscan_eps.value, 0.0),
+      denoise_dbscan_eps_ratio: this._parsePositiveFloat(this._inputs.denoise_dbscan_eps_ratio.value, 0.02),
+      denoise_dbscan_min_samples: this._parsePositiveInt(this._inputs.denoise_dbscan_min_samples.value, 10),
+      denoise_dbscan_max_points: this._parsePositiveInt(this._inputs.denoise_dbscan_max_points.value, 500000),
+      denoise_sor_neighbors: this._parsePositiveInt(this._inputs.denoise_sor_neighbors.value, 20),
+      denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
+      denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
+      denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
+    };
+  }
+
+  _updateDenoiseControls() {
+    const algo = this._inputs.denoise_algorithm.value || 'dbscan_sor';
+    const flags = DENOISE_ALGO_STEPS[algo] || DENOISE_ALGO_STEPS.dbscan_sor;
+    this._denoiseGroups.dbscan.hidden = !flags.dbscan;
+    this._denoiseGroups.sor.hidden = !flags.sor;
+    this._denoiseGroups.radius.hidden = !flags.radius;
+  }
+
+  _updateDenoiseSummary() {
+    if (!this._denoiseSummary) return;
+    const cfg = this._readDenoiseConfig();
+    const algo = DENOISE_ALGO_LABELS[cfg.denoise_algorithm] || cfg.denoise_algorithm;
+    const flags = DENOISE_ALGO_STEPS[cfg.denoise_algorithm] || DENOISE_ALGO_STEPS.dbscan_sor;
+
+    const details = [];
+    if (flags.dbscan) {
+      const epsText = cfg.denoise_dbscan_eps > 0
+        ? `eps=${cfg.denoise_dbscan_eps.toFixed(4)}`
+        : `eps=auto(${cfg.denoise_dbscan_eps_ratio.toFixed(3)}*bbox)`;
+      details.push(`DBSCAN ${epsText}, min_samples=${cfg.denoise_dbscan_min_samples}`);
+    }
+    if (flags.sor) {
+      details.push(`SOR k=${cfg.denoise_sor_neighbors}, std=${cfg.denoise_sor_std_ratio.toFixed(2)}`);
+    }
+    if (flags.radius) {
+      details.push(`Radius k=${cfg.denoise_radius_neighbors}, ratio=${cfg.denoise_radius_radius_ratio.toFixed(3)}`);
+    }
+
+    this._denoiseSummary.textContent = `Pipeline: ${algo}${details.length ? ` | ${details.join(' | ')}` : ''}`;
+  }
+
   _applySuggestedObjectName(force = false) {
     const selectedExisting = this._objectSelect.value && this._objectSelect.value !== NEW_OBJECT_VALUE;
     if (selectedExisting && !force) return;
@@ -494,14 +767,14 @@ export class ConfigPanel {
       `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}).`;
   }
 
-  _applyObjectVideoPath(path) {
+  async _applyObjectVideoPath(path) {
     if (!path) return;
     const target = String(path);
     const matched = Array.from(this._videoSelect.options || []).some((opt) => opt.value === target);
     if (!matched) return;
     if (this._videoSelect.value === target) return;
     this._videoSelect.value = target;
-    this._onVideoChange();
+    await this._onVideoChange();
   }
 
   _onFrameIntervalInput() {
@@ -557,9 +830,34 @@ export class ConfigPanel {
     return `${Number(sizeMb).toFixed(2)} MB`;
   }
 
+  _setSelectValue(select, value) {
+    if (!select) return;
+    if (!Array.from(select.options || []).some(opt => opt.value === value)) return;
+    select.value = value;
+  }
+
+  _valuesAlmostEqual(a, b) {
+    const aNum = Number(a);
+    const bNum = Number(b);
+    if (!Number.isFinite(aNum) || !Number.isFinite(bNum)) return false;
+    return Math.abs(aNum - bNum) <= 1e-9;
+  }
+
   _parsePositiveInt(value, fallback) {
     const n = Number.parseInt(value, 10);
     if (!Number.isFinite(n) || n <= 0) return fallback;
+    return n;
+  }
+
+  _parsePositiveFloat(value, fallback) {
+    const n = Number.parseFloat(value);
+    if (!Number.isFinite(n) || n <= 0) return fallback;
+    return n;
+  }
+
+  _parseNonNegativeFloat(value, fallback) {
+    const n = Number.parseFloat(value);
+    if (!Number.isFinite(n) || n < 0) return fallback;
     return n;
   }
 }

@@ -238,9 +238,85 @@
           </div>
         </div>
 
-        <!-- Stage 4: no params (fully automatic) -->
+        <!-- Stage 4: Denoise presets + algorithm controls -->
         <div class="config-section" data-stages="4">
-          <div class="config-auto-msg">This stage is fully automatic.</div>
+          <div class="form-group">
+            <label for="cfg-denoise-preset">Denoise Preset</label>
+            <select id="cfg-denoise-preset">
+              <option value="balanced" selected>Balanced (DBSCAN + SOR)</option>
+              <option value="detail_preserving">Detail Preserving (SOR)</option>
+              <option value="isolate_subject">Isolate Main Object (DBSCAN)</option>
+              <option value="sparse_noise">Sparse Noise Cleanup (Radius)</option>
+              <option value="aggressive_cleanup">Aggressive Cleanup (DBSCAN + Radius)</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div id="cfg-denoise-summary" class="config-note"></div>
+          </div>
+          <div class="form-group">
+            <label for="cfg-denoise-algorithm">Algorithm</label>
+            <select id="cfg-denoise-algorithm">
+              <option value="dbscan_sor" selected>DBSCAN + SOR</option>
+              <option value="dbscan_only">DBSCAN Only</option>
+              <option value="sor_only">SOR Only</option>
+              <option value="radius_only">Radius Outlier Only</option>
+              <option value="dbscan_radius">DBSCAN + Radius Outlier</option>
+            </select>
+          </div>
+          <details class="config-advanced" open>
+            <summary>Advanced Parameters</summary>
+            <div class="config-advanced-body">
+              <div id="cfg-denoise-dbscan" class="denoise-param-group">
+                <div class="denoise-param-title">DBSCAN</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-denoise-dbscan-eps-ratio">EPS Ratio (auto)</label>
+                    <input type="number" id="cfg-denoise-dbscan-eps-ratio" value="0.02" min="0.0001" max="0.5" step="0.001">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-denoise-dbscan-eps">Fixed EPS (optional)</label>
+                    <input type="number" id="cfg-denoise-dbscan-eps" value="0.0" min="0" step="0.0001">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-denoise-dbscan-min-samples">Min Samples</label>
+                    <input type="number" id="cfg-denoise-dbscan-min-samples" value="10" min="1" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-denoise-dbscan-max-points">Max Points</label>
+                    <input type="number" id="cfg-denoise-dbscan-max-points" value="500000" min="1000" step="1000">
+                  </div>
+                </div>
+                <div class="config-note">If `Fixed EPS` is 0, DBSCAN uses `EPS Ratio * median(bbox extent)`.</div>
+              </div>
+              <div id="cfg-denoise-sor" class="denoise-param-group">
+                <div class="denoise-param-title">Statistical Outlier Removal (SOR)</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-denoise-sor-neighbors">Neighbors</label>
+                    <input type="number" id="cfg-denoise-sor-neighbors" value="20" min="2" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-denoise-sor-std">STD Ratio</label>
+                    <input type="number" id="cfg-denoise-sor-std" value="2.0" min="0.1" step="0.1">
+                  </div>
+                </div>
+              </div>
+              <div id="cfg-denoise-radius" class="denoise-param-group">
+                <div class="denoise-param-title">Radius Outlier Removal</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-denoise-radius-neighbors">Min Neighbors</label>
+                    <input type="number" id="cfg-denoise-radius-neighbors" value="8" min="1" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-denoise-radius-ratio">Radius Ratio</label>
+                    <input type="number" id="cfg-denoise-radius-ratio" value="0.015" min="0.0001" max="0.5" step="0.001">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <!-- Stage 5: DiffCD easy controls -->

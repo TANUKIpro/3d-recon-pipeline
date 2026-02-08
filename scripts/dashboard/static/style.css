@@ -452,6 +452,27 @@ html, body {
   margin-top: 4px;
 }
 
+.denoise-param-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.14);
+  padding: 8px;
+  margin-bottom: 8px;
+}
+
+.denoise-param-group:last-child {
+  margin-bottom: 0;
+}
+
+.denoise-param-title {
+  font-size: 10px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
 .form-group { margin-bottom: 8px; }
 .form-group label {
   display: block;
