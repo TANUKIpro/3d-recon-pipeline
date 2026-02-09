@@ -377,13 +377,24 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 raw_mesh_ply = Path(output_dir) / "object_mesh_raw.ply"
                 post_mesh_ply = Path(output_dir) / "object_mesh_postprocessed.ply"
 
-                await _run_stage(
+                # Single stage lifecycle for the entire Classical Mesh flow
+                session.stage_start(PipelineStage.DIFFCD_MESH)
+                await broadcast(session, {
+                    "type": "stage_start",
+                    "stage": int(PipelineStage.DIFFCD_MESH),
+                    "label": mesh_label,
+                })
+
+                # Sub-phase 1: Preprocess (0-24%)
+                await _run_sub_stage(
                     session,
                     PipelineStage.DIFFCD_MESH,
                     _stage_classical_preprocess,
                     session.denoised_ply,
                     output_dir,
-                    label="Classical Mesh / Preprocess",
+                    label="Classical/Preprocess",
+                    progress_start=0.0,
+                    progress_end=24.0,
                 )
                 _check_cancelled(session)
                 _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
@@ -394,13 +405,16 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     "Classical preprocess complete. Continue to Main Poisson?",
                 )
 
-                await _run_stage(
+                # Sub-phase 2: Main Poisson (24-72%)
+                await _run_sub_stage(
                     session,
                     PipelineStage.DIFFCD_MESH,
                     _stage_classical_main,
                     str(preprocess_ply),
                     output_dir,
-                    label="Classical Mesh / Main Poisson",
+                    label="Classical/Main",
+                    progress_start=24.0,
+                    progress_end=72.0,
                 )
                 _check_cancelled(session)
                 _require_file(str(raw_mesh_ply), "Classical raw mesh")
@@ -411,13 +425,16 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     "Classical main Poisson complete. Continue to Postprocess?",
                 )
 
-                await _run_stage(
+                # Sub-phase 3: Postprocess (72-92%)
+                await _run_sub_stage(
                     session,
                     PipelineStage.DIFFCD_MESH,
                     _stage_classical_postprocess,
                     str(raw_mesh_ply),
                     output_dir,
-                    label="Classical Mesh / Postprocess",
+                    label="Classical/Postprocess",
+                    progress_start=72.0,
+                    progress_end=92.0,
                 )
                 _check_cancelled(session)
                 _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
@@ -428,14 +445,26 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     "Classical postprocess complete. Continue to Mesh Downsample?",
                 )
 
-                await _run_stage(
+                # Sub-phase 4: Downsample (92-100%)
+                await _run_sub_stage(
                     session,
                     PipelineStage.DIFFCD_MESH,
                     _stage_classical_downsample,
                     str(post_mesh_ply),
                     output_dir,
-                    label="Classical Mesh / Downsample",
+                    label="Classical/Downsample",
+                    progress_start=92.0,
+                    progress_end=100.0,
                 )
+
+                # Complete the stage once all sub-phases are done
+                session.stage_complete(PipelineStage.DIFFCD_MESH)
+                await broadcast(session, {
+                    "type": "stage_complete",
+                    "stage": int(PipelineStage.DIFFCD_MESH),
+                    "elapsed": session.stages[int(PipelineStage.DIFFCD_MESH)].elapsed,
+                    "overall_progress": session.overall_progress(),
+                })
 
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
@@ -655,6 +684,77 @@ async def _run_stage(
         "elapsed": session.stages[int(stage)].elapsed,
         "overall_progress": session.overall_progress(),
     })
+
+
+async def _run_sub_stage(
+    session: PipelineSession,
+    stage: PipelineStage,
+    fn,
+    *args,
+    label: str | None = None,
+    progress_start: float = 0.0,
+    progress_end: float = 100.0,
+) -> None:
+    """Run a sub-phase within an already-started stage.
+
+    Unlike ``_run_stage``, this does NOT send ``stage_start`` / ``stage_complete``.
+    It maps the sub-phase's internal progress (0-100%) into the caller-specified
+    range (``progress_start`` .. ``progress_end``) of the overall stage, and
+    sends ``stage_progress`` messages with the mapped value.
+
+    On error it marks the stage as failed and broadcasts ``stage_complete`` with
+    the error (so the frontend learns of the failure), then re-raises.
+    """
+    detail_prefix = f"{label}: " if label else ""
+    await _broadcast_stage_progress(
+        session, stage,
+        progress=progress_start,
+        detail=f"{detail_prefix}Starting",
+    )
+    loop = asyncio.get_running_loop()
+    span = max(0.0, progress_end - progress_start)
+
+    def _progress_cb(progress: float, detail: str | None = None) -> None:
+        clamped = max(0.0, min(100.0, float(progress)))
+        mapped = progress_start + (clamped / 100.0) * span
+
+        def _push() -> None:
+            session.stage_progress(stage, progress=mapped, detail=detail)
+            asyncio.create_task(
+                broadcast(session, {
+                    "type": "stage_progress",
+                    "stage": int(stage),
+                    "progress": round(session.stages[int(stage)].progress, 1),
+                    "detail": session.stages[int(stage)].detail,
+                    "overall_progress": session.overall_progress(),
+                })
+            )
+
+        loop.call_soon_threadsafe(_push)
+
+    def _run_with_stage_scope() -> None:
+        with stage_log_scope(int(stage)):
+            fn(*args, progress_cb=_progress_cb)
+
+    try:
+        await asyncio.to_thread(_run_with_stage_scope)
+    except Exception as e:
+        session.stage_failed(stage, str(e))
+        await broadcast(session, {
+            "type": "stage_complete",
+            "stage": int(stage),
+            "elapsed": session.stages[int(stage)].elapsed,
+            "error": str(e),
+            "overall_progress": session.overall_progress(),
+        })
+        raise
+
+    # Update progress to the end of this sub-phase range (don't mark stage complete)
+    await _broadcast_stage_progress(
+        session, stage,
+        progress=progress_end,
+        detail=f"{detail_prefix}Done",
+    )
 
 
 # ── Stage wrappers (call existing functions) ──────────────────────

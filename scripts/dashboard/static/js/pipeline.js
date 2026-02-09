@@ -150,7 +150,7 @@ export class PipelineUI {
     const normalized = this._normalizeProgress(progress);
     const current = this._stageMeta[stage] || { status: 'running', detail: null };
     let status = current.status;
-    if (status === 'pending') status = 'running';
+    if (status === 'pending' || status === 'interactive') status = 'running';
     this._stageMeta[stage] = {
       ...current,
       status,
