@@ -11,6 +11,12 @@ let PLYLoader;
 let OBJLoader;
 let MTLLoader;
 
+const FIRST_MESH_PREVIEW_FILES = new Set([
+  'object_mesh_raw.ply',
+  'object_mesh_poisson_raw.ply',
+  'object_mesh_wrapped.ply',
+]);
+
 export class PreviewPanel {
   constructor() {
     this._galleryGrid = document.getElementById('gallery-grid');
@@ -660,6 +666,8 @@ export class PreviewPanel {
     const overrideFile = String(opts.file || '').trim();
     const file = overrideFile || fileMap[stageNum];
     if (!file) return false;
+    const fileName = file.split('/').pop()?.toLowerCase() || '';
+    const isFirstMeshPreview = FIRST_MESH_PREVIEW_FILES.has(fileName);
 
     await this.initSceneForStage(stageNum);
     await this._ensureSceneFlipForStage(stageNum);
@@ -670,14 +678,16 @@ export class PreviewPanel {
 
     const ext = file.split('.').pop().toLowerCase();
     const cacheToken = opts.cacheToken ?? this._nextPreviewRevision();
-    const renderMode = String(opts.renderMode || '').toLowerCase();
+    const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
+    const stripVertexColors = opts.stripVertexColors ?? isFirstMeshPreview;
+    const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
     let loaded = false;
     if (ext === 'ply') {
       loaded = await this._loadPLYIntoStage(stageNum, file, {
         cacheToken,
         renderMode,
-        stripVertexColors: opts.stripVertexColors === true,
-        enableShadows: opts.enableShadows === true,
+        stripVertexColors: stripVertexColors === true,
+        enableShadows: enableShadows === true,
       });
     } else if (ext === 'obj') {
       loaded = await this._loadOBJIntoStage(stageNum, file, { cacheToken });
