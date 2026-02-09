@@ -95,10 +95,6 @@
           <span id="frame-count-text"></span>
         </div>
         <div id="gallery-grid"></div>
-        <div class="task-confirm-bar idle" data-stage="1" aria-live="polite">
-          <span class="task-confirm-message">Stage 1 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
       </div>
 
       <!-- Stage 2: Pi3X 3D Reconstruction -->
@@ -113,10 +109,6 @@
           </label>
           <span id="pi3x-point-count" class="toolbar-info"></span>
           <span id="pi3x-camera-count" class="toolbar-info"></span>
-        </div>
-        <div class="task-confirm-bar idle" data-stage="2" aria-live="polite">
-          <span class="task-confirm-message">Stage 2 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
         </div>
       </div>
 
@@ -145,10 +137,6 @@
           </div>
           <div id="sam2-verification-strip"></div>
         </div>
-        <div class="task-confirm-bar idle" data-stage="3" aria-live="polite">
-          <span class="task-confirm-message">Stage 3 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
       </div>
 
       <!-- Stage 4: Denoise -->
@@ -157,10 +145,6 @@
           <p>Denoised point cloud will appear here after Stage 4 completes.</p>
         </div>
         <div id="three-container-4" class="three-container"></div>
-        <div class="task-confirm-bar idle" data-stage="4" aria-live="polite">
-          <span class="task-confirm-message">Stage 4 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
       </div>
 
       <!-- Stage 5: Mesh Reconstruction -->
@@ -183,10 +167,6 @@
           <button id="mesh-post-reset" class="btn-small" type="button">Reset</button>
           <span id="mesh-post-status" class="toolbar-info"></span>
         </div>
-        <div class="task-confirm-bar idle" data-stage="5" aria-live="polite">
-          <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
       </div>
 
       <!-- Stage 6: Texture Bake -->
@@ -195,6 +175,29 @@
           <p>Textured mesh will appear here after Stage 6 completes.</p>
         </div>
         <div id="three-container-6" class="three-container"></div>
+      </div>
+
+      <div id="task-confirm-dock">
+        <div class="task-confirm-bar idle is-visible" data-stage="1" aria-live="polite">
+          <span class="task-confirm-message">Stage 1 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar idle" data-stage="2" aria-live="polite">
+          <span class="task-confirm-message">Stage 2 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar idle" data-stage="3" aria-live="polite">
+          <span class="task-confirm-message">Stage 3 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar idle" data-stage="4" aria-live="polite">
+          <span class="task-confirm-message">Stage 4 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar idle" data-stage="5" aria-live="polite">
+          <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
         <div class="task-confirm-bar task-confirm-final" data-stage="6" aria-live="polite">
           <span class="task-confirm-message">Final stage. No next-stage confirmation.</span>
           <button class="task-confirm-btn btn-small" disabled>Done</button>

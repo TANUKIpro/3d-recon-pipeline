@@ -94,6 +94,7 @@ document.addEventListener('stage-activated', async (e) => {
       preview.activateStage(stage);
     }
   }
+  setTaskConfirmVisibleStage(stage);
 });
 
 // Align initial config view with default stage tab.
@@ -325,6 +326,7 @@ ws.on('next_stage_confirmation_required', (msg) => {
     stageCtrl.setStageState(fromStage, 'interactive');
     stageCtrl.activateStage(fromStage);
     setTaskConfirmState(fromStage, 'waiting', String(msg.message || defaultTaskConfirmWaitingMessage(fromStage)));
+    setTaskConfirmVisibleStage(fromStage);
   }
   if (msg.message) {
     appendLog('stdout', `${msg.message}\n`, { stage: fromStage });
@@ -338,6 +340,7 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
       _waitingConfirmationStage = null;
     }
     setTaskConfirmState(fromStage, 'confirmed', defaultTaskConfirmConfirmedMessage(fromStage));
+    setTaskConfirmVisibleStage(stageCtrl.activeStage);
   }
 });
 
@@ -351,6 +354,7 @@ ws.on('pipeline_complete', (msg) => {
     setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
   }
   setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
+  setTaskConfirmVisibleStage(6);
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   setMeshPostToolbarVisible(true);
@@ -371,6 +375,7 @@ ws.on('pipeline_error', (msg) => {
     );
     _waitingConfirmationStage = null;
   }
+  setTaskConfirmVisibleStage(stageCtrl.activeStage);
   const cancelled = /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
   if (msg.stage >= 1 && msg.stage <= 6) {
@@ -685,6 +690,34 @@ function defaultTaskConfirmStandbyMessage(stage) {
   return `Stage ${stage} is complete. Start the pipeline to continue to Stage ${stage + 1}.`;
 }
 
+function resolveTaskConfirmVisibleStage(preferredStage) {
+  const waiting = Number(_waitingConfirmationStage);
+  if (Number.isFinite(waiting) && waiting >= 1 && waiting <= TRANSITION_STAGE_MAX) {
+    return waiting;
+  }
+
+  const preferred = Number(preferredStage);
+  if (Number.isFinite(preferred) && preferred >= 1 && preferred <= STAGE_COUNT) {
+    return preferred;
+  }
+
+  const active = Number(stageCtrl.activeStage);
+  if (Number.isFinite(active) && active >= 1 && active <= STAGE_COUNT) {
+    return active;
+  }
+
+  return 1;
+}
+
+function setTaskConfirmVisibleStage(preferredStage = null) {
+  const visibleStage = resolveTaskConfirmVisibleStage(preferredStage);
+  for (let stage = 1; stage <= STAGE_COUNT; stage++) {
+    const bar = _taskConfirmBars[stage];
+    if (!bar) continue;
+    bar.classList.toggle('is-visible', stage === visibleStage);
+  }
+}
+
 function resolveTaskConfirmIdleMessage(statusMsg, stage) {
   const info = getStageInfo(statusMsg, stage);
   if (!info) return defaultTaskConfirmIdleMessage(stage);
@@ -752,6 +785,7 @@ function resetTaskConfirmBars(resumeFromStage = 1) {
     }
   }
   setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
+  setTaskConfirmVisibleStage(resumeStage);
 }
 
 function isTransitionConfirmed(statusMsg, stage) {
@@ -815,6 +849,7 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
   } else {
     setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
   }
+  setTaskConfirmVisibleStage(resolvePreferredStage(statusMsg));
 }
 
 async function confirmNextStage(stage) {
@@ -832,6 +867,7 @@ async function confirmNextStage(stage) {
     if (data.status === 'no_waiting_confirmation') {
       _waitingConfirmationStage = null;
       setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
+      setTaskConfirmVisibleStage(stageCtrl.activeStage);
       return;
     }
 

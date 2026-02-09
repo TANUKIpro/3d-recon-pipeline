@@ -311,6 +311,18 @@ html, body {
 }
 .stage-panel.active { display: flex; }
 
+#task-confirm-dock {
+  flex: 0 0 auto;
+}
+
+#task-confirm-dock .task-confirm-bar {
+  display: none;
+}
+
+#task-confirm-dock .task-confirm-bar.is-visible {
+  display: flex;
+}
+
 .task-confirm-bar {
   display: flex;
   align-items: center;
