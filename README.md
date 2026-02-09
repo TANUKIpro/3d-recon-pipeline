@@ -2,7 +2,13 @@
 
 RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker 完結型パイプライン。
 
-SAM2 によるインタラクティブ物体セグメンテーション、Pi3X による多視点3D再構成、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、マルチビューテクスチャベイキングを1コンテナで実行する。
+Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物体セグメンテーション、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、マルチビューテクスチャベイキングを1コンテナで実行する。
+
+## 現在の実装状態 (2026-02-09)
+
+- ステージ順序は **Stage 2 = Pi3X**, **Stage 3 = SAM2** (Dashboard/CLIとも共通)
+- Dashboard は `data/output/objects/<object_name>/` 単位で成果物を管理し、ステージ途中からの再開をサポート
+- `SAM2_MODEL` は現状コード上で `large` 固定ロード (`scripts/stage_sam2_ui.py`) で、選択UIは将来拡張用
 
 ## パイプライン概要
 
@@ -12,11 +18,12 @@ SAM2 によるインタラクティブ物体セグメンテーション、Pi3X �
   ├─ Stage 1: フレーム抽出 (CPU)
   │    動画から等間隔にフレームを JPEG 抽出
   │
-  ├─ Stage 2: SAM2 セグメンテーション (GPU)
-  │    Web ダッシュボードで対象物体をクリック → 全フレームにマスク伝播
+  ├─ Stage 2: Pi3X 3D再構成 (GPU)
+  │    全フレーム一括推論 → 信頼度 + 深度エッジで点群抽出
   │
-  ├─ Stage 3: Pi3X 3D再構成 (GPU)
-  │    全フレーム一括推論 → トリプルフィルタ (信頼度 + 深度エッジ + SAM2マスク)
+  ├─ Stage 3: SAM2 セグメンテーション (GPU)
+  │    Web ダッシュボードで対象物体をクリック → マスク伝播
+  │    Stage 2 のキャッシュ点群へ SAM2 マスクを適用
   │
   ├─ Stage 4: 点群デノイズ (CPU)
   │    DBSCAN クラスタリング + Statistical Outlier Removal
@@ -62,7 +69,7 @@ docker compose up
 2. **Target Object** で既存オブジェクトを選択、または新規 `Object Name` を入力
 3. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
 4. **Start Pipeline** をクリック
-5. Stage 2 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
+5. Stage 3 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
 6. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
 7. ログ・進捗・3Dプレビューをリアルタイムで確認
 8. キャンセル/停止後の再開は、ステージバーで再開したいタスクを選択して **Start Pipeline** をクリック
@@ -123,7 +130,7 @@ docker compose run --rm --service-ports \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4 --skip-to 4
 ```
 
-> **注意**: CLI モードでは Stage 2 で Gradio UI が起動する (従来と同じ動作)。
+> **注意**: CLI モードでは Stage 3 で Gradio UI が起動する。
 
 ### 個別ステージ実行
 
@@ -146,13 +153,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `FRAME_INTERVAL` | `10` | N フレームごとに1枚抽出 |
 | `MAX_FRAMES` | `50` | 抽出フレーム数の上限 (Pi3X入力でも上限として使用) |
 
-### SAM2 セグメンテーション (Stage 2)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `SAM2_MODEL` | `large` | モデルサイズ: `tiny` / `small` / `base` / `large` |
-
-### Pi3X 3D再構成 (Stage 3)
+### Pi3X 3D再構成 (Stage 2)
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
@@ -160,6 +161,12 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `CONFIDENCE_THRESHOLD` | `0.2` | 信頼度フィルタ閾値 |
 | `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
 | `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
+
+### SAM2 セグメンテーション (Stage 3)
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `SAM2_MODEL` | `large` | SAM2 モデルタイプ設定 (現状実装では `large` 固定ロード) |
 
 ### メッシュ再構成 (Stage 5)
 
@@ -212,6 +219,18 @@ docker compose run --rm --entrypoint python3 pipeline \
 |------|-----------|------|
 | `TEXTURE_SIZE` | `2048` | テクスチャアトラスの解像度 (px) |
 
+## docs タスク別ドキュメント
+
+詳細は `docs/<task_name>.md` 形式で整理:
+
+- `docs/extract_frames.md`
+- `docs/pi3x_reconstruct.md`
+- `docs/sam2_segment.md`
+- `docs/denoise_point_cloud.md`
+- `docs/mesh_classical.md`
+- `docs/mesh_diffcd.md`
+- `docs/texture_bake.md`
+
 ## 出力ファイル
 
 パイプライン完了後、`data/output/objects/<object_name>/` に以下が生成される:
@@ -220,6 +239,8 @@ docker compose run --rm --entrypoint python3 pipeline \
 data/output/
 └── objects/
     └── <object_name>/
+        ├── object_full.ply        # Stage 2出力 (信頼度 + 深度エッジ適用済み点群)
+        ├── pi3x_cache.npz         # Stage 2/3間キャッシュ (点群・色・マスク)
         ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
         ├── textured_mesh.mtl      # マテリアル定義
         ├── texture.png            # テクスチャアトラス (2048x2048)
@@ -263,7 +284,7 @@ data/output/
 └────────────────────────────────────────────────────────┘
 ```
 
-### トリプルフィルタ (Stage 3)
+### トリプルフィルタ (Stage 2 + Stage 3)
 
 Pi3X は全画像に対して推論し、3段階のフィルタで対象物体の点群を抽出する:
 
