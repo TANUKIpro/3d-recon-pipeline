@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -26,6 +27,7 @@ _DEFAULT_SMOOTH_METHOD = "laplacian"
 _DEFAULT_SMOOTH_ITERATIONS = 2
 _DEFAULT_SMOOTH_LAMBDA = 0.5
 _DEFAULT_SMOOTH_TAUBIN_NU = -0.53
+_DEFAULT_AUTO_SMOOTH = False
 
 
 def _emit_progress(
@@ -239,34 +241,42 @@ def run_classical_mesh(
     raw_vertices, raw_faces = mesh_vertex_face_count(raw_copy_path)
     print(f"Saved raw poisson mesh: {raw_copy_path}")
     print(f"  Raw vertices: {raw_vertices:,}, Faces: {raw_faces:,}")
-    _emit_progress(progress_cb, 88.0, "Applying mesh smoothing")
-
-    smooth_method = _resolve_smooth_method()
-    smooth_iterations = max(
-        0,
-        _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
-    )
-    smooth_lambda = _env_float("CLASSICAL_SMOOTH_LAMBDA", _DEFAULT_SMOOTH_LAMBDA)
-    smooth_taubin_nu = _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", _DEFAULT_SMOOTH_TAUBIN_NU)
-    print(
-        "Smoothing params: "
-        f"method={smooth_method}, iterations={smooth_iterations}, "
-        f"lambda={smooth_lambda:.3f}"
-        + (f", nu={smooth_taubin_nu:.3f}" if smooth_method == "taubin" else "")
-    )
-
     final_path = output_path / "object_mesh.ply"
-    smooth_mesh_file(
-        raw_copy_path,
-        final_path,
-        method=smooth_method,
-        iterations=smooth_iterations,
-        lamb=smooth_lambda,
-        taubin_nu=smooth_taubin_nu,
-    )
-    smooth_vertices, smooth_faces = mesh_vertex_face_count(final_path)
+    auto_smooth = _env_bool("CLASSICAL_AUTO_SMOOTH", _DEFAULT_AUTO_SMOOTH)
+
+    if auto_smooth:
+        _emit_progress(progress_cb, 88.0, "Applying mesh smoothing")
+        smooth_method = _resolve_smooth_method()
+        smooth_iterations = max(
+            0,
+            _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
+        )
+        smooth_lambda = _env_float("CLASSICAL_SMOOTH_LAMBDA", _DEFAULT_SMOOTH_LAMBDA)
+        smooth_taubin_nu = _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", _DEFAULT_SMOOTH_TAUBIN_NU)
+        print(
+            "Smoothing params: "
+            f"method={smooth_method}, iterations={smooth_iterations}, "
+            f"lambda={smooth_lambda:.3f}"
+            + (f", nu={smooth_taubin_nu:.3f}" if smooth_method == "taubin" else "")
+        )
+        smooth_mesh_file(
+            raw_copy_path,
+            final_path,
+            method=smooth_method,
+            iterations=smooth_iterations,
+            lamb=smooth_lambda,
+            taubin_nu=smooth_taubin_nu,
+        )
+        final_vertices, final_faces = mesh_vertex_face_count(final_path)
+        print(f"  Smoothed vertices: {final_vertices:,}, Faces: {final_faces:,}")
+    else:
+        _emit_progress(progress_cb, 88.0, "Skipping mesh smoothing (optional)")
+        shutil.copyfile(raw_copy_path, final_path)
+        final_vertices, final_faces = mesh_vertex_face_count(final_path)
+        print("Smoothing skipped (optional).")
+        print(f"  Final vertices: {final_vertices:,}, Faces: {final_faces:,}")
+
     print(f"Saved final mesh: {final_path}")
-    print(f"  Smoothed vertices: {smooth_vertices:,}, Faces: {smooth_faces:,}")
 
     _emit_progress(progress_cb, 100.0, "Classical mesh stage complete")
     return final_path

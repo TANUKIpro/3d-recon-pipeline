@@ -596,10 +596,10 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       appendLog('stdout', 'Texture outputs removed. Re-run Stage 6 for updated texturing.\n', { stage: 6 });
     }
 
-    if (!_latestStatusSnapshot?.running) {
+    if (!isPipelineRunning()) {
       _hydratedStatusKey = '';
       try {
-        const statusRes = await fetch('/api/pipeline/status');
+        const statusRes = await fetch('/api/pipeline/status', { cache: 'no-store' });
         if (statusRes.ok) {
           const status = await statusRes.json();
           await applyStatusSnapshot(status, { forceHydrate: true });
