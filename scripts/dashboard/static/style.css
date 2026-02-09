@@ -66,7 +66,7 @@ html, body {
 #stage-bar {
   display: flex;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   height: var(--stage-bar-h);
   padding: 10px 12px 8px;
   background: var(--bg-secondary);
@@ -1042,7 +1042,6 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 900px) {
   #stage-bar {
-    justify-content: flex-start;
     overflow-x: auto;
     overflow-y: visible;
     padding-left: 12px;
