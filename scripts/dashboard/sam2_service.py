@@ -97,6 +97,7 @@ class SAM2Service:
         import cv2
         import numpy as np
         import torch
+        from stage_sam2_ui import _run_single_frame_inference
 
         with self._lock:
             s = self._session
@@ -104,6 +105,21 @@ class SAM2Service:
                 raise RuntimeError("SAM2 not initialized")
             if not s.click_points:
                 raise ValueError("No click points to propagate")
+
+            # Redo/restart safety: clear stale masks before writing new outputs.
+            for stale_path in s.mask_dir.glob("*.png"):
+                try:
+                    stale_path.unlink()
+                except OSError:
+                    pass
+
+            # Ensure the interacted first frame has a mask on disk even if
+            # the underlying predictor skips re-emitting it during propagation.
+            if self._current_mask is None:
+                self._current_mask = _run_single_frame_inference(s)
+            if self._current_mask is not None:
+                mask0_path = s.mask_dir / "00000.png"
+                cv2.imwrite(str(mask0_path), (self._current_mask * 255).astype(np.uint8))
 
             with torch.inference_mode():
                 num_frames = s.inference_state["num_frames"]

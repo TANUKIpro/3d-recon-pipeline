@@ -169,7 +169,9 @@ def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
             points=points_np,
             labels=labels_np,
             clear_old_points=True,
-            normalize_coords=False,
+            # Points are in original-frame pixel coordinates.
+            # Let SAM2 normalize/scale them to the internal image size.
+            normalize_coords=True,
         )
     mask = (masks_out[0] > 0).cpu().numpy().squeeze()
     return mask
