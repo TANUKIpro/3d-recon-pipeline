@@ -117,6 +117,8 @@ export class PreviewPanel {
     if (!this._renderer) {
       this._renderer = new THREE.WebGLRenderer({ antialias: true });
       this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      this._renderer.shadowMap.enabled = true;
+      this._renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
     const w = container.clientWidth || 640;
@@ -137,6 +139,16 @@ export class PreviewPanel {
     scene.add(ambient);
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
     dirLight.position.set(2, 3, 4);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(1024, 1024);
+    dirLight.shadow.camera.near = 0.1;
+    dirLight.shadow.camera.far = 40;
+    dirLight.shadow.camera.left = -6;
+    dirLight.shadow.camera.right = 6;
+    dirLight.shadow.camera.top = 6;
+    dirLight.shadow.camera.bottom = -6;
+    dirLight.shadow.bias = -0.0006;
+    dirLight.shadow.normalBias = 0.02;
     scene.add(dirLight);
 
     // Grid
@@ -148,12 +160,26 @@ export class PreviewPanel {
     sceneRoot.rotation.x = this._defaultSceneFlipX(stageNum) ? Math.PI : 0;
     scene.add(sceneRoot);
 
+    // Hidden by default. Enabled only when mesh-shadow profile is active.
+    const shadowFloor = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.28 }),
+    );
+    shadowFloor.material.side = THREE.DoubleSide;
+    shadowFloor.rotation.x = -Math.PI / 2;
+    shadowFloor.receiveShadow = true;
+    shadowFloor.visible = false;
+    sceneRoot.add(shadowFloor);
+
     // Show container
     container.classList.add('visible');
 
     this._stages[stageNum] = {
       scene, sceneRoot, camera, controls, container,
       currentObject: null,
+      ambientLight: ambient,
+      keyLight: dirLight,
+      shadowFloor,
       initialized: true,
     };
 
@@ -229,6 +255,7 @@ export class PreviewPanel {
       stage.currentObject = null;
     }
     stage.centerOffset = null;
+    this._setMeshShadowProfile(stage, null, false);
     stage.container?.classList.remove('visible');
   }
 
@@ -603,10 +630,13 @@ export class PreviewPanel {
   async loadClassicalPhase(step, opts = {}) {
     const descriptor = this._classicalPhaseDescriptor(step);
     if (!descriptor) return false;
+    const isMeshPhase = descriptor.renderMode === 'mesh';
     return this.loadStageResult(5, {
       file: descriptor.file,
       renderMode: descriptor.renderMode,
       cacheToken: opts.cacheToken,
+      stripVertexColors: opts.stripVertexColors ?? isMeshPhase,
+      enableShadows: opts.enableShadows ?? isMeshPhase,
     });
   }
 
@@ -636,7 +666,12 @@ export class PreviewPanel {
     const renderMode = String(opts.renderMode || '').toLowerCase();
     let loaded = false;
     if (ext === 'ply') {
-      loaded = await this._loadPLYIntoStage(stageNum, file, { cacheToken, renderMode });
+      loaded = await this._loadPLYIntoStage(stageNum, file, {
+        cacheToken,
+        renderMode,
+        stripVertexColors: opts.stripVertexColors === true,
+        enableShadows: opts.enableShadows === true,
+      });
     } else if (ext === 'obj') {
       loaded = await this._loadOBJIntoStage(stageNum, file, { cacheToken });
     } else {
@@ -681,6 +716,12 @@ export class PreviewPanel {
       const forcePoints = mode === 'points';
       const forceMesh = mode === 'mesh';
       const renderAsMesh = forceMesh || (!forcePoints && (stageNum === 5 || (geometry.index && geometry.index.count > 0)));
+      const stripVertexColors = renderAsMesh && opts.stripVertexColors === true;
+      const enableShadows = renderAsMesh && opts.enableShadows === true;
+      if (stripVertexColors && geometry.hasAttribute('color')) {
+        geometry.deleteAttribute('color');
+      }
+      this._setMeshShadowProfile(stage, geometry.boundingBox, enableShadows);
       if (renderAsMesh) {
         // Mesh
         // Rebuild normals to avoid flat-looking shading from broken/stale attributes.
@@ -697,6 +738,8 @@ export class PreviewPanel {
         });
 
         const mesh = new THREE.Mesh(geometry, meshMat);
+        mesh.castShadow = enableShadows;
+        mesh.receiveShadow = enableShadows;
 
         // Lightweight edge overlay to reveal silhouette when no texture is present.
         let overlay = null;
@@ -738,6 +781,7 @@ export class PreviewPanel {
     } catch (e) {
       console.error(`Failed to load PLY (stage ${stageNum}):`, e);
       stage.centerOffset = null;
+      this._setMeshShadowProfile(stage, null, false);
       return false;
     }
   }
@@ -795,6 +839,42 @@ export class PreviewPanel {
     } catch (e) {
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
       return false;
+    }
+  }
+
+  /**
+   * Configure optional shadow-focused lighting profile for mesh previews.
+   */
+  _setMeshShadowProfile(stage, box, enabled) {
+    if (!stage) return;
+    if (stage.ambientLight) {
+      stage.ambientLight.intensity = enabled ? 0.36 : 0.6;
+    }
+    if (stage.keyLight) {
+      stage.keyLight.intensity = enabled ? 1.05 : 0.8;
+    }
+
+    const floor = stage.shadowFloor;
+    if (!floor) return;
+    if (!enabled || !box) {
+      floor.visible = false;
+      return;
+    }
+
+    const size = box.getSize(new THREE.Vector3());
+    const extent = Math.max(1.2, Math.max(size.x, size.y, size.z) * 1.6);
+    floor.scale.set(extent, extent, 1);
+    floor.position.y = box.min.y - Math.max(size.y * 0.02, 0.002);
+    floor.visible = true;
+
+    if (stage.keyLight?.shadow?.camera) {
+      const shadowExtent = Math.max(2.0, extent);
+      stage.keyLight.shadow.camera.left = -shadowExtent;
+      stage.keyLight.shadow.camera.right = shadowExtent;
+      stage.keyLight.shadow.camera.top = shadowExtent;
+      stage.keyLight.shadow.camera.bottom = -shadowExtent;
+      stage.keyLight.shadow.camera.far = Math.max(20, shadowExtent * 4);
+      stage.keyLight.shadow.needsUpdate = true;
     }
   }
 
