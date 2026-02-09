@@ -205,11 +205,11 @@ html, body {
 .stage-connector-branch::after { display: none; }
 
 #mesh-connector-poisson-left {
-  left: -32px;
+  left: 0;
 }
 
 #mesh-connector-poisson-right {
-  right: -32px;
+  right: 0;
 }
 
 .stage-connector.active {
