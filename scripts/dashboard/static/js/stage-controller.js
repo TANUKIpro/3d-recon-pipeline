@@ -9,7 +9,7 @@ export class StageController {
   constructor() {
     this._panels = {};
     this._pills = {};
-    this._meshMethodPills = Array.from(document.querySelectorAll('.mesh-method-pill'));
+    this._meshStagePills = Array.from(document.querySelectorAll('.mesh-stage-pill'));
     this._activeStage = 1; // Default to Extract Frames panel
     this._stageStates = {};
 
@@ -36,7 +36,7 @@ export class StageController {
       this._panels[i]?.classList.remove('active');
       this._pills[i]?.classList.remove('selected');
     }
-    this._meshMethodPills.forEach((pill) => pill.classList.remove('selected'));
+    this._meshStagePills.forEach((pill) => pill.classList.remove('selected'));
 
     // Show target panel, select pill
     this._panels[n]?.classList.add('active');
@@ -68,7 +68,7 @@ export class StageController {
       }
     }
 
-    for (const pill of this._meshMethodPills) {
+    for (const pill of this._meshStagePills) {
       if (pill.dataset.stage === '5') continue;
       pill.addEventListener('click', () => this.activateStage(5));
       pill.addEventListener('keydown', (event) => {

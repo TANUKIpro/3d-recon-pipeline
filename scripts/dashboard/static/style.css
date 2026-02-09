@@ -154,8 +154,8 @@ html, body {
 
 #mesh-branch-slot {
   position: relative;
-  width: 200px;
-  height: 74px;
+  width: 704px;
+  height: 82px;
   overflow: visible;
   flex-shrink: 0;
   isolation: isolate;
@@ -167,7 +167,7 @@ html, body {
   white-space: nowrap;
 }
 
-#mesh-branch-slot .mesh-method-pill {
+#mesh-branch-slot .mesh-stage-pill {
   z-index: 2;
 }
 
@@ -178,11 +178,45 @@ html, body {
   transform: translateX(-50%);
 }
 
+.mesh-poisson-step {
+  position: absolute;
+  top: 40px;
+  min-width: 148px;
+  max-width: 148px;
+  justify-content: flex-start;
+}
+
+.mesh-poisson-step .stage-time {
+  display: none;
+}
+
+#mesh-pill-poisson-pre {
+  left: 38px;
+}
+
+#mesh-pill-poisson {
+  left: 200px;
+}
+
+#mesh-pill-poisson-post {
+  left: 362px;
+}
+
+#mesh-pill-poisson-downsample {
+  left: 524px;
+}
+
+#mesh-branch-slot.poisson-inactive .mesh-poisson-step {
+  opacity: 0.52;
+}
+
+#mesh-branch-slot.poisson-inactive .stage-connector-branch {
+  opacity: 0.72;
+}
+
 #mesh-pill-poisson {
   position: absolute;
-  top: 38px;
-  left: 50%;
-  transform: translateX(-50%);
+  transform: none;
 }
 
 .mesh-method-pill:not(.active) {
@@ -200,8 +234,7 @@ html, body {
 
 .stage-connector-branch {
   position: absolute;
-  top: 52px;
-  width: 32px;
+  top: 54px;
   height: 2px;
   opacity: 1;
   background: var(--text-dim);
@@ -212,10 +245,27 @@ html, body {
 
 #mesh-connector-poisson-left {
   left: 0;
+  width: 32px;
+}
+
+#mesh-connector-poisson-pre-main {
+  left: 186px;
+  width: 14px;
+}
+
+#mesh-connector-poisson-main-post {
+  left: 348px;
+  width: 14px;
+}
+
+#mesh-connector-poisson-post-down {
+  left: 510px;
+  width: 14px;
 }
 
 #mesh-connector-poisson-right {
-  right: 0;
+  left: 672px;
+  width: 32px;
 }
 
 .stage-connector.active {
@@ -246,7 +296,7 @@ html, body {
   left: 0;
   top: 15px;
   width: 2px;
-  height: 38px;
+  height: 40px;
   background: var(--text-dim);
   transition: background 0.3s ease;
   z-index: 0;
@@ -258,7 +308,7 @@ html, body {
   right: 0;
   top: 15px;
   width: 2px;
-  height: 38px;
+  height: 40px;
   background: var(--text-dim);
   transition: background 0.3s ease;
   z-index: 0;

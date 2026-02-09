@@ -53,6 +53,7 @@ const meshMethodPills = {
   diffcd: document.getElementById('mesh-pill-diffcd'),
   poisson: document.getElementById('mesh-pill-poisson'),
 };
+const meshPoissonStepPills = Array.from(document.querySelectorAll('.mesh-poisson-step'));
 
 const _taskConfirmBars = {};
 const _taskConfirmMessages = {};
@@ -460,6 +461,17 @@ function bindMeshMethodPills() {
       choosePoisson(event);
     }
   });
+
+  for (const pill of meshPoissonStepPills) {
+    if (!pill || pill === poissonPill) continue;
+    pill.addEventListener('click', choosePoisson);
+    pill.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        choosePoisson(event);
+      }
+    });
+  }
 }
 
 function applyMeshMethod(method, opts = {}) {
@@ -473,7 +485,7 @@ function applyMeshMethod(method, opts = {}) {
   if (changed && opts.announce !== false) {
     const label = resolved === 'diffcd'
       ? 'Learning Mesh (DiffCD)'
-      : 'Classical Mesh (Normals + Poisson)';
+      : 'Classical Mesh (Pre -> Main -> Post -> Downsample)';
     appendLog('stdout', `Mesh method switched to: ${label}\n`, { stage: 5 });
   }
 }
@@ -587,6 +599,9 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
     let msg = resetToRaw
       ? `Reset complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`
       : `Smoothing complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`;
+    if (data.downsample_applied) {
+      msg += ' Downsample applied.';
+    }
     if (data.texture_invalidated) {
       msg += ' Stage 6 artifacts were cleared.';
     }
@@ -594,7 +609,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
 
     appendLog(
       'stdout',
-      `Mesh post-process: method=${data.method}, iterations=${data.iterations}, lambda=${Number(data.lamb).toFixed(2)}, source=${data.source}\n`,
+      `Mesh post-process: method=${data.method}, iterations=${data.iterations}, lambda=${Number(data.lamb).toFixed(2)}, source=${data.source}, downsample=${data.downsample_applied ? 'yes' : 'no'}\n`,
       { stage: 5 },
     );
     if (data.texture_invalidated) {
