@@ -32,7 +32,10 @@ Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物�
   │    Classical(既定): 法線推定 → Screened Poisson → 平滑化
   │    Learning(DiffCD): 暗黙表面フィッティング → Marching Cubes → 平滑化
   │
-  └─ Stage 6: テクスチャベイキング (CPU)
+  ├─ Stage 6: メッシュラップ (CPU)
+  │    Iterative Poisson 外皮化 → UV展開安定化向けに穴や細片を低減
+  │
+  └─ Stage 7: テクスチャベイキング (CPU)
        カメラ内部パラメータ推定 → xatlas UV展開 → マルチビューテクスチャ投影
 
 出力: textured_mesh.obj / .mtl / texture.png
@@ -101,7 +104,7 @@ docker compose down
 - **生成物一覧**: 選択中オブジェクトの主要成果物をパネル表示
 - **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
 - **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
-- **進捗バー**: 6ステージの状態をリアルタイム表示 (Stage 5 は Classical / DiffCD の分岐切替対応)
+- **進捗バー**: 7ステージの状態をリアルタイム表示 (Stage 5 は Classical / DiffCD の分岐切替対応)
 - **再開操作**: 停止中は、現在選択中のステージタブから `Start Pipeline` で再開
 - **ログビューア**: WebSocket 経由でリアルタイムストリーミング
 - **3D プレビュー**: three.js による点群・メッシュのインタラクティブ表示 (回転・ズーム)
@@ -213,7 +216,17 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `DIFFCD_XLA_MEM_FRACTION` | auto | JAX メモリ確保率を手動指定 (未指定時は VRAM 余裕から自動設定) |
 | `JAX_COMPILATION_CACHE_DIR` | `/root/.cache/jax_compilation_cache` | JAX コンパイルキャッシュ保存先 (2回目以降の起動高速化) |
 
-### テクスチャベイキング (Stage 6)
+### メッシュラップ (Stage 6)
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `MESH_WRAP_ENABLED` | `1` | Stage 6 の有効/無効 |
+| `MESH_WRAP_METHOD` | `poisson_iterative` | Wrap 手法 (`ipsr` 指定時は現状フォールバック) |
+| `MESH_WRAP_ITERATIONS` | `1` | Wrap 反復回数 |
+| `MESH_WRAP_SAMPLE_POINTS` | `180000` | 各反復の点サンプル数 |
+| `MESH_WRAP_POISSON_DEPTH` | `8` | Wrap Poisson 深さ |
+
+### テクスチャベイキング (Stage 7)
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
@@ -229,6 +242,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 - `docs/denoise_point_cloud.md`
 - `docs/mesh_classical.md`
 - `docs/mesh_diffcd.md`
+- `docs/mesh_wrap.md`
 - `docs/texture_bake.md`
 
 ## 出力ファイル
@@ -245,6 +259,7 @@ data/output/
         ├── textured_mesh.mtl      # マテリアル定義
         ├── texture.png            # テクスチャアトラス (2048x2048)
         ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
+        ├── object_mesh_wrapped.ply # Stage 6出力メッシュ (Texture用ラップ結果)
         ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ
         ├── object_mesh_postprocessed.ply  # Stage 5後処理後メッシュ
         ├── object_mesh_input.ply  # Stage 5前処理後点群

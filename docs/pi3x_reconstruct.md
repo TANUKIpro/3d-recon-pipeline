@@ -27,7 +27,7 @@ SAM2 マスク適用は Stage 3 で `pi3x_cache.npz` を使って後適用する
 後段利用:
 
 - Stage 3 が `pi3x_cache.npz` と `masks/*.png` を合成して `object.ply` を生成
-- Stage 6 が `camera_poses.json` を利用
+- Stage 7 が `camera_poses.json` を利用
 
 ## 詳細フロー
 

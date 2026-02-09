@@ -61,7 +61,8 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
             "object_points_with_normals.ply",
         ),
     },
-    6: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    6: {"dirs": ("mesh_wrap",), "files": ("object_mesh_wrapped.ply",)},
+    7: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
 RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
@@ -69,7 +70,8 @@ RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
     3: {"dirs": ("frames",), "files": ("object_full.ply", "camera_poses.json", "pi3x_cache.npz")},
     4: {"dirs": (), "files": ("object.ply",)},
     5: {"dirs": (), "files": ("object_denoised.ply",)},
-    6: {"dirs": ("frames", "masks"), "files": ("object_mesh.ply", "camera_poses.json")},
+    6: {"dirs": (), "files": ("object_mesh.ply",)},
+    7: {"dirs": ("frames", "masks"), "files": ("object_mesh.ply", "camera_poses.json")},
 }
 
 PRIMARY_ARTIFACT_PATHS = (
@@ -78,6 +80,7 @@ PRIMARY_ARTIFACT_PATHS = (
     "object.ply",
     "object_denoised.ply",
     "object_mesh.ply",
+    "object_mesh_wrapped.ply",
     "textured_mesh.obj",
     "texture.png",
     "intrinsics.json",
@@ -329,7 +332,7 @@ def _prepare_object_output_dir(out: Path) -> None:
 
 def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    for stage in range(max(1, start_stage), 7):
+    for stage in range(max(1, start_stage), int(PipelineStage.TEXTURE_BAKE) + 1):
         plan = STAGE_RESET_PATHS.get(stage, {})
         for rel in plan.get("dirs", ()):
             target = out / rel
@@ -343,7 +346,7 @@ def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
 
 def _infer_resume_stage(out: Path) -> int:
     stage_complete, _, _ = detect_stage_outputs(out)
-    for stage in range(1, 7):
+    for stage in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
         if not stage_complete.get(stage, False):
             return stage
     return int(PipelineStage.TEXTURE_BAKE)
@@ -544,7 +547,7 @@ async def _startup() -> None:
             stage = int(session.current_stage)
         except Exception:
             return None
-        if 1 <= stage <= 6:
+        if 1 <= stage <= int(PipelineStage.TEXTURE_BAKE):
             return stage
         return None
 
@@ -771,7 +774,10 @@ async def pipeline_start(body: dict | None = None):
     )
     start_stage = _parse_int(raw.get("resume_from_stage"), inferred_stage)
     if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.TEXTURE_BAKE):
-        return JSONResponse({"error": "resume_from_stage must be between 1 and 6"}, status_code=400)
+        return JSONResponse(
+            {"error": f"resume_from_stage must be between 1 and {int(PipelineStage.TEXTURE_BAKE)}"},
+            status_code=400,
+        )
 
     if start_stage == int(PipelineStage.EXTRACT_FRAMES) and not video_path:
         return JSONResponse({"error": "video_path is required for stage 1 restart"}, status_code=400)
@@ -999,9 +1005,14 @@ async def mesh_postprocess(body: dict | None = None):
 
     texture_invalidated = False
     if invalidate_texture:
-        texture_outputs = STAGE_RESET_PATHS[int(PipelineStage.TEXTURE_BAKE)]["files"]
-        if any((out / rel).is_file() for rel in texture_outputs):
-            _reset_outputs_from_stage(out, int(PipelineStage.TEXTURE_BAKE))
+        invalidate_from = int(PipelineStage.MESH_WRAP)
+        downstream_files: tuple[str, ...] = tuple(
+            rel
+            for stage_id in range(invalidate_from, int(PipelineStage.TEXTURE_BAKE) + 1)
+            for rel in STAGE_RESET_PATHS.get(stage_id, {}).get("files", ())
+        )
+        if any((out / rel).is_file() for rel in downstream_files):
+            _reset_outputs_from_stage(out, invalidate_from)
             texture_invalidated = True
 
     session.mesh_ply = str(mesh_path)

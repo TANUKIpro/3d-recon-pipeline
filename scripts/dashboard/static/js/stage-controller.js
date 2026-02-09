@@ -7,6 +7,7 @@
 
 export class StageController {
   constructor() {
+    this._stageCount = 7;
     this._panels = {};
     this._pills = {};
     this._meshStagePills = Array.from(document.querySelectorAll('.mesh-stage-pill'));
@@ -14,7 +15,7 @@ export class StageController {
     this._stageStates = {};
 
     // Collect all pills and panels
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= this._stageCount; i++) {
       this._pills[i] = document.querySelector(`.stage-pill[data-stage="${i}"]`);
       this._panels[i] = document.getElementById(`stage-panel-${i}`);
       this._stageStates[i] = 'pending';
@@ -32,7 +33,7 @@ export class StageController {
 
   activateStage(n) {
     // Hide all panels, deselect all pills
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= this._stageCount; i++) {
       this._panels[i]?.classList.remove('active');
       this._pills[i]?.classList.remove('selected');
     }
@@ -61,7 +62,7 @@ export class StageController {
   }
 
   _bindEvents() {
-    for (let i = 1; i <= 6; i++) {
+    for (let i = 1; i <= this._stageCount; i++) {
       const pill = this._pills[i];
       if (pill) {
         pill.addEventListener('click', () => this.activateStage(i));

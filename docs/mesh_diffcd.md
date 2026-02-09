@@ -25,7 +25,8 @@ PyTorch と JAX の GPU コンテキスト競合を避けるため、DiffCD は�
 
 後段利用:
 
-- Stage 6 (`texture_bake`) が `<output_dir>/object_mesh.ply` を使用
+- Stage 6 (`mesh_wrap`) が `<output_dir>/object_mesh.ply` を使用
+- Stage 7 (`texture_bake`) が `<output_dir>/object_mesh_wrapped.ply` を使用
 
 ## 詳細フロー
 

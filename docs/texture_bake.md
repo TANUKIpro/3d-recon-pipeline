@@ -2,7 +2,7 @@
 
 ## 対象タスク
 
-- Stage 6: テクスチャベイク
+- Stage 7: テクスチャベイク
 - 実装: `scripts/stage_texture_bake.py`
 
 ## 概要
@@ -14,7 +14,8 @@
 
 前段入力:
 
-- `<output_dir>/object_mesh.ply`
+- `<output_dir>/object_mesh_wrapped.ply` (推奨)
+- `<output_dir>/object_mesh.ply` (互換フォールバック)
 - `<output_dir>/camera_poses.json`
 - `<output_dir>/frames/*.jpg`
 - `<output_dir>/masks/*.png`

@@ -9,7 +9,8 @@ const STAGE_LABELS = {
   3: 'SAM2',
   4: 'Denoise',
   5: 'Mesh Reconstruction',
-  6: 'Texture Bake',
+  6: 'Mesh Wrap',
+  7: 'Texture Bake',
 };
 const DENOISE_CUSTOM_PRESET = 'custom';
 const DENOISE_ALGO_LABELS = {
@@ -449,7 +450,7 @@ export class ConfigPanel {
     for (const o of objects) {
       const opt = document.createElement('option');
       opt.value = o.name;
-      opt.textContent = `${o.name} (${o.complete_stages || 0}/6)`;
+      opt.textContent = `${o.name} (${o.complete_stages || 0}/7)`;
       this._objectSelect.appendChild(opt);
     }
   }
@@ -523,7 +524,7 @@ export class ConfigPanel {
   _renderObjectSummary(object, fallbackName = '') {
     if (object) {
       const details = [
-        `${object.complete_stages || 0}/6 stages`,
+        `${object.complete_stages || 0}/7 stages`,
         `${object.file_count || 0} files`,
         `${this._formatSize(object.size_mb)}`,
       ];
@@ -821,7 +822,7 @@ export class ConfigPanel {
 
   _clampStage(stage) {
     const n = Number(stage) || 1;
-    return Math.max(1, Math.min(6, Math.round(n)));
+    return Math.max(1, Math.min(7, Math.round(n)));
   }
 
   _updateResumeHint() {

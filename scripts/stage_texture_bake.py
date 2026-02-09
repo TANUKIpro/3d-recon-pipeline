@@ -1,4 +1,4 @@
-"""Stage 6: Texture baking from multiple views.
+"""Stage 7: Texture baking from multiple views.
 
 Estimates camera intrinsics, generates UV atlas, projects textures from
 multiple views, and exports OBJ + MTL + PNG.

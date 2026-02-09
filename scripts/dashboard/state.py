@@ -25,8 +25,9 @@ class PipelineStage(IntEnum):
     SAM2_SEGMENT = 3
     DENOISE = 4
     DIFFCD_MESH = 5
-    TEXTURE_BAKE = 6
-    COMPLETE = 7
+    MESH_WRAP = 6
+    TEXTURE_BAKE = 7
+    COMPLETE = 8
 
 
 STAGE_LABELS: dict[int, str] = {
@@ -35,6 +36,7 @@ STAGE_LABELS: dict[int, str] = {
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.DENOISE: "Point Cloud Denoise",
     PipelineStage.DIFFCD_MESH: "Mesh Reconstruction",
+    PipelineStage.MESH_WRAP: "Mesh Wrap",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
 }
 
@@ -43,7 +45,8 @@ STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
     3: ("object.ply",),
     4: ("object_denoised.ply",),
     5: ("object_mesh.ply",),
-    6: ("textured_mesh.obj",),
+    6: ("object_mesh_wrapped.ply",),
+    7: ("textured_mesh.obj",),
 }
 
 
@@ -57,13 +60,17 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
     out = Path(output_dir)
     frame_count = _count_indexed_files(out / "frames", ".jpg")
     mask_count = _count_indexed_files(out / "masks", ".png")
+    textured_ready = (out / "textured_mesh.obj").is_file()
+    wrapped_ready = (out / "object_mesh_wrapped.ply").is_file()
     stage_complete = {
         1: frame_count > 0,
         2: all((out / rel).is_file() for rel in STAGE_OUTPUT_FILES[2]),
         3: (out / "object.ply").is_file() and mask_count > 0,
         4: (out / "object_denoised.ply").is_file(),
         5: (out / "object_mesh.ply").is_file(),
-        6: (out / "textured_mesh.obj").is_file(),
+        # Backward compatibility: older runs have texture outputs but no wrapped mesh artifact.
+        6: wrapped_ready or textured_ready,
+        7: textured_ready,
     }
     return stage_complete, frame_count, mask_count
 
@@ -168,7 +175,7 @@ class PipelineSession:
 
     def __post_init__(self) -> None:
         if not self.stages:
-            for s in range(1, 7):
+            for s in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
                 self.stages[s] = StageInfo()
 
     def reset(self) -> None:
@@ -219,10 +226,17 @@ class PipelineSession:
         self.poses_path = str(out / "camera_poses.json") if (out / "camera_poses.json").is_file() else None
         self.ply_path = str(out / "object.ply") if (out / "object.ply").is_file() else None
         self.denoised_ply = str(out / "object_denoised.ply") if (out / "object_denoised.ply").is_file() else None
-        self.mesh_ply = str(out / "object_mesh.ply") if (out / "object_mesh.ply").is_file() else None
+        wrapped_mesh = out / "object_mesh_wrapped.ply"
+        base_mesh = out / "object_mesh.ply"
+        if wrapped_mesh.is_file():
+            self.mesh_ply = str(wrapped_mesh)
+        elif base_mesh.is_file():
+            self.mesh_ply = str(base_mesh)
+        else:
+            self.mesh_ply = None
         self.obj_path = str(out / "textured_mesh.obj") if (out / "textured_mesh.obj").is_file() else None
 
-        for stage_id in range(1, 7):
+        for stage_id in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
             info = self.stages[stage_id]
             info.start_time = None
             info.elapsed = None
@@ -236,7 +250,7 @@ class PipelineSession:
                 info.progress = 0.0
 
         completed = [stage_id for stage_id, ok in stage_complete.items() if ok]
-        if len(completed) == 6:
+        if len(completed) == int(PipelineStage.TEXTURE_BAKE):
             self.current_stage = PipelineStage.COMPLETE
         elif completed:
             self.current_stage = PipelineStage(max(completed))
@@ -321,9 +335,10 @@ class PipelineSession:
 
     def overall_progress(self) -> float:
         total = 0.0
-        for stage_id in range(1, 7):
+        stage_count = int(PipelineStage.TEXTURE_BAKE)
+        for stage_id in range(1, stage_count + 1):
             total += self.stages[stage_id].progress
-        return round(total / 6.0, 1)
+        return round(total / float(stage_count), 1)
 
     def to_status_dict(self) -> dict:
         return {
