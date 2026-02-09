@@ -299,7 +299,11 @@ ws.on('stage_complete', async (msg) => {
     // SAM2 complete — reload Pi3X viewer with filtered object.ply
     await preview.loadPi3xResults(cameraOverlay, 'object.ply');
   } else if (msg.stage >= 4 && msg.stage <= 6) {
-    await preview.loadStageResult(msg.stage);
+    if (msg.stage === 5 && _meshMethod === 'poisson') {
+      await preview.loadClassicalPhase('downsample', { cacheToken: Date.now() });
+    } else {
+      await preview.loadStageResult(msg.stage);
+    }
   }
 
   if (msg.stage === 5) {
@@ -582,11 +586,14 @@ async function previewPoissonStep(step, opts = {}) {
   if (!resolvedStep) return false;
 
   const overrideFile = String(opts.file || '').trim();
+  const isMeshStep = resolvedStep !== 'preprocess';
   const loaded = overrideFile
     ? await preview.loadStageResult(5, {
       file: overrideFile,
-      renderMode: resolvedStep === 'preprocess' ? 'points' : 'mesh',
+      renderMode: isMeshStep ? 'mesh' : 'points',
       cacheToken: Date.now(),
+      stripVertexColors: isMeshStep,
+      enableShadows: isMeshStep,
     })
     : await preview.loadClassicalPhase(resolvedStep, { cacheToken: Date.now() });
   if (loaded) {
@@ -788,7 +795,11 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
 
-    await preview.loadStageResult(5);
+    if (_meshMethod === 'poisson') {
+      await preview.loadClassicalPhase('downsample', { cacheToken: Date.now() });
+    } else {
+      await preview.loadStageResult(5);
+    }
     stageCtrl.activateStage(5);
 
     const vertices = Number(data.vertices) || 0;
@@ -1171,11 +1182,12 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 
   if (isStageDone(statusMsg, 4)) await preview.loadStageResult(4);
   if (isStageDone(statusMsg, 5)) {
-    await preview.loadStageResult(5);
     if (isPoissonMesh) {
+      await preview.loadClassicalPhase('downsample', { cacheToken: Date.now() });
       _latestPoissonPreviewStep = 'downsample';
       setMeshPhaseStatus(`Showing: ${POISSON_PREVIEW_TITLES.downsample}`, 'ready');
     } else {
+      await preview.loadStageResult(5);
       _latestPoissonPreviewStep = null;
       setMeshPhaseStatus('', '');
     }
