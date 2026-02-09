@@ -544,6 +544,14 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 _stage_mesh_wrap,
                 session.mesh_ply,
                 output_dir,
+                cfg.meshwrap_poisson_depth,
+                cfg.meshwrap_poisson_scale,
+                cfg.meshwrap_density_trim_q,
+                cfg.meshwrap_target_face_ratio,
+                cfg.meshwrap_iterations,
+                cfg.meshwrap_crop_scale,
+                cfg.meshwrap_sample_points,
+                cfg.meshwrap_normal_radius_ratio,
             )
             wrapped_mesh = Path(output_dir) / "object_mesh_wrapped.ply"
             if wrapped_mesh.is_file():
@@ -954,10 +962,34 @@ def _stage_classical_downsample(post_mesh_ply: str, output_dir: str, progress_cb
     run_classical_downsample(post_mesh_ply, output_dir, progress_cb=progress_cb)
 
 
-def _stage_mesh_wrap(mesh_ply: str, output_dir: str, progress_cb=None) -> None:
+def _stage_mesh_wrap(
+    mesh_ply: str,
+    output_dir: str,
+    poisson_depth: int = 9,
+    poisson_scale: float = 1.18,
+    density_trim_q: float = 0.06,
+    target_face_ratio: float = 1.80,
+    iterations: int = 2,
+    crop_scale: float = 1.08,
+    sample_points: int = 180_000,
+    normal_radius_ratio: float = 0.035,
+    progress_cb=None,
+) -> None:
     from stage_mesh_wrap import run_mesh_wrap
 
-    run_mesh_wrap(mesh_ply, output_dir, progress_cb=progress_cb)
+    run_mesh_wrap(
+        mesh_ply,
+        output_dir,
+        progress_cb=progress_cb,
+        poisson_depth=poisson_depth,
+        poisson_scale=poisson_scale,
+        density_trim_q=density_trim_q,
+        target_face_ratio=target_face_ratio,
+        iterations=iterations,
+        crop_scale=crop_scale,
+        sample_points=sample_points,
+        normal_radius_ratio=normal_radius_ratio,
+    )
 
 
 def _stage_texture_bake(

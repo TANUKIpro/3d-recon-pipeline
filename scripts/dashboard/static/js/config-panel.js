@@ -84,6 +84,49 @@ const DENOISE_PRESETS = {
     denoise_radius_radius_ratio: 0.02,
   },
 };
+const MESHWRAP_CUSTOM_PRESET = 'custom';
+const MESHWRAP_PRESETS = {
+  balanced: {
+    meshwrap_poisson_depth: 9,
+    meshwrap_poisson_scale: 1.18,
+    meshwrap_density_trim_q: 0.06,
+    meshwrap_target_face_ratio: 1.80,
+    meshwrap_iterations: 2,
+    meshwrap_crop_scale: 1.08,
+    meshwrap_sample_points: 180000,
+    meshwrap_normal_radius_ratio: 0.035,
+  },
+  quality: {
+    meshwrap_poisson_depth: 10,
+    meshwrap_poisson_scale: 1.22,
+    meshwrap_density_trim_q: 0.08,
+    meshwrap_target_face_ratio: 2.50,
+    meshwrap_iterations: 3,
+    meshwrap_crop_scale: 1.10,
+    meshwrap_sample_points: 250000,
+    meshwrap_normal_radius_ratio: 0.04,
+  },
+  fast: {
+    meshwrap_poisson_depth: 8,
+    meshwrap_poisson_scale: 1.15,
+    meshwrap_density_trim_q: 0.05,
+    meshwrap_target_face_ratio: 1.50,
+    meshwrap_iterations: 1,
+    meshwrap_crop_scale: 1.06,
+    meshwrap_sample_points: 120000,
+    meshwrap_normal_radius_ratio: 0.03,
+  },
+  minimal: {
+    meshwrap_poisson_depth: 8,
+    meshwrap_poisson_scale: 1.10,
+    meshwrap_density_trim_q: 0.03,
+    meshwrap_target_face_ratio: 1.20,
+    meshwrap_iterations: 1,
+    meshwrap_crop_scale: 1.04,
+    meshwrap_sample_points: 100000,
+    meshwrap_normal_radius_ratio: 0.025,
+  },
+};
 
 export class ConfigPanel {
   constructor() {
@@ -129,7 +172,17 @@ export class ConfigPanel {
       diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
       diffcd_resolution: document.getElementById('cfg-diffcd-res'),
       texture_size: document.getElementById('cfg-texture-size'),
+      meshwrap_preset: document.getElementById('cfg-meshwrap-preset'),
+      meshwrap_poisson_depth: document.getElementById('cfg-meshwrap-poisson-depth'),
+      meshwrap_poisson_scale: document.getElementById('cfg-meshwrap-poisson-scale'),
+      meshwrap_density_trim_q: document.getElementById('cfg-meshwrap-density-trim-q'),
+      meshwrap_target_face_ratio: document.getElementById('cfg-meshwrap-face-ratio'),
+      meshwrap_iterations: document.getElementById('cfg-meshwrap-iterations'),
+      meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
+      meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
+      meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
     };
+    this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
     this._denoiseGroups = {
       dbscan: document.getElementById('cfg-denoise-dbscan'),
@@ -153,12 +206,14 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this._updatingDenoisePreset = false;
+    this._updatingMeshWrapPreset = false;
     this._pi3xFrameTargetAuto = true;
     this._pi3xFrameTargetRecommended = null;
     this._pi3xPlanRequestId = 0;
     this._pi3xPlanDebounce = null;
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
+    this._applyMeshWrapCustomDefaults();
     this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
     this._bindEvents();
     this._loadVideos();
@@ -286,6 +341,15 @@ export class ConfigPanel {
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
       diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
+      meshwrap_preset: this._inputs.meshwrap_preset?.value || 'custom',
+      meshwrap_poisson_depth: this._parsePositiveInt(this._inputs.meshwrap_poisson_depth?.value, 6),
+      meshwrap_poisson_scale: this._parsePositiveFloat(this._inputs.meshwrap_poisson_scale?.value, 1.18),
+      meshwrap_density_trim_q: this._parseNonNegativeFloat(this._inputs.meshwrap_density_trim_q?.value, 0.06),
+      meshwrap_target_face_ratio: this._parsePositiveFloat(this._inputs.meshwrap_target_face_ratio?.value, 1.80),
+      meshwrap_iterations: this._parsePositiveInt(this._inputs.meshwrap_iterations?.value, 2),
+      meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
+      meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 180000),
+      meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
       texture_size: parseInt(this._inputs.texture_size.value) || 2048,
     };
   }
@@ -392,6 +456,31 @@ export class ConfigPanel {
       'denoise_radius_radius_ratio',
     ]) {
       this._inputs[key].addEventListener('input', () => this._onDenoiseInputChanged());
+    }
+
+    if (this._inputs.meshwrap_preset) {
+      this._inputs.meshwrap_preset.addEventListener('change', () => {
+        const preset = this._inputs.meshwrap_preset.value;
+        if (preset === MESHWRAP_CUSTOM_PRESET) {
+          this._updateMeshWrapSummary();
+          return;
+        }
+        this._applyMeshWrapPreset(preset);
+      });
+    }
+    for (const key of [
+      'meshwrap_poisson_depth',
+      'meshwrap_poisson_scale',
+      'meshwrap_density_trim_q',
+      'meshwrap_target_face_ratio',
+      'meshwrap_iterations',
+      'meshwrap_crop_scale',
+      'meshwrap_sample_points',
+      'meshwrap_normal_radius_ratio',
+    ]) {
+      if (this._inputs[key]) {
+        this._inputs[key].addEventListener('input', () => this._onMeshWrapInputChanged());
+      }
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -692,11 +781,35 @@ export class ConfigPanel {
       this._inputs[key].value = String(cfg[key]);
     }
 
+    const meshwrapPreset = String(cfg.meshwrap_preset || '');
+    if (meshwrapPreset && meshwrapPreset !== MESHWRAP_CUSTOM_PRESET && MESHWRAP_PRESETS[meshwrapPreset]) {
+      this._applyMeshWrapPreset(meshwrapPreset);
+    } else {
+      if (this._inputs.meshwrap_preset) {
+        this._inputs.meshwrap_preset.value = MESHWRAP_CUSTOM_PRESET;
+      }
+    }
+    for (const key of [
+      'meshwrap_poisson_depth',
+      'meshwrap_poisson_scale',
+      'meshwrap_density_trim_q',
+      'meshwrap_target_face_ratio',
+      'meshwrap_iterations',
+      'meshwrap_crop_scale',
+      'meshwrap_sample_points',
+      'meshwrap_normal_radius_ratio',
+    ]) {
+      if (cfg[key] != null && this._inputs[key]) {
+        this._inputs[key].value = String(cfg[key]);
+      }
+    }
+
     this._maxFramesAuto = false;
     this._pi3xFrameTargetAuto = cfg.pi3x_frame_target == null;
     this._pi3xFrameTargetRecommended = null;
     this._updateDenoiseControls();
     this._onDenoiseInputChanged();
+    this._onMeshWrapInputChanged();
     this._updateFrameBudgetPreview();
   }
 
@@ -794,6 +907,97 @@ export class ConfigPanel {
     }
 
     this._denoiseSummary.textContent = `Pipeline: ${algo}${details.length ? ` | ${details.join(' | ')}` : ''}`;
+  }
+
+  _applyMeshWrapCustomDefaults() {
+    const customDefaults = {
+      meshwrap_poisson_depth: 6,
+      meshwrap_poisson_scale: 1.18,
+      meshwrap_density_trim_q: 0.06,
+      meshwrap_target_face_ratio: 1.80,
+      meshwrap_iterations: 2,
+      meshwrap_crop_scale: 2.0,
+      meshwrap_sample_points: 180000,
+      meshwrap_normal_radius_ratio: 0.035,
+    };
+    this._updatingMeshWrapPreset = true;
+    try {
+      if (this._inputs.meshwrap_preset) {
+        this._inputs.meshwrap_preset.value = MESHWRAP_CUSTOM_PRESET;
+      }
+      for (const [key, value] of Object.entries(customDefaults)) {
+        if (!this._inputs[key]) continue;
+        this._inputs[key].value = String(value);
+      }
+    } finally {
+      this._updatingMeshWrapPreset = false;
+    }
+    this._updateMeshWrapSummary();
+  }
+
+  _applyMeshWrapPreset(presetName) {
+    const preset = MESHWRAP_PRESETS[presetName] || MESHWRAP_PRESETS.balanced;
+    const resolvedName = MESHWRAP_PRESETS[presetName] ? presetName : 'balanced';
+    this._updatingMeshWrapPreset = true;
+    try {
+      if (this._inputs.meshwrap_preset) {
+        this._inputs.meshwrap_preset.value = resolvedName;
+      }
+      for (const [key, value] of Object.entries(preset)) {
+        if (!this._inputs[key]) continue;
+        this._inputs[key].value = String(value);
+      }
+    } finally {
+      this._updatingMeshWrapPreset = false;
+    }
+    this._updateMeshWrapSummary();
+  }
+
+  _onMeshWrapInputChanged() {
+    if (!this._updatingMeshWrapPreset) {
+      const matched = this._findMatchingMeshWrapPreset();
+      if (this._inputs.meshwrap_preset) {
+        this._inputs.meshwrap_preset.value = matched || MESHWRAP_CUSTOM_PRESET;
+      }
+    }
+    this._updateMeshWrapSummary();
+  }
+
+  _findMatchingMeshWrapPreset() {
+    const current = {};
+    for (const key of [
+      'meshwrap_poisson_depth',
+      'meshwrap_poisson_scale',
+      'meshwrap_density_trim_q',
+      'meshwrap_target_face_ratio',
+      'meshwrap_iterations',
+      'meshwrap_crop_scale',
+      'meshwrap_sample_points',
+      'meshwrap_normal_radius_ratio',
+    ]) {
+      current[key] = this._inputs[key] ? Number(this._inputs[key].value) : 0;
+    }
+    for (const [name, preset] of Object.entries(MESHWRAP_PRESETS)) {
+      let same = true;
+      for (const key of Object.keys(preset)) {
+        if (!this._valuesAlmostEqual(current[key], preset[key])) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return name;
+    }
+    return null;
+  }
+
+  _updateMeshWrapSummary() {
+    if (!this._meshwrapSummary) return;
+    const depth = this._inputs.meshwrap_poisson_depth?.value || '9';
+    const scale = this._inputs.meshwrap_poisson_scale?.value || '1.18';
+    const iters = this._inputs.meshwrap_iterations?.value || '2';
+    const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.80';
+    this._meshwrapSummary.textContent =
+      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
   }
 
   _applySuggestedObjectName(force = false) {

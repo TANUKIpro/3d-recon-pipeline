@@ -101,6 +101,15 @@ class PipelineConfig:
     diffcd_batch_size: int = 5000
     diffcd_n_batches: int = 30000
     diffcd_resolution: int = 512
+    meshwrap_preset: str = "balanced"
+    meshwrap_poisson_depth: int = 9
+    meshwrap_poisson_scale: float = 1.18
+    meshwrap_density_trim_q: float = 0.06
+    meshwrap_target_face_ratio: float = 1.80
+    meshwrap_iterations: int = 2
+    meshwrap_crop_scale: float = 1.08
+    meshwrap_sample_points: int = 180_000
+    meshwrap_normal_radius_ratio: float = 0.035
     texture_size: int = 2048
 
     @classmethod

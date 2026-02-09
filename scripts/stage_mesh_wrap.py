@@ -18,20 +18,20 @@ ProgressCallback = Callable[[float, str | None], None]
 
 _DEFAULT_WRAP_ENABLED = True
 _DEFAULT_WRAP_METHOD = "poisson_iterative"  # reserved: "ipsr"
-_DEFAULT_WRAP_ITERATIONS = 1
+_DEFAULT_WRAP_ITERATIONS = 2
 _DEFAULT_WRAP_SAMPLE_POINTS = 180_000
-_DEFAULT_WRAP_NORMAL_RADIUS_RATIO = 0.02
+_DEFAULT_WRAP_NORMAL_RADIUS_RATIO = 0.035
 _DEFAULT_WRAP_NORMAL_MAX_NN = 32
 _DEFAULT_WRAP_NORMAL_ORIENT_K = 24
-_DEFAULT_WRAP_POISSON_DEPTH = 8
-_DEFAULT_WRAP_POISSON_SCALE = 1.05
+_DEFAULT_WRAP_POISSON_DEPTH = 9
+_DEFAULT_WRAP_POISSON_SCALE = 1.18
 _DEFAULT_WRAP_POISSON_LINEAR_FIT = False
-_DEFAULT_WRAP_DENSITY_TRIM_Q = 0.02
-_DEFAULT_WRAP_CROP_SCALE = 1.03
+_DEFAULT_WRAP_DENSITY_TRIM_Q = 0.06
+_DEFAULT_WRAP_CROP_SCALE = 1.08
 _DEFAULT_WRAP_KEEP_LARGEST_COMPONENT = True
-_DEFAULT_WRAP_TARGET_FACE_RATIO = 1.10
+_DEFAULT_WRAP_TARGET_FACE_RATIO = 1.80
 _DEFAULT_WRAP_MIN_FACES = 25_000
-_DEFAULT_WRAP_MAX_FACES = 120_000
+_DEFAULT_WRAP_MAX_FACES = 200_000
 _DEFAULT_WRAP_PRESERVE_INPUT_ON_FAILURE = True
 
 
@@ -93,7 +93,10 @@ def _env_bool(name: str, default: bool) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
-def _resolve_params() -> MeshWrapParams:
+def _resolve_params(overrides: dict | None = None) -> MeshWrapParams:
+    """Build MeshWrapParams with priority: overrides (UI) > env vars > defaults."""
+    ov = overrides or {}
+
     method = str(os.environ.get("MESH_WRAP_METHOD", _DEFAULT_WRAP_METHOD)).strip().lower()
     if method not in {"poisson_iterative", "ipsr"}:
         print(
@@ -101,24 +104,40 @@ def _resolve_params() -> MeshWrapParams:
         )
         method = _DEFAULT_WRAP_METHOD
 
+    def _val_int(key: str, env_name: str, default: int) -> int:
+        if key in ov and ov[key] is not None:
+            try:
+                return int(ov[key])
+            except (TypeError, ValueError):
+                pass
+        return _env_int(env_name, default)
+
+    def _val_float(key: str, env_name: str, default: float) -> float:
+        if key in ov and ov[key] is not None:
+            try:
+                return float(ov[key])
+            except (TypeError, ValueError):
+                pass
+        return _env_float(env_name, default)
+
     return MeshWrapParams(
         enabled=_env_bool("MESH_WRAP_ENABLED", _DEFAULT_WRAP_ENABLED),
         method=method,
-        iterations=max(1, _env_int("MESH_WRAP_ITERATIONS", _DEFAULT_WRAP_ITERATIONS)),
-        sample_points=max(50_000, _env_int("MESH_WRAP_SAMPLE_POINTS", _DEFAULT_WRAP_SAMPLE_POINTS)),
+        iterations=max(1, _val_int("iterations", "MESH_WRAP_ITERATIONS", _DEFAULT_WRAP_ITERATIONS)),
+        sample_points=max(50_000, _val_int("sample_points", "MESH_WRAP_SAMPLE_POINTS", _DEFAULT_WRAP_SAMPLE_POINTS)),
         normal_radius_ratio=max(
             1e-6,
-            _env_float("MESH_WRAP_NORMAL_RADIUS_RATIO", _DEFAULT_WRAP_NORMAL_RADIUS_RATIO),
+            _val_float("normal_radius_ratio", "MESH_WRAP_NORMAL_RADIUS_RATIO", _DEFAULT_WRAP_NORMAL_RADIUS_RATIO),
         ),
         normal_max_nn=max(8, _env_int("MESH_WRAP_NORMAL_MAX_NN", _DEFAULT_WRAP_NORMAL_MAX_NN)),
         normal_orient_k=max(
             8,
             _env_int("MESH_WRAP_NORMAL_ORIENT_K", _DEFAULT_WRAP_NORMAL_ORIENT_K),
         ),
-        poisson_depth=max(6, _env_int("MESH_WRAP_POISSON_DEPTH", _DEFAULT_WRAP_POISSON_DEPTH)),
+        poisson_depth=max(6, _val_int("poisson_depth", "MESH_WRAP_POISSON_DEPTH", _DEFAULT_WRAP_POISSON_DEPTH)),
         poisson_scale=max(
             1.0,
-            _env_float("MESH_WRAP_POISSON_SCALE", _DEFAULT_WRAP_POISSON_SCALE),
+            _val_float("poisson_scale", "MESH_WRAP_POISSON_SCALE", _DEFAULT_WRAP_POISSON_SCALE),
         ),
         poisson_linear_fit=_env_bool(
             "MESH_WRAP_POISSON_LINEAR_FIT",
@@ -126,9 +145,9 @@ def _resolve_params() -> MeshWrapParams:
         ),
         density_trim_q=min(
             0.49,
-            max(0.0, _env_float("MESH_WRAP_DENSITY_TRIM_Q", _DEFAULT_WRAP_DENSITY_TRIM_Q)),
+            max(0.0, _val_float("density_trim_q", "MESH_WRAP_DENSITY_TRIM_Q", _DEFAULT_WRAP_DENSITY_TRIM_Q)),
         ),
-        crop_scale=max(1.0, _env_float("MESH_WRAP_CROP_SCALE", _DEFAULT_WRAP_CROP_SCALE)),
+        crop_scale=max(1.0, _val_float("crop_scale", "MESH_WRAP_CROP_SCALE", _DEFAULT_WRAP_CROP_SCALE)),
         keep_largest_component=_env_bool(
             "MESH_WRAP_KEEP_LARGEST_COMPONENT",
             _DEFAULT_WRAP_KEEP_LARGEST_COMPONENT,
@@ -137,11 +156,11 @@ def _resolve_params() -> MeshWrapParams:
             3.0,
             max(
                 0.2,
-                _env_float("MESH_WRAP_TARGET_FACE_RATIO", _DEFAULT_WRAP_TARGET_FACE_RATIO),
+                _val_float("target_face_ratio", "MESH_WRAP_TARGET_FACE_RATIO", _DEFAULT_WRAP_TARGET_FACE_RATIO),
             ),
         ),
         min_faces=max(1000, _env_int("MESH_WRAP_MIN_FACES", _DEFAULT_WRAP_MIN_FACES)),
-        max_faces=max(1000, _env_int("MESH_WRAP_MAX_FACES", _DEFAULT_WRAP_MAX_FACES)),
+        max_faces=max(1000, _val_int("max_faces", "MESH_WRAP_MAX_FACES", _DEFAULT_WRAP_MAX_FACES)),
         preserve_input_on_failure=_env_bool(
             "MESH_WRAP_PRESERVE_INPUT_ON_FAILURE",
             _DEFAULT_WRAP_PRESERVE_INPUT_ON_FAILURE,
@@ -371,9 +390,31 @@ def run_mesh_wrap(
     mesh_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    *,
+    poisson_depth: int | None = None,
+    poisson_scale: float | None = None,
+    density_trim_q: float | None = None,
+    target_face_ratio: float | None = None,
+    iterations: int | None = None,
+    crop_scale: float | None = None,
+    sample_points: int | None = None,
+    normal_radius_ratio: float | None = None,
 ) -> Path:
     """Wrap the input mesh with a Poisson shell for downstream texturing."""
-    params = _resolve_params()
+    overrides: dict = {}
+    for key, val in [
+        ("poisson_depth", poisson_depth),
+        ("poisson_scale", poisson_scale),
+        ("density_trim_q", density_trim_q),
+        ("target_face_ratio", target_face_ratio),
+        ("iterations", iterations),
+        ("crop_scale", crop_scale),
+        ("sample_points", sample_points),
+        ("normal_radius_ratio", normal_radius_ratio),
+    ]:
+        if val is not None:
+            overrides[key] = val
+    params = _resolve_params(overrides if overrides else None)
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     wrap_dir = out / "mesh_wrap"
