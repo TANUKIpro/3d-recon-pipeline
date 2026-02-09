@@ -69,7 +69,7 @@ def _mesh_method_key(value: str | None) -> str:
 def _mesh_method_label(method: str) -> str:
     if method == "diffcd":
         return "Learning Mesh (DiffCD)"
-    return "Classical Mesh (Normals + Poisson)"
+    return "Classical Mesh (Pre -> Main -> Post -> Downsample)"
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:

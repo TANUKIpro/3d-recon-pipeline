@@ -55,6 +55,8 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         "files": (
             "object_mesh.ply",
             "object_mesh_raw.ply",
+            "object_mesh_postprocessed.ply",
+            "object_mesh_input.ply",
             "object_points.npy",
             "object_points_with_normals.ply",
         ),
@@ -929,8 +931,22 @@ async def mesh_postprocess(body: dict | None = None):
         source_path = mesh_path
         source = "current"
 
-    def _apply() -> tuple[int, int]:
+    def _apply() -> tuple[int, int, bool]:
         from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
+        import open3d as o3d
+
+        downsample_enabled = _parse_bool(
+            os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"),
+            True,
+        )
+        downsample_target_faces = max(
+            _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 220000),
+            1000,
+        )
+        downsample_trigger_faces = max(
+            _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 280000),
+            downsample_target_faces,
+        )
 
         smooth_mesh_file(
             source_path,
@@ -940,10 +956,37 @@ async def mesh_postprocess(body: dict | None = None):
             lamb=lamb,
             taubin_nu=taubin_nu,
         )
-        return mesh_vertex_face_count(mesh_path)
+        downsample_applied = False
+        if downsample_enabled:
+            mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+            face_count = int(len(mesh.triangles))
+            if face_count > downsample_trigger_faces:
+                target_faces = min(max(4, downsample_target_faces), max(4, face_count - 1))
+                simplified = mesh.simplify_quadric_decimation(target_faces)
+                if len(simplified.vertices) > 0 and len(simplified.triangles) > 0:
+                    simplified.remove_degenerate_triangles()
+                    simplified.remove_duplicated_triangles()
+                    simplified.remove_duplicated_vertices()
+                    simplified.remove_non_manifold_edges()
+                    simplified.remove_unreferenced_vertices()
+                    simplified.compute_vertex_normals()
+                    try:
+                        o3d.io.write_triangle_mesh(
+                            str(mesh_path),
+                            simplified,
+                            write_ascii=False,
+                            compressed=False,
+                            write_vertex_normals=True,
+                        )
+                    except TypeError:
+                        o3d.io.write_triangle_mesh(str(mesh_path), simplified)
+                    downsample_applied = True
+
+        vertices, faces = mesh_vertex_face_count(mesh_path)
+        return vertices, faces, downsample_applied
 
     try:
-        vertices, faces = await asyncio.to_thread(_apply)
+        vertices, faces, downsample_applied = await asyncio.to_thread(_apply)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
@@ -972,6 +1015,7 @@ async def mesh_postprocess(body: dict | None = None):
             "mesh_path": str(mesh_path.relative_to(out)),
             "vertices": vertices,
             "faces": faces,
+            "downsample_applied": downsample_applied,
             "texture_invalidated": texture_invalidated,
         }
     )

@@ -4,6 +4,7 @@
 
 const STAGE_COUNT = 6;
 const MESH_METHODS = new Set(['diffcd', 'poisson']);
+const POISSON_STEP_ORDER = ['preprocess', 'main', 'postprocess', 'downsample'];
 
 function _isDone(info = {}) {
   const status = String(info.status || 'pending');
@@ -15,10 +16,10 @@ export class PipelineUI {
   constructor() {
     this._pills = {};
     this._mainConnectors = [];
-    this._poissonConnectors = [];
     this._timers = {}; // stage → interval id
     this._stageMeta = {};
     this._meshMethod = 'poisson';
+    this._poissonFlowState = { activeIndex: -1, done: false };
 
     for (let i = 1; i <= STAGE_COUNT; i++) {
       this._pills[i] = document.querySelector(`.stage-pill[data-stage="${i}"]`);
@@ -34,11 +35,23 @@ export class PipelineUI {
       diffcd: document.getElementById('mesh-pill-diffcd'),
       poisson: document.getElementById('mesh-pill-poisson'),
     };
+    this._meshBranchSlot = document.getElementById('mesh-branch-slot');
+
+    this._poissonStepPills = {
+      preprocess: document.getElementById('mesh-pill-poisson-pre'),
+      main: document.getElementById('mesh-pill-poisson'),
+      postprocess: document.getElementById('mesh-pill-poisson-post'),
+      downsample: document.getElementById('mesh-pill-poisson-downsample'),
+    };
+
     this._mainConnectors = Array.from(document.querySelectorAll('.stage-connector-main'));
-    this._poissonConnectors = [
-      document.getElementById('mesh-connector-poisson-left'),
-      document.getElementById('mesh-connector-poisson-right'),
-    ].filter(Boolean);
+    this._poissonConnectors = {
+      left: document.getElementById('mesh-connector-poisson-left'),
+      preMain: document.getElementById('mesh-connector-poisson-pre-main'),
+      mainPost: document.getElementById('mesh-connector-poisson-main-post'),
+      postDown: document.getElementById('mesh-connector-poisson-post-down'),
+      right: document.getElementById('mesh-connector-poisson-right'),
+    };
 
     this.setMeshMethod(this._meshMethod);
   }
@@ -66,6 +79,9 @@ export class PipelineUI {
     for (const [key, pill] of Object.entries(this._meshPills)) {
       if (!pill) continue;
       pill.classList.toggle('active', key === next);
+    }
+    if (this._meshBranchSlot) {
+      this._meshBranchSlot.classList.toggle('poisson-inactive', next !== 'poisson');
     }
 
     // If Stage 5 tab is currently selected, move selected outline to active method.
@@ -101,6 +117,13 @@ export class PipelineUI {
     if (poissonPill) {
       poissonPill.setAttribute('tabindex', disabled ? '-1' : '0');
       poissonPill.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    }
+
+    for (const pill of Object.values(this._poissonStepPills)) {
+      if (!pill || pill === poissonPill) continue;
+      pill.classList.toggle('method-disabled', disabled);
+      pill.setAttribute('tabindex', disabled ? '-1' : '0');
+      pill.setAttribute('aria-disabled', disabled ? 'true' : 'false');
     }
   }
 
@@ -225,13 +248,128 @@ export class PipelineUI {
 
     this._applyPillState(pill, status, elapsed, progress, detail);
 
-    // Stage 5 has two visible task pills. Keep inactive path visually pending.
+    // Stage 5 has dual mesh method pills. Keep inactive path visually pending.
     if (stage === 5) {
       const inactivePill = this._inactiveMeshPill();
       if (inactivePill) {
         this._applyPillState(inactivePill, 'pending', null, 0, null);
       }
+      this._updatePoissonStepStates(status, progress, detail);
     }
+  }
+
+  _updatePoissonStepStates(status, progress, detail) {
+    const normalized = this._normalizeProgress(progress);
+    const stageStatus = String(status || 'pending');
+    const isPoisson = this._meshMethod === 'poisson';
+    const done = stageStatus === 'complete' || normalized >= 100;
+
+    if (!isPoisson) {
+      for (const step of POISSON_STEP_ORDER) {
+        const pill = this._poissonStepPills[step];
+        if (!pill) continue;
+        this._applyPillState(pill, 'pending', null, 0, null);
+      }
+      this._poissonFlowState = { activeIndex: -1, done: false };
+      return;
+    }
+
+    if (stageStatus === 'pending' && normalized <= 0) {
+      for (const step of POISSON_STEP_ORDER) {
+        const pill = this._poissonStepPills[step];
+        if (!pill) continue;
+        this._applyPillState(pill, 'pending', null, 0, null);
+      }
+      this._poissonFlowState = { activeIndex: -1, done: false };
+      return;
+    }
+
+    if (done) {
+      for (const step of POISSON_STEP_ORDER) {
+        const pill = this._poissonStepPills[step];
+        if (!pill) continue;
+        this._applyPillState(pill, 'complete', null, 100, null);
+      }
+      this._poissonFlowState = {
+        activeIndex: POISSON_STEP_ORDER.length - 1,
+        done: true,
+      };
+      return;
+    }
+
+    let activeIndex = this._inferPoissonStepIndex(detail, normalized);
+    if (activeIndex < 0) activeIndex = this._progressStepIndex(normalized);
+    activeIndex = Math.max(0, Math.min(POISSON_STEP_ORDER.length - 1, activeIndex));
+
+    for (let i = 0; i < POISSON_STEP_ORDER.length; i++) {
+      const step = POISSON_STEP_ORDER[i];
+      const pill = this._poissonStepPills[step];
+      if (!pill) continue;
+
+      if (i < activeIndex) {
+        this._applyPillState(pill, 'complete', null, 100, detail);
+        continue;
+      }
+      if (i > activeIndex) {
+        this._applyPillState(pill, 'pending', null, 0, null);
+        continue;
+      }
+
+      const currentStatus = stageStatus === 'failed'
+        ? 'failed'
+        : stageStatus === 'interactive'
+          ? 'interactive'
+          : 'running';
+      this._applyPillState(pill, currentStatus, null, normalized, detail);
+    }
+
+    this._poissonFlowState = { activeIndex, done: false };
+  }
+
+  _inferPoissonStepIndex(detail, progress) {
+    const lower = String(detail || '').toLowerCase();
+    if (!lower) return this._progressStepIndex(progress);
+
+    if (
+      lower.includes('classical/downsample')
+      || lower.includes('downsample')
+      || lower.includes('decimation')
+      || lower.includes('reducing face count')
+    ) {
+      return 3;
+    }
+    if (
+      lower.includes('classical/postprocess')
+      || lower.includes('postprocess')
+      || lower.includes('smoothing')
+      || lower.includes('cleaning mesh')
+    ) {
+      return 2;
+    }
+    if (
+      lower.includes('classical/main')
+      || lower.includes('screened poisson')
+      || lower.includes('poisson')
+      || lower.includes('normal')
+    ) {
+      return 1;
+    }
+    if (
+      lower.includes('classical/preprocess')
+      || lower.includes('preprocess')
+      || lower.includes('resampling points')
+    ) {
+      return 0;
+    }
+    return this._progressStepIndex(progress);
+  }
+
+  _progressStepIndex(progress) {
+    const p = this._normalizeProgress(progress);
+    if (p >= 94) return 3;
+    if (p >= 76) return 2;
+    if (p >= 28) return 1;
+    return 0;
   }
 
   _applyPillState(pill, status, elapsed, progress, detail) {
@@ -286,17 +424,36 @@ export class PipelineUI {
       meshRightTrunk.classList.toggle('done', stage6Done);
     }
 
-    // Classical path (Poisson) connectors.
-    const poissonLeft = this._poissonConnectors[0];
-    const poissonRight = this._poissonConnectors[1];
-    if (poissonLeft) {
-      poissonLeft.classList.toggle('active', poissonActive);
-      poissonLeft.classList.toggle('done', poissonActive && stage5Done);
-    }
-    if (poissonRight) {
-      poissonRight.classList.toggle('active', poissonActive);
-      poissonRight.classList.toggle('done', poissonActive && stage6Done);
-    }
+    const activeIndex = this._poissonFlowState.activeIndex;
+    const flowDone = this._poissonFlowState.done;
+    const leftDone = poissonActive && (flowDone || activeIndex >= 0);
+    const preMainDone = poissonActive && (flowDone || activeIndex > 0);
+    const mainPostDone = poissonActive && (flowDone || activeIndex > 1);
+    const postDownDone = poissonActive && (flowDone || activeIndex > 2);
+
+    this._setConnectorState(this._poissonConnectors.left, poissonActive, leftDone);
+    this._setConnectorState(
+      this._poissonConnectors.preMain,
+      poissonActive && activeIndex >= 0,
+      preMainDone,
+    );
+    this._setConnectorState(
+      this._poissonConnectors.mainPost,
+      poissonActive && activeIndex >= 1,
+      mainPostDone,
+    );
+    this._setConnectorState(
+      this._poissonConnectors.postDown,
+      poissonActive && activeIndex >= 2,
+      postDownDone,
+    );
+    this._setConnectorState(this._poissonConnectors.right, poissonActive, poissonActive && stage6Done);
+  }
+
+  _setConnectorState(connector, active, done) {
+    if (!connector) return;
+    connector.classList.toggle('active', Boolean(active));
+    connector.classList.toggle('done', Boolean(done));
   }
 
   _startTimer(stage) {

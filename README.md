@@ -171,9 +171,21 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
+| `CLASSICAL_PREPROCESS_ENABLED` | `1` | Classical入力点群の前処理 (軽量フィルタ + リサンプリング) を有効化 |
+| `CLASSICAL_PREPROCESS_VOXEL_RATIO` | `0.003` | 前処理ボクセルサイズの bbox 対角比 |
+| `CLASSICAL_PREPROCESS_MAX_POINTS` | `700000` | この点数を超える場合に前処理でボクセル間引きを実行 |
+| `CLASSICAL_PREPROCESS_SOR_NEIGHBORS` | `20` | 前処理 SOR の近傍数 |
+| `CLASSICAL_PREPROCESS_SOR_STD_RATIO` | `2.8` | 前処理 SOR の標準偏差倍率 |
 | `POISSON_DEPTH` | `9` | Poisson 再構成の深さ |
 | `POISSON_NORMAL_RADIUS_RATIO` | `0.02` | 法線推定半径の bbox 対角比 |
 | `POISSON_DENSITY_TRIM_QUANTILE` | `0.02` | 低密度頂点を除去する分位点 |
+| `CLASSICAL_POST_MIN_COMPONENT_TRIANGLES` | `400` | 後処理で除去する小連結成分の最小三角形数閾値 |
+| `CLASSICAL_POST_MIN_COMPONENT_RATIO` | `0.01` | 後処理で除去する小連結成分の最大成分比閾値 |
+| `CLASSICAL_AUTO_SMOOTH` | `0` | 後処理スムージングを自動適用 (`1`で有効) |
+| `CLASSICAL_SMOOTH_ITERATIONS` | `2` | 後処理スムージングの反復回数 |
+| `CLASSICAL_DOWNSAMPLE_ENABLED` | `1` | 面数過多時のダウンサンプリングを有効化 |
+| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `220000` | ダウンサンプリング後の目標面数 |
+| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `280000` | この面数を超えた場合にダウンサンプリング実行 |
 
 #### DiffCD
 
@@ -208,8 +220,10 @@ data/output/
         ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
         ├── textured_mesh.mtl      # マテリアル定義
         ├── texture.png            # テクスチャアトラス (2048x2048)
-        ├── object_mesh.ply        # Stage 5出力メッシュ (平滑化済み)
+        ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
         ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ
+        ├── object_mesh_postprocessed.ply  # Stage 5後処理後メッシュ
+        ├── object_mesh_input.ply  # Stage 5前処理後点群
         ├── object_denoised.ply    # デノイズ済み点群
         ├── object.ply             # Pi3Xトリプルフィルタ済み点群
         ├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報

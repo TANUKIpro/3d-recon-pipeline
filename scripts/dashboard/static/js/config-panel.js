@@ -235,7 +235,7 @@ export class ConfigPanel {
     if (this._meshMethodSummary) {
       this._meshMethodSummary.textContent = isDiffcd
         ? 'Learning Mesh (DiffCD) is active.'
-        : 'Classical Mesh (Normals + PoissonRecon) is active.';
+        : 'Classical Mesh chain (Pre -> Main -> Post -> Downsample) is active.';
     }
     if (this._poissonSummary) {
       this._poissonSummary.style.display = isDiffcd ? 'none' : '';
