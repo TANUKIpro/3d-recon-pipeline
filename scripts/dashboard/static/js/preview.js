@@ -578,49 +578,89 @@ export class PreviewPanel {
     return this._scoreForwardTowardTarget(poseArray, targetCenter).forwardSign;
   }
 
+  _nextPreviewRevision() {
+    this._previewAssetRevision += 1;
+    return this._previewAssetRevision;
+  }
+
+  _buildPreviewFileUrl(relativePath, cacheToken = null) {
+    const base = `/api/preview/file/${relativePath}`;
+    if (cacheToken == null || cacheToken === '') return base;
+    return `${base}?rev=${encodeURIComponent(String(cacheToken))}`;
+  }
+
+  _classicalPhaseDescriptor(step) {
+    const key = String(step || '').toLowerCase();
+    const map = {
+      preprocess: { file: 'object_mesh_input.ply', renderMode: 'points' },
+      main: { file: 'object_mesh_raw.ply', renderMode: 'mesh' },
+      postprocess: { file: 'object_mesh_postprocessed.ply', renderMode: 'mesh' },
+      downsample: { file: 'object_mesh.ply', renderMode: 'mesh' },
+    };
+    return map[key] || null;
+  }
+
+  async loadClassicalPhase(step, opts = {}) {
+    const descriptor = this._classicalPhaseDescriptor(step);
+    if (!descriptor) return false;
+    return this.loadStageResult(5, {
+      file: descriptor.file,
+      renderMode: descriptor.renderMode,
+      cacheToken: opts.cacheToken,
+    });
+  }
+
   /**
    * Auto-load the appropriate result file for a stage.
    */
-  async loadStageResult(stageNum) {
+  async loadStageResult(stageNum, opts = {}) {
     const fileMap = {
       4: 'object_denoised.ply',
       5: 'object_mesh.ply',
       6: 'textured_mesh.obj',
     };
 
-    const file = fileMap[stageNum];
-    if (!file) return;
+    const overrideFile = String(opts.file || '').trim();
+    const file = overrideFile || fileMap[stageNum];
+    if (!file) return false;
 
     await this.initSceneForStage(stageNum);
     await this._ensureSceneFlipForStage(stageNum);
     this.activateStage(stageNum);
 
-    // Hide empty placeholder
+    // Toggle empty placeholder based on load result.
     const empty = document.getElementById(`stage-${stageNum}-empty`);
-    if (empty) empty.classList.add('hidden');
 
     const ext = file.split('.').pop().toLowerCase();
+    const cacheToken = opts.cacheToken ?? this._nextPreviewRevision();
+    const renderMode = String(opts.renderMode || '').toLowerCase();
+    let loaded = false;
     if (ext === 'ply') {
-      await this._loadPLYIntoStage(stageNum, file);
+      loaded = await this._loadPLYIntoStage(stageNum, file, { cacheToken, renderMode });
     } else if (ext === 'obj') {
-      await this._loadOBJIntoStage(stageNum, file);
+      loaded = await this._loadOBJIntoStage(stageNum, file, { cacheToken });
+    } else {
+      loaded = false;
     }
+    if (empty) empty.classList.toggle('hidden', loaded);
+    return loaded;
   }
 
   /**
    * Load a PLY file into a specific stage's scene.
    */
-  async _loadPLYIntoStage(stageNum, relativePath) {
+  async _loadPLYIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
     if (!stage) return false;
 
     // Remove previous object
     if (stage.currentObject) {
+      this._disposeObject(stage.currentObject);
       stage.sceneRoot.remove(stage.currentObject);
       stage.currentObject = null;
     }
 
-    const url = `/api/preview/file/${relativePath}`;
+    const url = this._buildPreviewFileUrl(relativePath, opts.cacheToken);
     const loader = new PLYLoader();
 
     try {
@@ -637,7 +677,10 @@ export class PreviewPanel {
       geometry.computeBoundingBox();
 
       let obj;
-      const renderAsMesh = stageNum === 5 || (geometry.index && geometry.index.count > 0);
+      const mode = String(opts.renderMode || '').toLowerCase();
+      const forcePoints = mode === 'points';
+      const forceMesh = mode === 'mesh';
+      const renderAsMesh = forceMesh || (!forcePoints && (stageNum === 5 || (geometry.index && geometry.index.count > 0)));
       if (renderAsMesh) {
         // Mesh
         // Rebuild normals to avoid flat-looking shading from broken/stale attributes.
@@ -702,24 +745,29 @@ export class PreviewPanel {
   /**
    * Load an OBJ file into a specific stage's scene.
    */
-  async _loadOBJIntoStage(stageNum, relativePath) {
+  async _loadOBJIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
-    if (!stage) return;
+    if (!stage) return false;
 
     if (stage.currentObject) {
+      this._disposeObject(stage.currentObject);
       stage.sceneRoot.remove(stage.currentObject);
       stage.currentObject = null;
     }
 
-    const url = `/api/preview/file/${relativePath}`;
+    const cacheToken = opts.cacheToken;
+    const url = this._buildPreviewFileUrl(relativePath, cacheToken);
     const mtlPath = relativePath.replace(/\.obj$/i, '.mtl');
+    const mtlPathWithRevision = cacheToken == null || cacheToken === ''
+      ? mtlPath
+      : `${mtlPath}?rev=${encodeURIComponent(String(cacheToken))}`;
     let materials = null;
 
     try {
       const mtlLoader = new MTLLoader();
       mtlLoader.setPath('/api/preview/file/');
       materials = await new Promise((resolve, reject) => {
-        mtlLoader.load(mtlPath, resolve, undefined, reject);
+        mtlLoader.load(mtlPathWithRevision, resolve, undefined, reject);
       });
       materials.preload();
     } catch (e) {
@@ -743,8 +791,10 @@ export class PreviewPanel {
       // clearFromStage() can hide initialized containers; show it again on successful load.
       stage.container?.classList.add('visible');
       this._fitCamera(stage, box);
+      return true;
     } catch (e) {
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
+      return false;
     }
   }
 

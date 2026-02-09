@@ -72,6 +72,35 @@ def _mesh_method_label(method: str) -> str:
     return "Classical Mesh (Pre -> Main -> Post -> Downsample)"
 
 
+def _preview_rel_path(output_dir: str, path: str | Path) -> str:
+    out = Path(output_dir).resolve()
+    target = Path(path).resolve()
+    try:
+        rel = target.relative_to(out)
+        return str(rel).replace("\\", "/")
+    except Exception:
+        return Path(path).name
+
+
+async def _broadcast_classical_preview_update(
+    session: PipelineSession,
+    output_dir: str,
+    *,
+    step: str,
+    file_path: str | Path,
+    detail: str,
+) -> None:
+    await broadcast(session, {
+        "type": "stage_preview_update",
+        "stage": int(PipelineStage.DIFFCD_MESH),
+        "mesh_method": "poisson",
+        "step": step,
+        "file": _preview_rel_path(output_dir, file_path),
+        "detail": detail,
+        "overall_progress": session.overall_progress(),
+    })
+
+
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
     """Execute the full 6-stage pipeline asynchronously."""
     cfg = session.config
@@ -376,6 +405,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 preprocess_ply = Path(output_dir) / "object_mesh_input.ply"
                 raw_mesh_ply = Path(output_dir) / "object_mesh_raw.ply"
                 post_mesh_ply = Path(output_dir) / "object_mesh_postprocessed.ply"
+                final_mesh_ply = Path(output_dir) / "object_mesh.ply"
 
                 # Single stage lifecycle for the entire Classical Mesh flow
                 session.stage_start(PipelineStage.DIFFCD_MESH)
@@ -398,6 +428,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 )
                 _check_cancelled(session)
                 _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
+                await _broadcast_classical_preview_update(
+                    session,
+                    output_dir,
+                    step="preprocess",
+                    file_path=preprocess_ply,
+                    detail="Classical preprocess output ready",
+                )
                 await _wait_for_next_stage_confirmation(
                     session,
                     PipelineStage.DIFFCD_MESH,
@@ -418,6 +455,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 )
                 _check_cancelled(session)
                 _require_file(str(raw_mesh_ply), "Classical raw mesh")
+                await _broadcast_classical_preview_update(
+                    session,
+                    output_dir,
+                    step="main",
+                    file_path=raw_mesh_ply,
+                    detail="Classical main Poisson output ready",
+                )
                 await _wait_for_next_stage_confirmation(
                     session,
                     PipelineStage.DIFFCD_MESH,
@@ -438,6 +482,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 )
                 _check_cancelled(session)
                 _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
+                await _broadcast_classical_preview_update(
+                    session,
+                    output_dir,
+                    step="postprocess",
+                    file_path=post_mesh_ply,
+                    detail="Classical postprocess output ready",
+                )
                 await _wait_for_next_stage_confirmation(
                     session,
                     PipelineStage.DIFFCD_MESH,
@@ -455,6 +506,15 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     label="Classical/Downsample",
                     progress_start=92.0,
                     progress_end=100.0,
+                )
+                _check_cancelled(session)
+                _require_file(str(final_mesh_ply), "Classical final mesh")
+                await _broadcast_classical_preview_update(
+                    session,
+                    output_dir,
+                    step="downsample",
+                    file_path=final_mesh_ply,
+                    detail="Classical downsample output ready",
                 )
 
                 # Complete the stage once all sub-phases are done
