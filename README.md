@@ -12,33 +12,26 @@ Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物�
 
 ## パイプライン概要
 
-```
-入力: RGB動画 (.mp4)
-  │
-  ├─ Stage 1: フレーム抽出 (CPU)
-  │    動画から等間隔にフレームを JPEG 抽出
-  │
-  ├─ Stage 2: Pi3X 3D再構成 (GPU)
-  │    全フレーム一括推論 → 信頼度 + 深度エッジで点群抽出
-  │
-  ├─ Stage 3: SAM2 セグメンテーション (GPU)
-  │    Web ダッシュボードで対象物体をクリック → マスク伝播
-  │    Stage 2 のキャッシュ点群へ SAM2 マスクを適用
-  │
-  ├─ Stage 4: 点群デノイズ (CPU)
-  │    DBSCAN クラスタリング + Statistical Outlier Removal
-  │
-  ├─ Stage 5: メッシュ再構成 (Classical or DiffCD)
-  │    Classical(既定): 法線推定 → Screened Poisson → 平滑化
-  │    Learning(DiffCD): 暗黙表面フィッティング → Marching Cubes → 平滑化
-  │
-  ├─ Stage 6: メッシュラップ (CPU)
-  │    Iterative Poisson 外皮化 → UV展開安定化向けに穴や細片を低減
-  │
-  └─ Stage 7: テクスチャベイキング (CPU)
-       カメラ内部パラメータ推定 → xatlas UV展開 → マルチビューテクスチャ投影
+```mermaid
+graph TD
+    INPUT["🎥 入力: RGB動画 (.mp4)"]
+    S1["Stage 1: フレーム抽出<br/><i>CPU</i><br/>動画から等間隔にフレームをJPEG抽出"]
+    S2["Stage 2: Pi3X 3D再構成<br/><i>GPU</i><br/>全フレーム一括推論 → 信頼度+深度エッジで点群抽出"]
+    S3["Stage 3: SAM2 セグメンテーション<br/><i>GPU</i><br/>Web UIで対象物体をクリック → マスク伝播"]
+    S4["Stage 4: 点群デノイズ<br/><i>CPU</i><br/>DBSCAN + Statistical Outlier Removal"]
+    S5{"Stage 5: メッシュ再構成"}
+    S5C["Classical<br/><i>CPU</i><br/>法線推定 → Screened Poisson → 平滑化"]
+    S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
+    S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>Iterative Poisson 外皮化"]
+    S7["Stage 7: テクスチャベイキング<br/><i>CPU</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → マルチビュー投影"]
+    OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
 
-出力: textured_mesh.obj / .mtl / texture.png
+    INPUT --> S1 --> S2 --> S3 --> S4 --> S5
+    S5 -->|poisson| S5C
+    S5 -->|diffcd| S5D
+    S5C --> S6
+    S5D --> S6
+    S6 --> S7 --> OUTPUT
 ```
 
 ## 動作環境
