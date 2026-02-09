@@ -52,6 +52,10 @@ export class PipelineUI {
       postDown: document.getElementById('mesh-connector-poisson-post-down'),
       right: document.getElementById('mesh-connector-poisson-right'),
     };
+    this._diffcdConnectors = {
+      left: document.getElementById('mesh-connector-diffcd-left'),
+      right: document.getElementById('mesh-connector-diffcd-right'),
+    };
 
     this.setMeshMethod(this._meshMethod);
   }
@@ -464,6 +468,11 @@ export class PipelineUI {
       postDownDone,
     );
     this._setConnectorState(this._poissonConnectors.right, poissonActive, poissonActive && stage6Done);
+
+    // DiffCD path connectors
+    const diffcdActive = !poissonActive;
+    this._setConnectorState(this._diffcdConnectors.left, diffcdActive, diffcdActive && stage5Done);
+    this._setConnectorState(this._diffcdConnectors.right, diffcdActive, diffcdActive && stage6Done);
   }
 
   _setConnectorState(connector, active, done) {
