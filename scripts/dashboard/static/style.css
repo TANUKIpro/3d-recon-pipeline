@@ -268,6 +268,30 @@ html, body {
   width: 32px;
 }
 
+/* ── DiffCD Path Connectors ─────────────────────────────── */
+.stage-connector-diffcd {
+  position: absolute;
+  top: 14px;
+  height: 2px;
+  background: var(--text-dim);
+  z-index: 1;
+}
+.stage-connector-diffcd::after { display: none; }
+
+#mesh-connector-diffcd-left {
+  left: 0;
+  width: calc(50% - 92px);   /* half slot minus half pill min-width (184/2) */
+}
+#mesh-connector-diffcd-right {
+  right: 0;
+  width: calc(50% - 92px);
+}
+
+/* Hide when Poisson is the active method */
+#mesh-branch-slot:not(.poisson-inactive) .stage-connector-diffcd {
+  display: none;
+}
+
 .stage-connector.active {
   background: var(--accent);
 }
@@ -320,6 +344,14 @@ html, body {
 }
 #mesh-branch-slot:has(.stage-connector-branch.done)::before,
 #mesh-branch-slot:has(.stage-connector-branch.done)::after {
+  background: var(--success);
+}
+#mesh-branch-slot:has(.stage-connector-diffcd.active)::before,
+#mesh-branch-slot:has(.stage-connector-diffcd.active)::after {
+  background: var(--accent);
+}
+#mesh-branch-slot:has(.stage-connector-diffcd.done)::before,
+#mesh-branch-slot:has(.stage-connector-diffcd.done)::after {
   background: var(--success);
 }
 
