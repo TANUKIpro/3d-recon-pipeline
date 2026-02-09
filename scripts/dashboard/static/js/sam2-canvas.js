@@ -35,18 +35,31 @@ export class SAM2Canvas {
 
     this._placeholder.style.display = 'none';
     this._canvas.style.display = 'block';
-    this._undoBtn.disabled = false;
-    this._clearBtn.disabled = false;
-    this._confirmBtn.disabled = false;
+    this._canvas.width = width;
+    this._canvas.height = height;
+    this._loading = true;
+    this._canvas.style.opacity = '0.7';
+    this._undoBtn.disabled = true;
+    this._clearBtn.disabled = true;
+    this._confirmBtn.disabled = true;
     this._confirmBtn.textContent = 'Confirm & Propagate';
 
-    // Load first frame
-    this._loadFrame(0);
+    // Load first frame, then enable interactions.
+    this._loadFrame(0).finally(() => {
+      if (!this._active) return;
+      this._loading = false;
+      this._canvas.style.opacity = '1';
+      this._undoBtn.disabled = false;
+      this._clearBtn.disabled = false;
+      this._confirmBtn.disabled = false;
+    });
     this._updateInfo();
   }
 
   deactivate() {
     this._active = false;
+    this._loading = false;
+    this._canvas.style.opacity = '1';
     this._undoBtn.disabled = true;
     this._clearBtn.disabled = true;
     this._confirmBtn.disabled = true;
