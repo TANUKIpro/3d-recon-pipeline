@@ -184,8 +184,11 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `CLASSICAL_AUTO_SMOOTH` | `0` | 後処理スムージングを自動適用 (`1`で有効) |
 | `CLASSICAL_SMOOTH_ITERATIONS` | `2` | 後処理スムージングの反復回数 |
 | `CLASSICAL_DOWNSAMPLE_ENABLED` | `1` | 面数過多時のダウンサンプリングを有効化 |
-| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `220000` | ダウンサンプリング後の目標面数 |
-| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `280000` | この面数を超えた場合にダウンサンプリング実行 |
+| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `100000` | ダウンサンプリング後の目標面数 |
+| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `140000` | この面数を超えた場合にダウンサンプリング実行 |
+
+> Dashboard実行時のClassical Meshは `Preprocess -> Main Poisson -> Postprocess -> Downsample` を順に実行し、
+> 各サブタスク完了ごとに承認（Continue）が必要です。
 
 #### DiffCD
 

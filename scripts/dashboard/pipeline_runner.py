@@ -364,17 +364,79 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             mesh_method = _mesh_method_key(cfg.mesh_method)
             mesh_label = _mesh_method_label(mesh_method)
             if mesh_method == "diffcd":
-                stage_fn = _stage_diffcd
+                await _run_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_diffcd,
+                    session.denoised_ply,
+                    output_dir,
+                    label=mesh_label,
+                )
             else:
-                stage_fn = _stage_classical_mesh
-            await _run_stage(
-                session,
-                PipelineStage.DIFFCD_MESH,
-                stage_fn,
-                session.denoised_ply,
-                output_dir,
-                label=mesh_label,
-            )
+                preprocess_ply = Path(output_dir) / "object_mesh_input.ply"
+                raw_mesh_ply = Path(output_dir) / "object_mesh_raw.ply"
+                post_mesh_ply = Path(output_dir) / "object_mesh_postprocessed.ply"
+
+                await _run_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_preprocess,
+                    session.denoised_ply,
+                    output_dir,
+                    label="Classical Mesh / Preprocess",
+                )
+                _check_cancelled(session)
+                _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical preprocess complete. Continue to Main Poisson?",
+                )
+
+                await _run_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_main,
+                    str(preprocess_ply),
+                    output_dir,
+                    label="Classical Mesh / Main Poisson",
+                )
+                _check_cancelled(session)
+                _require_file(str(raw_mesh_ply), "Classical raw mesh")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical main Poisson complete. Continue to Postprocess?",
+                )
+
+                await _run_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_postprocess,
+                    str(raw_mesh_ply),
+                    output_dir,
+                    label="Classical Mesh / Postprocess",
+                )
+                _check_cancelled(session)
+                _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical postprocess complete. Continue to Mesh Downsample?",
+                )
+
+                await _run_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_downsample,
+                    str(post_mesh_ply),
+                    output_dir,
+                    label="Classical Mesh / Downsample",
+                )
+
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
@@ -685,6 +747,30 @@ def _stage_classical_mesh(denoised_ply: str, output_dir: str, progress_cb=None) 
     from stage_classical_mesh import run_classical_mesh
 
     run_classical_mesh(denoised_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_classical_preprocess(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_classical_mesh import run_classical_preprocess
+
+    run_classical_preprocess(denoised_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_classical_main(preprocess_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_classical_mesh import run_classical_main
+
+    run_classical_main(preprocess_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_classical_postprocess(raw_mesh_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_classical_mesh import run_classical_postprocess
+
+    run_classical_postprocess(raw_mesh_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_classical_downsample(post_mesh_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_classical_mesh import run_classical_downsample
+
+    run_classical_downsample(post_mesh_ply, output_dir, progress_cb=progress_cb)
 
 
 def _stage_texture_bake(
