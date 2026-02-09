@@ -72,16 +72,6 @@ def _mesh_method_label(method: str) -> str:
     return "Classical Mesh (Pre -> Main -> Post -> Downsample)"
 
 
-_CLASSICAL_SUBTASK_ORDER = ["preprocess", "main", "postprocess", "downsample"]
-
-
-def _classical_subtask_key(value: str | None) -> str:
-    subtask = str(value or "").strip().lower()
-    if subtask in _CLASSICAL_SUBTASK_ORDER:
-        return subtask
-    return "preprocess"
-
-
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
     """Execute the full 6-stage pipeline asynchronously."""
     cfg = session.config
@@ -386,12 +376,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 preprocess_ply = Path(output_dir) / "object_mesh_input.ply"
                 raw_mesh_ply = Path(output_dir) / "object_mesh_raw.ply"
                 post_mesh_ply = Path(output_dir) / "object_mesh_postprocessed.ply"
-                classical_start_subtask = (
-                    _classical_subtask_key(cfg.classical_start_subtask)
-                    if start_stage == int(PipelineStage.DIFFCD_MESH)
-                    else "preprocess"
-                )
-                classical_start_idx = _CLASSICAL_SUBTASK_ORDER.index(classical_start_subtask)
 
                 # Single stage lifecycle for the entire Classical Mesh flow
                 session.stage_start(PipelineStage.DIFFCD_MESH)
@@ -402,91 +386,64 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 })
 
                 # Sub-phase 1: Preprocess (0-24%)
-                if classical_start_idx <= 0:
-                    await _run_sub_stage(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        _stage_classical_preprocess,
-                        session.denoised_ply,
-                        output_dir,
-                        label="Classical/Preprocess",
-                        progress_start=0.0,
-                        progress_end=24.0,
-                    )
-                    _check_cancelled(session)
-                    _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
-                    await _wait_for_next_stage_confirmation(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        PipelineStage.DIFFCD_MESH,
-                        "Classical preprocess complete. Continue to Main Poisson?",
-                    )
-                else:
-                    _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
-                    await _broadcast_stage_progress(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        progress=24.0,
-                        detail=f"Classical/Preprocess: reused existing output ({classical_start_subtask} start)",
-                    )
+                await _run_sub_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_preprocess,
+                    session.denoised_ply,
+                    output_dir,
+                    label="Classical/Preprocess",
+                    progress_start=0.0,
+                    progress_end=24.0,
+                )
+                _check_cancelled(session)
+                _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical preprocess complete. Continue to Main Poisson?",
+                )
 
                 # Sub-phase 2: Main Poisson (24-72%)
-                if classical_start_idx <= 1:
-                    await _run_sub_stage(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        _stage_classical_main,
-                        str(preprocess_ply),
-                        output_dir,
-                        label="Classical/Main",
-                        progress_start=24.0,
-                        progress_end=72.0,
-                    )
-                    _check_cancelled(session)
-                    _require_file(str(raw_mesh_ply), "Classical raw mesh")
-                    await _wait_for_next_stage_confirmation(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        PipelineStage.DIFFCD_MESH,
-                        "Classical main Poisson complete. Continue to Postprocess?",
-                    )
-                else:
-                    _require_file(str(raw_mesh_ply), "Classical raw mesh")
-                    await _broadcast_stage_progress(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        progress=72.0,
-                        detail=f"Classical/Main: reused existing output ({classical_start_subtask} start)",
-                    )
+                await _run_sub_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_main,
+                    str(preprocess_ply),
+                    output_dir,
+                    label="Classical/Main",
+                    progress_start=24.0,
+                    progress_end=72.0,
+                )
+                _check_cancelled(session)
+                _require_file(str(raw_mesh_ply), "Classical raw mesh")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical main Poisson complete. Continue to Postprocess?",
+                )
 
                 # Sub-phase 3: Postprocess (72-92%)
-                if classical_start_idx <= 2:
-                    await _run_sub_stage(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        _stage_classical_postprocess,
-                        str(raw_mesh_ply),
-                        output_dir,
-                        label="Classical/Postprocess",
-                        progress_start=72.0,
-                        progress_end=92.0,
-                    )
-                    _check_cancelled(session)
-                    _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
-                    await _wait_for_next_stage_confirmation(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        PipelineStage.DIFFCD_MESH,
-                        "Classical postprocess complete. Continue to Mesh Downsample?",
-                    )
-                else:
-                    _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
-                    await _broadcast_stage_progress(
-                        session,
-                        PipelineStage.DIFFCD_MESH,
-                        progress=92.0,
-                        detail=f"Classical/Postprocess: reused existing output ({classical_start_subtask} start)",
-                    )
+                await _run_sub_stage(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    _stage_classical_postprocess,
+                    str(raw_mesh_ply),
+                    output_dir,
+                    label="Classical/Postprocess",
+                    progress_start=72.0,
+                    progress_end=92.0,
+                )
+                _check_cancelled(session)
+                _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
+                await _wait_for_next_stage_confirmation(
+                    session,
+                    PipelineStage.DIFFCD_MESH,
+                    PipelineStage.DIFFCD_MESH,
+                    "Classical postprocess complete. Continue to Mesh Downsample?",
+                )
 
                 # Sub-phase 4: Downsample (92-100%)
                 await _run_sub_stage(
