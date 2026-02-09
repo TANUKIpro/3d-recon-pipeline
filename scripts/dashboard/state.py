@@ -61,15 +61,13 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
     frame_count = _count_indexed_files(out / "frames", ".jpg")
     mask_count = _count_indexed_files(out / "masks", ".png")
     textured_ready = (out / "textured_mesh.obj").is_file()
-    wrapped_ready = (out / "object_mesh_wrapped.ply").is_file()
     stage_complete = {
         1: frame_count > 0,
         2: all((out / rel).is_file() for rel in STAGE_OUTPUT_FILES[2]),
         3: (out / "object.ply").is_file() and mask_count > 0,
         4: (out / "object_denoised.ply").is_file(),
         5: (out / "object_mesh.ply").is_file(),
-        # Backward compatibility: older runs have texture outputs but no wrapped mesh artifact.
-        6: wrapped_ready or textured_ready,
+        6: (out / "object_mesh_wrapped.ply").is_file(),
         7: textured_ready,
     }
     return stage_complete, frame_count, mask_count

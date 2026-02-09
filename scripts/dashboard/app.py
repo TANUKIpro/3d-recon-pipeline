@@ -10,7 +10,6 @@ import json
 import os
 import re
 import shutil
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,11 +18,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from scripts.dashboard.configuration import (
+    build_pipeline_config,
+    env_int,
+    parse_bool,
+    parse_choice,
+    parse_float,
+    parse_int,
+)
 from scripts.dashboard.log_capture import LogBroadcaster
 from scripts.dashboard.pipeline_runner import broadcast, run_pipeline
 from scripts.dashboard.sam2_service import SAM2Service
 from scripts.dashboard.state import (
-    PipelineConfig,
     PipelineSession,
     PipelineStage,
     detect_stage_outputs,
@@ -85,73 +91,7 @@ PRIMARY_ARTIFACT_PATHS = (
     "texture.png",
     "intrinsics.json",
 )
-DENOISE_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
-    "balanced": {
-        "denoise_algorithm": "dbscan_sor",
-        "denoise_dbscan_eps": 0.0,
-        "denoise_dbscan_eps_ratio": 0.02,
-        "denoise_dbscan_min_samples": 10,
-        "denoise_dbscan_max_points": 500000,
-        "denoise_sor_neighbors": 20,
-        "denoise_sor_std_ratio": 2.0,
-        "denoise_radius_neighbors": 8,
-        "denoise_radius_radius_ratio": 0.015,
-    },
-    "detail_preserving": {
-        "denoise_algorithm": "sor_only",
-        "denoise_dbscan_eps": 0.0,
-        "denoise_dbscan_eps_ratio": 0.02,
-        "denoise_dbscan_min_samples": 10,
-        "denoise_dbscan_max_points": 500000,
-        "denoise_sor_neighbors": 16,
-        "denoise_sor_std_ratio": 2.6,
-        "denoise_radius_neighbors": 8,
-        "denoise_radius_radius_ratio": 0.015,
-    },
-    "isolate_subject": {
-        "denoise_algorithm": "dbscan_only",
-        "denoise_dbscan_eps": 0.0,
-        "denoise_dbscan_eps_ratio": 0.018,
-        "denoise_dbscan_min_samples": 8,
-        "denoise_dbscan_max_points": 500000,
-        "denoise_sor_neighbors": 20,
-        "denoise_sor_std_ratio": 2.0,
-        "denoise_radius_neighbors": 8,
-        "denoise_radius_radius_ratio": 0.015,
-    },
-    "sparse_noise": {
-        "denoise_algorithm": "radius_only",
-        "denoise_dbscan_eps": 0.0,
-        "denoise_dbscan_eps_ratio": 0.02,
-        "denoise_dbscan_min_samples": 10,
-        "denoise_dbscan_max_points": 500000,
-        "denoise_sor_neighbors": 20,
-        "denoise_sor_std_ratio": 2.0,
-        "denoise_radius_neighbors": 6,
-        "denoise_radius_radius_ratio": 0.012,
-    },
-    "aggressive_cleanup": {
-        "denoise_algorithm": "dbscan_radius",
-        "denoise_dbscan_eps": 0.0,
-        "denoise_dbscan_eps_ratio": 0.024,
-        "denoise_dbscan_min_samples": 14,
-        "denoise_dbscan_max_points": 500000,
-        "denoise_sor_neighbors": 20,
-        "denoise_sor_std_ratio": 2.0,
-        "denoise_radius_neighbors": 10,
-        "denoise_radius_radius_ratio": 0.02,
-    },
-}
-DENOISE_ALGORITHMS = {
-    "dbscan_sor",
-    "dbscan_only",
-    "sor_only",
-    "radius_only",
-    "dbscan_radius",
-}
-MESH_METHODS = {"poisson", "diffcd"}
 MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
-_LEGACY_DIFFCD_DEFAULTS = (3000, 2500, 384)
 
 
 def _utc_iso(ts: float | None = None) -> str:
@@ -174,60 +114,6 @@ def _safe_json_load(path: Path) -> dict[str, Any]:
     except Exception:
         pass
     return {}
-
-
-def _parse_int(value: Any, fallback: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _parse_float(value: Any, fallback: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _parse_choice(value: Any, choices: set[str], fallback: str) -> str:
-    candidate = str(value or "").strip()
-    return candidate if candidate in choices else fallback
-
-
-def _parse_bool(value: Any, fallback: bool) -> bool:
-    if value is None:
-        return fallback
-    if isinstance(value, bool):
-        return value
-    candidate = str(value).strip().lower()
-    if candidate in {"1", "true", "yes", "on", "y"}:
-        return True
-    if candidate in {"0", "false", "no", "off", "n"}:
-        return False
-    return fallback
-
-
-def _env_int(name: str, fallback: int) -> int:
-    return _parse_int(os.environ.get(name, fallback), fallback)
-
-
-def _env_float(name: str, fallback: float) -> float:
-    return _parse_float(os.environ.get(name, fallback), fallback)
-
-
-def _upgrade_legacy_diffcd_defaults(raw: dict[str, Any]) -> dict[str, Any]:
-    upgraded = dict(raw)
-    batch = _parse_int(upgraded.get("diffcd_batch_size"), -1)
-    n_batches = _parse_int(upgraded.get("diffcd_n_batches"), -1)
-    resolution = _parse_int(upgraded.get("diffcd_resolution"), -1)
-    if (batch, n_batches, resolution) != _LEGACY_DIFFCD_DEFAULTS:
-        return upgraded
-
-    upgraded["diffcd_batch_size"] = _env_int("DIFFCD_BATCH_SIZE", 5000)
-    upgraded["diffcd_n_batches"] = _env_int("DIFFCD_N_BATCHES", 30000)
-    upgraded["diffcd_resolution"] = _env_int("DIFFCD_RESOLUTION", 512)
-    return upgraded
 
 
 def _sanitize_object_name(name: str) -> str:
@@ -372,75 +258,6 @@ def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
     return issues
 
 
-def _build_pipeline_config(
-    raw: dict[str, Any],
-    *,
-    video_path: str,
-    object_name: str,
-    output_dir: Path,
-    upgrade_legacy_diffcd_defaults: bool = False,
-) -> PipelineConfig:
-    source = (
-        _upgrade_legacy_diffcd_defaults(raw)
-        if upgrade_legacy_diffcd_defaults
-        else raw
-    )
-    default_mesh_method = _parse_choice(os.environ.get("MESH_METHOD"), MESH_METHODS, "poisson")
-    raw_preset = str(source.get("denoise_preset") or "").strip()
-    if raw_preset == "custom":
-        preset = "custom"
-        denoise_defaults = DENOISE_PRESET_DEFAULTS["balanced"]
-    else:
-        preset = _parse_choice(
-            raw_preset,
-            set(DENOISE_PRESET_DEFAULTS),
-            "balanced",
-        )
-        denoise_defaults = DENOISE_PRESET_DEFAULTS[preset]
-    denoise_algorithm = _parse_choice(
-        source.get("denoise_algorithm"),
-        DENOISE_ALGORITHMS,
-        str(denoise_defaults["denoise_algorithm"]),
-    )
-    max_frames = max(2, _parse_int(source.get("max_frames"), _env_int("MAX_FRAMES", 50)))
-    max_pi3x_target = max_frames
-    pi3x_frame_target = max(
-        2,
-        min(
-            _parse_int(source.get("pi3x_frame_target"), max_frames),
-            max_pi3x_target,
-        ),
-    )
-
-    return PipelineConfig(
-        video_path=video_path,
-        output_dir=str(output_dir),
-        object_name=object_name,
-        frame_interval=_parse_int(source.get("frame_interval"), _env_int("FRAME_INTERVAL", 10)),
-        max_frames=max_frames,
-        pixel_limit=_parse_int(source.get("pixel_limit"), _env_int("PIXEL_LIMIT", 255000)),
-        pi3x_frame_target=pi3x_frame_target,
-        confidence_threshold=_parse_float(source.get("confidence_threshold"), _env_float("CONFIDENCE_THRESHOLD", 0.2)),
-        edge_rtol=_parse_float(source.get("edge_rtol"), _env_float("EDGE_RTOL", 0.03)),
-        sam2_model=str(source.get("sam2_model") or os.environ.get("SAM2_MODEL", "large")),
-        denoise_preset=preset,
-        denoise_algorithm=denoise_algorithm,
-        denoise_dbscan_eps=max(0.0, _parse_float(source.get("denoise_dbscan_eps"), float(denoise_defaults["denoise_dbscan_eps"]))),
-        denoise_dbscan_eps_ratio=max(0.0001, _parse_float(source.get("denoise_dbscan_eps_ratio"), float(denoise_defaults["denoise_dbscan_eps_ratio"]))),
-        denoise_dbscan_min_samples=max(1, _parse_int(source.get("denoise_dbscan_min_samples"), int(denoise_defaults["denoise_dbscan_min_samples"]))),
-        denoise_dbscan_max_points=max(1000, _parse_int(source.get("denoise_dbscan_max_points"), int(denoise_defaults["denoise_dbscan_max_points"]))),
-        denoise_sor_neighbors=max(2, _parse_int(source.get("denoise_sor_neighbors"), int(denoise_defaults["denoise_sor_neighbors"]))),
-        denoise_sor_std_ratio=max(0.1, _parse_float(source.get("denoise_sor_std_ratio"), float(denoise_defaults["denoise_sor_std_ratio"]))),
-        denoise_radius_neighbors=max(1, _parse_int(source.get("denoise_radius_neighbors"), int(denoise_defaults["denoise_radius_neighbors"]))),
-        denoise_radius_radius_ratio=max(0.0001, _parse_float(source.get("denoise_radius_radius_ratio"), float(denoise_defaults["denoise_radius_radius_ratio"]))),
-        mesh_method=_parse_choice(source.get("mesh_method"), MESH_METHODS, default_mesh_method),
-        diffcd_batch_size=_parse_int(source.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
-        diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 30000)),
-        diffcd_resolution=_parse_int(source.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
-        texture_size=_parse_int(source.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
-    )
-
-
 def _write_object_meta(
     object_name: str,
     object_dir: Path,
@@ -466,12 +283,11 @@ def _write_object_meta(
 def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, Any]:
     meta = _safe_json_load(object_dir / OBJECT_META_FILE)
     raw_cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
-    cfg = _build_pipeline_config(
+    cfg = build_pipeline_config(
         raw_cfg,
         video_path=str(meta.get("video_path", "")),
         object_name=object_name,
         output_dir=object_dir,
-        upgrade_legacy_diffcd_defaults=True,
     )
 
     session.reset()
@@ -513,12 +329,11 @@ def _summarize_object(
     if include_files:
         item["files"] = files
         if isinstance(meta.get("config"), dict):
-            cfg = _build_pipeline_config(
+            cfg = build_pipeline_config(
                 meta["config"],
                 video_path=str(meta.get("video_path", "")),
                 object_name=object_name,
                 output_dir=object_dir,
-                upgrade_legacy_diffcd_defaults=True,
             )
             item["config"] = cfg.to_dict()
     return item
@@ -772,7 +587,7 @@ async def pipeline_start(body: dict | None = None):
         if object_output_dir.is_dir()
         else int(PipelineStage.EXTRACT_FRAMES)
     )
-    start_stage = _parse_int(raw.get("resume_from_stage"), inferred_stage)
+    start_stage = parse_int(raw.get("resume_from_stage"), inferred_stage)
     if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.TEXTURE_BAKE):
         return JSONResponse(
             {"error": f"resume_from_stage must be between 1 and {int(PipelineStage.TEXTURE_BAKE)}"},
@@ -804,16 +619,11 @@ async def pipeline_start(body: dict | None = None):
     if isinstance(existing_meta.get("config"), dict):
         cfg_source.update(existing_meta["config"])
     cfg_source.update(raw)
-    explicit_diffcd = any(
-        key in raw
-        for key in ("diffcd_batch_size", "diffcd_n_batches", "diffcd_resolution")
-    )
-    cfg = _build_pipeline_config(
+    cfg = build_pipeline_config(
         cfg_source,
         video_path=video_path,
         object_name=object_name,
         output_dir=object_output_dir,
-        upgrade_legacy_diffcd_defaults=not explicit_diffcd,
     )
 
     session.reset()
@@ -876,15 +686,6 @@ async def pipeline_cancel():
     return JSONResponse({"status": "cancelling", "stage": stage_num})
 
 
-# ── Pi3X API ──────────────────────────────────────────────────────
-
-@app.post("/api/pi3x/approve")
-async def pi3x_approve():
-    # Backward-compatible alias for global stage transition approval.
-    session.next_stage_confirm_event.set()
-    return JSONResponse({"status": "approved"})
-
-
 # ── Global stage-transition approval API ───────────────────────────
 
 @app.post("/api/pipeline/confirm-next")
@@ -918,32 +719,32 @@ async def mesh_postprocess(body: dict | None = None):
             )
 
     raw = body or {}
-    method = _parse_choice(raw.get("method"), MESH_POSTPROCESS_METHODS, "laplacian")
-    iterations = max(0, min(100, _parse_int(raw.get("iterations"), 6)))
-    lamb = max(0.01, min(1.5, _parse_float(raw.get("lamb"), 0.5)))
-    taubin_nu = max(-1.5, min(-0.01, _parse_float(raw.get("taubin_nu"), -0.53)))
-    downsample_enabled = _parse_bool(
+    method = parse_choice(raw.get("method"), MESH_POSTPROCESS_METHODS, "laplacian")
+    iterations = max(0, min(100, parse_int(raw.get("iterations"), 6)))
+    lamb = max(0.01, min(1.5, parse_float(raw.get("lamb"), 0.5)))
+    taubin_nu = max(-1.5, min(-0.01, parse_float(raw.get("taubin_nu"), -0.53)))
+    downsample_enabled = parse_bool(
         raw.get("downsample_enabled"),
-        _parse_bool(os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"), True),
+        parse_bool(os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"), True),
     )
     downsample_target_faces = max(
         1000,
-        _parse_int(
+        parse_int(
             raw.get("downsample_target_faces"),
-            _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 100000),
+            env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 100000),
         ),
     )
     downsample_trigger_faces = max(
-        _parse_int(
+        parse_int(
             raw.get("downsample_trigger_faces"),
-            _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 140000),
+            env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 140000),
         ),
         downsample_target_faces,
     )
     source = str(raw.get("source") or "raw").strip().lower()
     if source not in {"raw", "current"}:
         source = "raw"
-    invalidate_texture = _parse_bool(raw.get("invalidate_texture"), True)
+    invalidate_texture = parse_bool(raw.get("invalidate_texture"), True)
 
     out = _active_output_dir()
     mesh_path = out / "object_mesh.ply"
