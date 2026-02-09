@@ -158,12 +158,17 @@ html, body {
   height: 74px;
   overflow: visible;
   flex-shrink: 0;
+  isolation: isolate;
 }
 
 .mesh-method-pill {
   min-width: 184px;
   justify-content: flex-start;
   white-space: nowrap;
+}
+
+#mesh-branch-slot .mesh-method-pill {
+  z-index: 2;
 }
 
 #mesh-pill-diffcd {
@@ -200,16 +205,17 @@ html, body {
   height: 2px;
   opacity: 1;
   background: var(--text-dim);
+  z-index: 1;
 }
 
 .stage-connector-branch::after { display: none; }
 
 #mesh-connector-poisson-left {
-  left: -32px;
+  left: 0;
 }
 
 #mesh-connector-poisson-right {
-  right: -32px;
+  right: 0;
 }
 
 .stage-connector.active {
@@ -243,6 +249,7 @@ html, body {
   height: 38px;
   background: var(--text-dim);
   transition: background 0.3s ease;
+  z-index: 0;
 }
 
 #mesh-branch-slot::after {
@@ -254,6 +261,7 @@ html, body {
   height: 38px;
   background: var(--text-dim);
   transition: background 0.3s ease;
+  z-index: 0;
 }
 
 #mesh-branch-slot:has(.stage-connector-branch.active)::before,

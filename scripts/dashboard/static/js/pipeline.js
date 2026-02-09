@@ -271,19 +271,19 @@ export class PipelineUI {
 
     const stage5Done = _isDone(this._stageMeta[5]);
     const stage6Done = _isDone(this._stageMeta[6]);
-    const diffcdActive = this._meshMethod === 'diffcd';
     const poissonActive = this._meshMethod === 'poisson';
 
-    // Main mesh path (DiffCD) connectors: index 3 = 4→5, index 4 = 5→6.
-    const diffcdLeft = this._mainConnectors[3];
-    const diffcdRight = this._mainConnectors[4];
-    if (diffcdLeft) {
-      diffcdLeft.classList.toggle('active', diffcdActive);
-      diffcdLeft.classList.toggle('done', diffcdActive && stage5Done);
+    // Connectors around the mesh branch slot are shared trunk lines.
+    // Keep them active regardless of selected mesh method so branch lines connect visually.
+    const meshLeftTrunk = this._mainConnectors[3];
+    const meshRightTrunk = this._mainConnectors[4];
+    if (meshLeftTrunk) {
+      meshLeftTrunk.classList.toggle('active', true);
+      meshLeftTrunk.classList.toggle('done', stage5Done);
     }
-    if (diffcdRight) {
-      diffcdRight.classList.toggle('active', diffcdActive);
-      diffcdRight.classList.toggle('done', diffcdActive && stage6Done);
+    if (meshRightTrunk) {
+      meshRightTrunk.classList.toggle('active', true);
+      meshRightTrunk.classList.toggle('done', stage6Done);
     }
 
     // Classical path (Poisson) connectors.
