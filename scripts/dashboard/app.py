@@ -916,6 +916,24 @@ async def mesh_postprocess(body: dict | None = None):
     iterations = max(0, min(100, _parse_int(raw.get("iterations"), 6)))
     lamb = max(0.01, min(1.5, _parse_float(raw.get("lamb"), 0.5)))
     taubin_nu = max(-1.5, min(-0.01, _parse_float(raw.get("taubin_nu"), -0.53)))
+    downsample_enabled = _parse_bool(
+        raw.get("downsample_enabled"),
+        _parse_bool(os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"), True),
+    )
+    downsample_target_faces = max(
+        1000,
+        _parse_int(
+            raw.get("downsample_target_faces"),
+            _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 100000),
+        ),
+    )
+    downsample_trigger_faces = max(
+        _parse_int(
+            raw.get("downsample_trigger_faces"),
+            _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 140000),
+        ),
+        downsample_target_faces,
+    )
     source = str(raw.get("source") or "raw").strip().lower()
     if source not in {"raw", "current"}:
         source = "raw"
@@ -934,19 +952,6 @@ async def mesh_postprocess(body: dict | None = None):
     def _apply() -> tuple[int, int, bool]:
         from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
         import open3d as o3d
-
-        downsample_enabled = _parse_bool(
-            os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"),
-            True,
-        )
-        downsample_target_faces = max(
-            _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 220000),
-            1000,
-        )
-        downsample_trigger_faces = max(
-            _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 280000),
-            downsample_target_faces,
-        )
 
         smooth_mesh_file(
             source_path,
@@ -1015,6 +1020,9 @@ async def mesh_postprocess(body: dict | None = None):
             "mesh_path": str(mesh_path.relative_to(out)),
             "vertices": vertices,
             "faces": faces,
+            "downsample_enabled": downsample_enabled,
+            "downsample_target_faces": downsample_target_faces,
+            "downsample_trigger_faces": downsample_trigger_faces,
             "downsample_applied": downsample_applied,
             "texture_invalidated": texture_invalidated,
         }

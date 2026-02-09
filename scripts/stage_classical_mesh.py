@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -38,8 +39,35 @@ _DEFAULT_SMOOTH_TAUBIN_NU = -0.53
 _DEFAULT_AUTO_SMOOTH = False
 
 _DEFAULT_DOWNSAMPLE_ENABLED = True
-_DEFAULT_DOWNSAMPLE_TARGET_FACES = 220_000
-_DEFAULT_DOWNSAMPLE_TRIGGER_FACES = 280_000
+_DEFAULT_DOWNSAMPLE_TARGET_FACES = 100_000
+_DEFAULT_DOWNSAMPLE_TRIGGER_FACES = 140_000
+
+
+@dataclass(frozen=True)
+class ClassicalMeshParams:
+    preprocess_enabled: bool
+    preprocess_voxel_ratio: float
+    preprocess_max_points: int
+    preprocess_sor_neighbors: int
+    preprocess_sor_std_ratio: float
+    normal_ratio: float
+    normal_max_nn: int
+    normal_orient_k: int
+    poisson_depth: int
+    poisson_scale: float
+    poisson_linear_fit: bool
+    density_trim_q: float
+    crop_scale: float
+    post_min_component_triangles: int
+    post_min_component_ratio: float
+    auto_smooth: bool
+    smooth_method: str
+    smooth_iterations: int
+    smooth_lambda: float
+    smooth_taubin_nu: float
+    downsample_enabled: bool
+    downsample_target_faces: int
+    downsample_trigger_faces: int
 
 
 def _emit_progress(
@@ -93,6 +121,109 @@ def _resolve_smooth_method() -> str:
         )
         return _DEFAULT_SMOOTH_METHOD
     return method
+
+
+def _resolve_params() -> ClassicalMeshParams:
+    preprocess_enabled = _env_bool(
+        "CLASSICAL_PREPROCESS_ENABLED",
+        _DEFAULT_PREPROCESS_ENABLED,
+    )
+    preprocess_voxel_ratio = max(
+        _env_float("CLASSICAL_PREPROCESS_VOXEL_RATIO", _DEFAULT_PREPROCESS_VOXEL_RATIO),
+        0.0,
+    )
+    preprocess_max_points = max(
+        _env_int("CLASSICAL_PREPROCESS_MAX_POINTS", _DEFAULT_PREPROCESS_MAX_POINTS),
+        50_000,
+    )
+    preprocess_sor_neighbors = max(
+        _env_int("CLASSICAL_PREPROCESS_SOR_NEIGHBORS", _DEFAULT_PREPROCESS_SOR_NEIGHBORS),
+        2,
+    )
+    preprocess_sor_std_ratio = max(
+        _env_float("CLASSICAL_PREPROCESS_SOR_STD_RATIO", _DEFAULT_PREPROCESS_SOR_STD_RATIO),
+        0.1,
+    )
+
+    normal_ratio = max(
+        _env_float("POISSON_NORMAL_RADIUS_RATIO", _DEFAULT_NORMAL_RADIUS_RATIO),
+        1e-5,
+    )
+    normal_max_nn = max(_env_int("POISSON_NORMAL_MAX_NN", _DEFAULT_NORMAL_MAX_NN), 8)
+    normal_orient_k = max(_env_int("POISSON_NORMAL_ORIENT_K", _DEFAULT_NORMAL_ORIENT_K), 8)
+    poisson_depth = max(_env_int("POISSON_DEPTH", _DEFAULT_POISSON_DEPTH), 6)
+    poisson_scale = max(_env_float("POISSON_SCALE", _DEFAULT_POISSON_SCALE), 1.0)
+    poisson_linear_fit = _env_bool("POISSON_LINEAR_FIT", _DEFAULT_POISSON_LINEAR_FIT)
+    density_trim_q = min(
+        max(_env_float("POISSON_DENSITY_TRIM_QUANTILE", _DEFAULT_DENSITY_TRIM_QUANTILE), 0.0),
+        0.49,
+    )
+    crop_scale = max(_env_float("POISSON_CROP_SCALE", _DEFAULT_CROP_SCALE), 1.0)
+
+    post_min_component_triangles = max(
+        _env_int(
+            "CLASSICAL_POST_MIN_COMPONENT_TRIANGLES",
+            _DEFAULT_POST_MIN_COMPONENT_TRIANGLES,
+        ),
+        0,
+    )
+    post_min_component_ratio = min(
+        max(
+            _env_float(
+                "CLASSICAL_POST_MIN_COMPONENT_RATIO",
+                _DEFAULT_POST_MIN_COMPONENT_RATIO,
+            ),
+            0.0,
+        ),
+        0.5,
+    )
+
+    auto_smooth = _env_bool("CLASSICAL_AUTO_SMOOTH", _DEFAULT_AUTO_SMOOTH)
+    smooth_method = _resolve_smooth_method()
+    smooth_iterations = max(
+        0,
+        _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
+    )
+    smooth_lambda = _env_float("CLASSICAL_SMOOTH_LAMBDA", _DEFAULT_SMOOTH_LAMBDA)
+    smooth_taubin_nu = _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", _DEFAULT_SMOOTH_TAUBIN_NU)
+
+    downsample_enabled = _env_bool(
+        "CLASSICAL_DOWNSAMPLE_ENABLED",
+        _DEFAULT_DOWNSAMPLE_ENABLED,
+    )
+    downsample_target_faces = max(
+        _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", _DEFAULT_DOWNSAMPLE_TARGET_FACES),
+        1000,
+    )
+    downsample_trigger_faces = max(
+        _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", _DEFAULT_DOWNSAMPLE_TRIGGER_FACES),
+        downsample_target_faces,
+    )
+    return ClassicalMeshParams(
+        preprocess_enabled=preprocess_enabled,
+        preprocess_voxel_ratio=preprocess_voxel_ratio,
+        preprocess_max_points=preprocess_max_points,
+        preprocess_sor_neighbors=preprocess_sor_neighbors,
+        preprocess_sor_std_ratio=preprocess_sor_std_ratio,
+        normal_ratio=normal_ratio,
+        normal_max_nn=normal_max_nn,
+        normal_orient_k=normal_orient_k,
+        poisson_depth=poisson_depth,
+        poisson_scale=poisson_scale,
+        poisson_linear_fit=poisson_linear_fit,
+        density_trim_q=density_trim_q,
+        crop_scale=crop_scale,
+        post_min_component_triangles=post_min_component_triangles,
+        post_min_component_ratio=post_min_component_ratio,
+        auto_smooth=auto_smooth,
+        smooth_method=smooth_method,
+        smooth_iterations=smooth_iterations,
+        smooth_lambda=smooth_lambda,
+        smooth_taubin_nu=smooth_taubin_nu,
+        downsample_enabled=downsample_enabled,
+        downsample_target_faces=downsample_target_faces,
+        downsample_trigger_faces=downsample_trigger_faces,
+    )
 
 
 def _safe_bbox_diag(points: np.ndarray) -> float:
@@ -232,95 +363,23 @@ def _downsample_mesh_if_needed(
     return simplified, True, before_faces, after_faces
 
 
-def run_classical_mesh(
-    denoised_ply: str,
-    output_dir: str,
-    progress_cb: ProgressCallback | None = None,
-) -> Path:
-    """Run classical mesh as a 4-step chain: pre -> main -> post -> downsample."""
+def _prepare_output_dirs(output_dir: str) -> tuple[Path, Path]:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     classical_dir = output_path / "classical_mesh"
     classical_dir.mkdir(parents=True, exist_ok=True)
+    return output_path, classical_dir
 
-    preprocess_enabled = _env_bool(
-        "CLASSICAL_PREPROCESS_ENABLED",
-        _DEFAULT_PREPROCESS_ENABLED,
-    )
-    preprocess_voxel_ratio = max(
-        _env_float("CLASSICAL_PREPROCESS_VOXEL_RATIO", _DEFAULT_PREPROCESS_VOXEL_RATIO),
-        0.0,
-    )
-    preprocess_max_points = max(
-        _env_int("CLASSICAL_PREPROCESS_MAX_POINTS", _DEFAULT_PREPROCESS_MAX_POINTS),
-        50_000,
-    )
-    preprocess_sor_neighbors = max(
-        _env_int("CLASSICAL_PREPROCESS_SOR_NEIGHBORS", _DEFAULT_PREPROCESS_SOR_NEIGHBORS),
-        2,
-    )
-    preprocess_sor_std_ratio = max(
-        _env_float("CLASSICAL_PREPROCESS_SOR_STD_RATIO", _DEFAULT_PREPROCESS_SOR_STD_RATIO),
-        0.1,
-    )
 
-    normal_ratio = max(
-        _env_float("POISSON_NORMAL_RADIUS_RATIO", _DEFAULT_NORMAL_RADIUS_RATIO),
-        1e-5,
-    )
-    normal_max_nn = max(_env_int("POISSON_NORMAL_MAX_NN", _DEFAULT_NORMAL_MAX_NN), 8)
-    normal_orient_k = max(_env_int("POISSON_NORMAL_ORIENT_K", _DEFAULT_NORMAL_ORIENT_K), 8)
-    poisson_depth = max(_env_int("POISSON_DEPTH", _DEFAULT_POISSON_DEPTH), 6)
-    poisson_scale = max(_env_float("POISSON_SCALE", _DEFAULT_POISSON_SCALE), 1.0)
-    poisson_linear_fit = _env_bool("POISSON_LINEAR_FIT", _DEFAULT_POISSON_LINEAR_FIT)
-    density_trim_q = min(
-        max(_env_float("POISSON_DENSITY_TRIM_QUANTILE", _DEFAULT_DENSITY_TRIM_QUANTILE), 0.0),
-        0.49,
-    )
-    crop_scale = max(_env_float("POISSON_CROP_SCALE", _DEFAULT_CROP_SCALE), 1.0)
-
-    post_min_component_triangles = max(
-        _env_int(
-            "CLASSICAL_POST_MIN_COMPONENT_TRIANGLES",
-            _DEFAULT_POST_MIN_COMPONENT_TRIANGLES,
-        ),
-        0,
-    )
-    post_min_component_ratio = min(
-        max(
-            _env_float(
-                "CLASSICAL_POST_MIN_COMPONENT_RATIO",
-                _DEFAULT_POST_MIN_COMPONENT_RATIO,
-            ),
-            0.0,
-        ),
-        0.5,
-    )
-
-    auto_smooth = _env_bool("CLASSICAL_AUTO_SMOOTH", _DEFAULT_AUTO_SMOOTH)
-    smooth_method = _resolve_smooth_method()
-    smooth_iterations = max(
-        0,
-        _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
-    )
-    smooth_lambda = _env_float("CLASSICAL_SMOOTH_LAMBDA", _DEFAULT_SMOOTH_LAMBDA)
-    smooth_taubin_nu = _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", _DEFAULT_SMOOTH_TAUBIN_NU)
-
-    downsample_enabled = _env_bool(
-        "CLASSICAL_DOWNSAMPLE_ENABLED",
-        _DEFAULT_DOWNSAMPLE_ENABLED,
-    )
-    downsample_target_faces = max(
-        _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", _DEFAULT_DOWNSAMPLE_TARGET_FACES),
-        1000,
-    )
-    downsample_trigger_faces = max(
-        _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", _DEFAULT_DOWNSAMPLE_TRIGGER_FACES),
-        downsample_target_faces,
-    )
-
+def run_classical_preprocess(
+    denoised_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
+    params = _resolve_params()
+    output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Preprocess point cloud ===")
-    _emit_progress(progress_cb, 5.0, "Classical/Preprocess: loading denoised point cloud")
+    _emit_progress(progress_cb, 8.0, "Classical/Preprocess: loading denoised point cloud")
     pcd = o3d.io.read_point_cloud(str(denoised_ply))
     points = np.asarray(pcd.points)
     if points.shape[0] == 0:
@@ -336,11 +395,11 @@ def run_classical_mesh(
     pcd, pre_metrics = _preprocess_point_cloud(
         pcd,
         bbox_diag=bbox_diag,
-        enabled=preprocess_enabled,
-        voxel_ratio=preprocess_voxel_ratio,
-        max_points=preprocess_max_points,
-        sor_neighbors=preprocess_sor_neighbors,
-        sor_std_ratio=preprocess_sor_std_ratio,
+        enabled=params.preprocess_enabled,
+        voxel_ratio=params.preprocess_voxel_ratio,
+        max_points=params.preprocess_max_points,
+        sor_neighbors=params.preprocess_sor_neighbors,
+        sor_std_ratio=params.preprocess_sor_std_ratio,
     )
     pre_points = np.asarray(pcd.points)
     if pre_points.shape[0] == 0:
@@ -348,9 +407,9 @@ def run_classical_mesh(
 
     print(
         "Preprocess params: "
-        f"enabled={preprocess_enabled}, voxel_ratio={preprocess_voxel_ratio:.5f}, "
-        f"max_points={preprocess_max_points:,}, sor_neighbors={preprocess_sor_neighbors}, "
-        f"sor_std={preprocess_sor_std_ratio:.3f}"
+        f"enabled={params.preprocess_enabled}, voxel_ratio={params.preprocess_voxel_ratio:.5f}, "
+        f"max_points={params.preprocess_max_points:,}, sor_neighbors={params.preprocess_sor_neighbors}, "
+        f"sor_std={params.preprocess_sor_std_ratio:.3f}"
     )
     print(
         "Preprocess stats: "
@@ -364,27 +423,40 @@ def run_classical_mesh(
     _write_point_cloud_safe(preprocess_path, pcd)
     _write_point_cloud_safe(classical_dir / "object_mesh_input.ply", pcd)
     print(f"Saved preprocessed point cloud: {preprocess_path}")
-    _emit_progress(progress_cb, 24.0, "Classical/Preprocess: complete")
+    _emit_progress(progress_cb, 100.0, "Classical/Preprocess: complete")
+    return preprocess_path
 
+
+def run_classical_main(
+    preprocess_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
+    params = _resolve_params()
+    output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Main (normals + Screened Poisson) ===")
+    pcd = o3d.io.read_point_cloud(str(preprocess_ply))
+    pre_points = np.asarray(pcd.points)
+    if pre_points.shape[0] == 0:
+        raise ValueError(f"Point cloud has no points: {preprocess_ply}")
     pre_bbox_diag = _safe_bbox_diag(pre_points)
-    normal_radius = max(pre_bbox_diag * normal_ratio, 1e-5)
+    normal_radius = max(pre_bbox_diag * params.normal_ratio, 1e-5)
     print(
         "Normal estimation params: "
-        f"radius={normal_radius:.6f}, max_nn={normal_max_nn}, orient_k={normal_orient_k}"
+        f"radius={normal_radius:.6f}, max_nn={params.normal_max_nn}, orient_k={params.normal_orient_k}"
     )
 
-    _emit_progress(progress_cb, 32.0, "Classical/Main: estimating normals")
+    _emit_progress(progress_cb, 10.0, "Classical/Main: estimating normals")
     pcd.estimate_normals(
         search_param=o3d.geometry.KDTreeSearchParamHybrid(
             radius=normal_radius,
-            max_nn=normal_max_nn,
+            max_nn=params.normal_max_nn,
         )
     )
     pcd.normalize_normals()
 
     if pre_points.shape[0] >= 16:
-        orient_k = min(max(8, normal_orient_k), int(pre_points.shape[0]) - 1)
+        orient_k = min(max(8, params.normal_orient_k), int(pre_points.shape[0]) - 1)
         try:
             pcd.orient_normals_consistent_tangent_plane(orient_k)
         except RuntimeError as e:
@@ -399,43 +471,43 @@ def run_classical_mesh(
 
     print(
         "Poisson params: "
-        f"depth={poisson_depth}, scale={poisson_scale:.3f}, linear_fit={poisson_linear_fit}"
+        f"depth={params.poisson_depth}, scale={params.poisson_scale:.3f}, linear_fit={params.poisson_linear_fit}"
     )
-    _emit_progress(progress_cb, 55.0, "Classical/Main: running Screened Poisson reconstruction")
+    _emit_progress(progress_cb, 58.0, "Classical/Main: running Screened Poisson reconstruction")
     try:
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
             pcd,
-            depth=poisson_depth,
+            depth=params.poisson_depth,
             width=0,
-            scale=poisson_scale,
-            linear_fit=poisson_linear_fit,
+            scale=params.poisson_scale,
+            linear_fit=params.poisson_linear_fit,
             n_threads=0,
         )
     except TypeError:
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
             pcd,
-            depth=poisson_depth,
+            depth=params.poisson_depth,
             width=0,
-            scale=poisson_scale,
-            linear_fit=poisson_linear_fit,
+            scale=params.poisson_scale,
+            linear_fit=params.poisson_linear_fit,
         )
 
     if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
         raise RuntimeError("Poisson reconstruction produced an empty mesh.")
 
     density_arr = np.asarray(densities)
-    if density_arr.size > 0 and density_trim_q > 0.0:
-        threshold = float(np.quantile(density_arr, density_trim_q))
+    if density_arr.size > 0 and params.density_trim_q > 0.0:
+        threshold = float(np.quantile(density_arr, params.density_trim_q))
         drop_mask = density_arr < threshold
         if 0 < int(drop_mask.sum()) < int(drop_mask.size):
             mesh.remove_vertices_by_mask(drop_mask)
             print(
-                f"Density trim: q={density_trim_q:.3f}, "
+                f"Density trim: q={params.density_trim_q:.3f}, "
                 f"removed={int(drop_mask.sum()):,}/{int(drop_mask.size):,}"
             )
 
     bbox = pcd.get_axis_aligned_bounding_box()
-    bbox = bbox.scale(crop_scale, bbox.get_center())
+    bbox = bbox.scale(params.crop_scale, bbox.get_center())
     cropped = mesh.crop(bbox)
     if len(cropped.vertices) > 0 and len(cropped.triangles) > 0:
         mesh = cropped
@@ -453,23 +525,35 @@ def run_classical_mesh(
     raw_vertices, raw_faces = mesh_vertex_face_count(raw_copy_path)
     print(f"Saved raw poisson mesh: {raw_copy_path}")
     print(f"  Raw vertices: {raw_vertices:,}, Faces: {raw_faces:,}")
-    _emit_progress(progress_cb, 72.0, "Classical/Main: raw Poisson mesh saved")
+    _emit_progress(progress_cb, 100.0, "Classical/Main: raw Poisson mesh saved")
+    return raw_copy_path
 
+
+def run_classical_postprocess(
+    raw_mesh_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
+    params = _resolve_params()
+    output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Postprocess mesh ===")
-    _emit_progress(progress_cb, 80.0, "Classical/Postprocess: cleaning mesh topology")
+    mesh = o3d.io.read_triangle_mesh(str(raw_mesh_ply))
+    if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
+        raise ValueError(f"Mesh is empty: {raw_mesh_ply}")
+    _emit_progress(progress_cb, 12.0, "Classical/Postprocess: cleaning mesh topology")
     mesh.remove_non_manifold_edges()
     mesh.remove_unreferenced_vertices()
     removed_triangles = _clean_small_components(
         mesh,
-        min_triangles=post_min_component_triangles,
-        min_ratio=post_min_component_ratio,
+        min_triangles=params.post_min_component_triangles,
+        min_ratio=params.post_min_component_ratio,
     )
     if removed_triangles > 0:
         print(
             "Component cleanup: "
             f"removed {removed_triangles:,} small triangles "
-            f"(min_triangles={post_min_component_triangles}, "
-            f"min_ratio={post_min_component_ratio:.3f})"
+            f"(min_triangles={params.post_min_component_triangles}, "
+            f"min_ratio={params.post_min_component_ratio:.3f})"
         )
     mesh.compute_vertex_normals()
 
@@ -477,21 +561,21 @@ def run_classical_mesh(
     _write_mesh_safe(post_path, mesh)
     _write_mesh_safe(classical_dir / "object_mesh_postprocessed.ply", mesh)
 
-    if auto_smooth and smooth_iterations > 0:
-        _emit_progress(progress_cb, 86.0, "Classical/Postprocess: applying smoothing")
+    if params.auto_smooth and params.smooth_iterations > 0:
+        _emit_progress(progress_cb, 66.0, "Classical/Postprocess: applying smoothing")
         print(
             "Smoothing params: "
-            f"method={smooth_method}, iterations={smooth_iterations}, "
-            f"lambda={smooth_lambda:.3f}"
-            + (f", nu={smooth_taubin_nu:.3f}" if smooth_method == "taubin" else "")
+            f"method={params.smooth_method}, iterations={params.smooth_iterations}, "
+            f"lambda={params.smooth_lambda:.3f}"
+            + (f", nu={params.smooth_taubin_nu:.3f}" if params.smooth_method == "taubin" else "")
         )
         smooth_mesh_file(
             post_path,
             post_path,
-            method=smooth_method,
-            iterations=smooth_iterations,
-            lamb=smooth_lambda,
-            taubin_nu=smooth_taubin_nu,
+            method=params.smooth_method,
+            iterations=params.smooth_iterations,
+            lamb=params.smooth_lambda,
+            taubin_nu=params.smooth_taubin_nu,
         )
     else:
         print("Smoothing skipped (optional).")
@@ -499,30 +583,41 @@ def run_classical_mesh(
     post_vertices, post_faces = mesh_vertex_face_count(post_path)
     print(f"Saved postprocessed mesh: {post_path}")
     print(f"  Postprocessed vertices: {post_vertices:,}, Faces: {post_faces:,}")
-    _emit_progress(progress_cb, 92.0, "Classical/Postprocess: complete")
+    _emit_progress(progress_cb, 100.0, "Classical/Postprocess: complete")
+    return post_path
 
+
+def run_classical_downsample(
+    post_mesh_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
+    params = _resolve_params()
+    output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Downsample mesh ===")
-    downsample_mesh = o3d.io.read_triangle_mesh(str(post_path))
-    _emit_progress(progress_cb, 96.0, "Classical/Downsample: reducing face count")
+    downsample_mesh = o3d.io.read_triangle_mesh(str(post_mesh_ply))
+    if len(downsample_mesh.vertices) == 0 or len(downsample_mesh.triangles) == 0:
+        raise ValueError(f"Mesh is empty: {post_mesh_ply}")
+    _emit_progress(progress_cb, 15.0, "Classical/Downsample: reducing face count")
     downsample_mesh, downsampled, before_faces, after_faces = _downsample_mesh_if_needed(
         downsample_mesh,
-        enabled=downsample_enabled,
-        trigger_faces=downsample_trigger_faces,
-        target_faces=downsample_target_faces,
+        enabled=params.downsample_enabled,
+        trigger_faces=params.downsample_trigger_faces,
+        target_faces=params.downsample_target_faces,
     )
     if downsampled:
         print(
             "Downsample applied: "
             f"{before_faces:,} -> {after_faces:,} faces "
-            f"(target={downsample_target_faces:,}, trigger={downsample_trigger_faces:,})"
+            f"(target={params.downsample_target_faces:,}, trigger={params.downsample_trigger_faces:,})"
         )
     else:
         print(
             "Downsample skipped: "
-            f"faces={before_faces:,}, target={downsample_target_faces:,}, "
-            f"trigger={downsample_trigger_faces:,}, enabled={downsample_enabled}"
+            f"faces={before_faces:,}, target={params.downsample_target_faces:,}, "
+            f"trigger={params.downsample_trigger_faces:,}, enabled={params.downsample_enabled}"
         )
-        _emit_progress(progress_cb, 96.0, "Classical/Downsample: skipped")
+        _emit_progress(progress_cb, 55.0, "Classical/Downsample: skipped")
 
     final_path = output_path / "object_mesh.ply"
     _write_mesh_safe(final_path, downsample_mesh)
@@ -530,7 +625,51 @@ def run_classical_mesh(
     final_vertices, final_faces = mesh_vertex_face_count(final_path)
     print(f"Saved final mesh: {final_path}")
     print(f"  Final vertices: {final_vertices:,}, Faces: {final_faces:,}")
+    _emit_progress(progress_cb, 100.0, "Classical/Downsample: complete")
+    return final_path
 
+
+def _map_progress(
+    progress_cb: ProgressCallback | None,
+    *,
+    start: float,
+    end: float,
+) -> ProgressCallback:
+    span = max(0.0, end - start)
+
+    def _mapped(local_progress: float, detail: str | None = None) -> None:
+        ratio = max(0.0, min(100.0, float(local_progress))) / 100.0
+        _emit_progress(progress_cb, start + ratio * span, detail)
+
+    return _mapped
+
+
+def run_classical_mesh(
+    denoised_ply: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+) -> Path:
+    """Run classical mesh as a 4-step chain: pre -> main -> post -> downsample."""
+    preprocess_path = run_classical_preprocess(
+        denoised_ply,
+        output_dir,
+        progress_cb=_map_progress(progress_cb, start=0.0, end=24.0),
+    )
+    raw_path = run_classical_main(
+        str(preprocess_path),
+        output_dir,
+        progress_cb=_map_progress(progress_cb, start=24.0, end=72.0),
+    )
+    post_path = run_classical_postprocess(
+        str(raw_path),
+        output_dir,
+        progress_cb=_map_progress(progress_cb, start=72.0, end=92.0),
+    )
+    final_path = run_classical_downsample(
+        str(post_path),
+        output_dir,
+        progress_cb=_map_progress(progress_cb, start=92.0, end=100.0),
+    )
     _emit_progress(progress_cb, 100.0, "Classical mesh stage complete")
     return final_path
 

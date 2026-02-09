@@ -262,7 +262,7 @@ export class PipelineUI {
     const normalized = this._normalizeProgress(progress);
     const stageStatus = String(status || 'pending');
     const isPoisson = this._meshMethod === 'poisson';
-    const done = stageStatus === 'complete' || normalized >= 100;
+    const done = stageStatus === 'complete';
 
     if (!isPoisson) {
       for (const step of POISSON_STEP_ORDER) {
@@ -285,19 +285,35 @@ export class PipelineUI {
     }
 
     if (done) {
+      let completedIndex = this._inferPoissonStepIndex(detail, normalized);
+      if (completedIndex < 0) {
+        completedIndex = POISSON_STEP_ORDER.length - 1;
+      }
+      completedIndex = Math.max(0, Math.min(POISSON_STEP_ORDER.length - 1, completedIndex));
       for (const step of POISSON_STEP_ORDER) {
         const pill = this._poissonStepPills[step];
         if (!pill) continue;
-        this._applyPillState(pill, 'complete', null, 100, null);
+        const idx = POISSON_STEP_ORDER.indexOf(step);
+        if (idx <= completedIndex) {
+          this._applyPillState(pill, 'complete', null, 100, detail);
+        } else {
+          this._applyPillState(pill, 'pending', null, 0, null);
+        }
       }
       this._poissonFlowState = {
-        activeIndex: POISSON_STEP_ORDER.length - 1,
-        done: true,
+        activeIndex: completedIndex,
+        done: completedIndex >= POISSON_STEP_ORDER.length - 1,
       };
       return;
     }
 
     let activeIndex = this._inferPoissonStepIndex(detail, normalized);
+    if (
+      stageStatus === 'interactive'
+      && String(detail || '').toLowerCase().includes('waiting for next-stage confirmation')
+    ) {
+      activeIndex = this._poissonFlowState.activeIndex;
+    }
     if (activeIndex < 0) activeIndex = this._progressStepIndex(normalized);
     activeIndex = Math.max(0, Math.min(POISSON_STEP_ORDER.length - 1, activeIndex));
 

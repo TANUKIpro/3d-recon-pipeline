@@ -582,6 +582,7 @@ html, body {
 #mesh-post-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 6px 12px;
   background: var(--bg-secondary);
@@ -610,6 +611,15 @@ html, body {
 
 #mesh-post-lambda {
   width: 82px;
+}
+
+#mesh-post-downsample-enabled {
+  width: auto;
+}
+
+#mesh-post-target-faces,
+#mesh-post-trigger-faces {
+  width: 108px;
 }
 
 #mesh-post-status {

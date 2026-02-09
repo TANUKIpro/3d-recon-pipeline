@@ -46,6 +46,9 @@ const meshPostToolbar = document.getElementById('mesh-post-toolbar');
 const meshPostMethodInput = document.getElementById('mesh-post-method');
 const meshPostIterationsInput = document.getElementById('mesh-post-iterations');
 const meshPostLambdaInput = document.getElementById('mesh-post-lambda');
+const meshPostDownsampleEnabledInput = document.getElementById('mesh-post-downsample-enabled');
+const meshPostTargetFacesInput = document.getElementById('mesh-post-target-faces');
+const meshPostTriggerFacesInput = document.getElementById('mesh-post-trigger-faces');
 const meshPostApplyBtn = document.getElementById('mesh-post-apply');
 const meshPostResetBtn = document.getElementById('mesh-post-reset');
 const meshPostStatus = document.getElementById('mesh-post-status');
@@ -63,6 +66,7 @@ let _extractedFrameCount = 0;
 let _hydratedStatusKey = '';
 let _objectLoadRequestId = 0;
 let _waitingConfirmationStage = null;
+let _waitingConfirmationToStage = null;
 let _latestStatusSnapshot = null;
 let _meshPostInFlight = false;
 let _meshMethod = MESH_METHOD_DEFAULT;
@@ -223,10 +227,16 @@ ws.on('stage_start', (msg) => {
     }
     stageCtrl.setStageState(prevStage, 'complete');
 
+    const waitingToStage = _waitingConfirmationToStage;
     if (_waitingConfirmationStage === prevStage) {
       _waitingConfirmationStage = null;
+      _waitingConfirmationToStage = null;
     }
-    setTaskConfirmState(prevStage, 'confirmed', defaultTaskConfirmConfirmedMessage(prevStage));
+    setTaskConfirmState(
+      prevStage,
+      'confirmed',
+      defaultTaskConfirmConfirmedMessage(prevStage, waitingToStage),
+    );
   }
 
   stageCtrl.activateStage(msg.stage);
@@ -314,19 +324,25 @@ ws.on('pi3x_preview_ready', () => {
 
 ws.on('next_stage_confirmation_required', (msg) => {
   const fromStage = Number(msg.from_stage);
+  const toStage = Number(msg.to_stage);
   if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
     if (_waitingConfirmationStage !== null && _waitingConfirmationStage !== fromStage) {
       setTaskConfirmState(
         _waitingConfirmationStage,
         'confirmed',
-        defaultTaskConfirmConfirmedMessage(_waitingConfirmationStage),
+        defaultTaskConfirmConfirmedMessage(_waitingConfirmationStage, _waitingConfirmationToStage),
       );
     }
     _waitingConfirmationStage = fromStage;
+    _waitingConfirmationToStage = Number.isFinite(toStage) ? toStage : null;
     pipelineUI.stageInteractive(fromStage);
     stageCtrl.setStageState(fromStage, 'interactive');
     stageCtrl.activateStage(fromStage);
-    setTaskConfirmState(fromStage, 'waiting', String(msg.message || defaultTaskConfirmWaitingMessage(fromStage)));
+    setTaskConfirmState(
+      fromStage,
+      'waiting',
+      String(msg.message || defaultTaskConfirmWaitingMessage(fromStage, _waitingConfirmationToStage)),
+    );
     setTaskConfirmVisibleStage(fromStage);
   }
   if (msg.message) {
@@ -336,11 +352,13 @@ ws.on('next_stage_confirmation_required', (msg) => {
 
 ws.on('next_stage_confirmation_cleared', (msg) => {
   const fromStage = Number(msg.from_stage);
+  const toStage = Number(msg.to_stage);
   if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
     if (_waitingConfirmationStage === fromStage) {
       _waitingConfirmationStage = null;
+      _waitingConfirmationToStage = null;
     }
-    setTaskConfirmState(fromStage, 'confirmed', defaultTaskConfirmConfirmedMessage(fromStage));
+    setTaskConfirmState(fromStage, 'confirmed', defaultTaskConfirmConfirmedMessage(fromStage, toStage));
     setTaskConfirmVisibleStage(stageCtrl.activeStage);
   }
 });
@@ -351,6 +369,7 @@ ws.on('pipeline_complete', (msg) => {
   config.setActiveStage(null);
   config.refreshObjects();
   _waitingConfirmationStage = null;
+  _waitingConfirmationToStage = null;
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
     setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
   }
@@ -375,6 +394,7 @@ ws.on('pipeline_error', (msg) => {
       `Stage ${_waitingConfirmationStage} confirmation was interrupted.`,
     );
     _waitingConfirmationStage = null;
+    _waitingConfirmationToStage = null;
   }
   setTaskConfirmVisibleStage(stageCtrl.activeStage);
   const cancelled = /cancel/i.test(String(msg.error || ''));
@@ -514,6 +534,9 @@ function setMeshPostEnabled(enabled) {
   if (meshPostMethodInput) meshPostMethodInput.disabled = disabled;
   if (meshPostIterationsInput) meshPostIterationsInput.disabled = disabled;
   if (meshPostLambdaInput) meshPostLambdaInput.disabled = disabled;
+  if (meshPostDownsampleEnabledInput) meshPostDownsampleEnabledInput.disabled = disabled;
+  if (meshPostTargetFacesInput) meshPostTargetFacesInput.disabled = disabled;
+  if (meshPostTriggerFacesInput) meshPostTriggerFacesInput.disabled = disabled;
   if (meshPostApplyBtn) meshPostApplyBtn.disabled = disabled;
   if (meshPostResetBtn) meshPostResetBtn.disabled = disabled;
 }
@@ -568,6 +591,20 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
   const iterations = resetToRaw ? 0 : Math.max(0, Math.min(100, Number.isFinite(iterationsRaw) ? iterationsRaw : 8));
   const lambRaw = Number.parseFloat(meshPostLambdaInput?.value || '0.5');
   const lamb = Math.max(0.01, Math.min(1.5, Number.isFinite(lambRaw) ? lambRaw : 0.5));
+  const downsampleEnabled = meshPostDownsampleEnabledInput?.checked ?? true;
+  const targetRaw = Number.parseInt(meshPostTargetFacesInput?.value || '100000', 10);
+  const downsampleTargetFaces = Math.max(
+    1000,
+    Math.min(5_000_000, Number.isFinite(targetRaw) ? targetRaw : 100000),
+  );
+  const triggerRaw = Number.parseInt(meshPostTriggerFacesInput?.value || '140000', 10);
+  const downsampleTriggerFaces = Math.max(
+    downsampleTargetFaces,
+    Math.min(5_000_000, Number.isFinite(triggerRaw) ? triggerRaw : 140000),
+  );
+
+  if (meshPostTargetFacesInput) meshPostTargetFacesInput.value = String(downsampleTargetFaces);
+  if (meshPostTriggerFacesInput) meshPostTriggerFacesInput.value = String(downsampleTriggerFaces);
 
   _meshPostInFlight = true;
   setMeshPostEnabled(false);
@@ -582,6 +619,9 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
         iterations,
         lamb,
         taubin_nu: DEFAULT_TAUBIN_NU,
+        downsample_enabled: downsampleEnabled,
+        downsample_target_faces: downsampleTargetFaces,
+        downsample_trigger_faces: downsampleTriggerFaces,
         source: 'raw',
         invalidate_texture: true,
       }),
@@ -596,11 +636,27 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
 
     const vertices = Number(data.vertices) || 0;
     const faces = Number(data.faces) || 0;
+    const apiDownsampleEnabled = data.downsample_enabled !== false;
+    const apiTargetFaces = Number(data.downsample_target_faces) || downsampleTargetFaces;
+    const apiTriggerFaces = Number(data.downsample_trigger_faces) || downsampleTriggerFaces;
+    if (meshPostDownsampleEnabledInput) {
+      meshPostDownsampleEnabledInput.checked = apiDownsampleEnabled;
+    }
+    if (meshPostTargetFacesInput) {
+      meshPostTargetFacesInput.value = String(apiTargetFaces);
+    }
+    if (meshPostTriggerFacesInput) {
+      meshPostTriggerFacesInput.value = String(apiTriggerFaces);
+    }
     let msg = resetToRaw
       ? `Reset complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`
       : `Smoothing complete (${vertices.toLocaleString()}v / ${faces.toLocaleString()}f).`;
-    if (data.downsample_applied) {
+    if (!apiDownsampleEnabled) {
+      msg += ' Downsample disabled.';
+    } else if (data.downsample_applied) {
       msg += ' Downsample applied.';
+    } else {
+      msg += ` Downsample skipped (target=${apiTargetFaces.toLocaleString()}, trigger=${apiTriggerFaces.toLocaleString()}).`;
     }
     if (data.texture_invalidated) {
       msg += ' Stage 6 artifacts were cleared.';
@@ -609,7 +665,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
 
     appendLog(
       'stdout',
-      `Mesh post-process: method=${data.method}, iterations=${data.iterations}, lambda=${Number(data.lamb).toFixed(2)}, source=${data.source}, downsample=${data.downsample_applied ? 'yes' : 'no'}\n`,
+      `Mesh post-process: method=${data.method}, iterations=${data.iterations}, lambda=${Number(data.lamb).toFixed(2)}, source=${data.source}, downsample_enabled=${apiDownsampleEnabled ? 'yes' : 'no'}, target_faces=${apiTargetFaces}, trigger_faces=${apiTriggerFaces}, applied=${data.downsample_applied ? 'yes' : 'no'}\n`,
       { stage: 5 },
     );
     if (data.texture_invalidated) {
@@ -689,20 +745,41 @@ function syncStageStates(statusMsg) {
   }
 }
 
+function resolveTransitionTarget(stage, toStage = null) {
+  const parsed = Number(toStage);
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= STAGE_COUNT) {
+    return parsed;
+  }
+  return Math.max(1, Math.min(STAGE_COUNT, Number(stage) + 1));
+}
+
 function defaultTaskConfirmIdleMessage(stage) {
-  return `Stage ${stage} confirmation will appear after completion.`;
+  const target = resolveTransitionTarget(stage);
+  return `Stage ${stage} confirmation will appear after completion (next: Stage ${target}).`;
 }
 
-function defaultTaskConfirmWaitingMessage(stage) {
-  return `Stage ${stage} complete. Confirm to continue to Stage ${stage + 1}.`;
+function defaultTaskConfirmWaitingMessage(stage, toStage = null) {
+  const target = resolveTransitionTarget(stage, toStage);
+  if (target === Number(stage)) {
+    return `Stage ${stage} step complete. Confirm to continue within Stage ${stage}.`;
+  }
+  return `Stage ${stage} complete. Confirm to continue to Stage ${target}.`;
 }
 
-function defaultTaskConfirmConfirmedMessage(stage) {
-  return `Stage ${stage} confirmed. Proceeded to Stage ${stage + 1}.`;
+function defaultTaskConfirmConfirmedMessage(stage, toStage = null) {
+  const target = resolveTransitionTarget(stage, toStage);
+  if (target === Number(stage)) {
+    return `Stage ${stage} step confirmed. Continuing Stage ${stage} workflow.`;
+  }
+  return `Stage ${stage} confirmed. Proceeded to Stage ${target}.`;
 }
 
-function defaultTaskConfirmStandbyMessage(stage) {
-  return `Stage ${stage} is complete. Start the pipeline to continue to Stage ${stage + 1}.`;
+function defaultTaskConfirmStandbyMessage(stage, toStage = null) {
+  const target = resolveTransitionTarget(stage, toStage);
+  if (target === Number(stage)) {
+    return `Stage ${stage} is complete. Start the pipeline to continue remaining Stage ${stage} tasks.`;
+  }
+  return `Stage ${stage} is complete. Start the pipeline to continue to Stage ${target}.`;
 }
 
 function resolveTaskConfirmVisibleStage(preferredStage) {
@@ -792,6 +869,7 @@ function setTaskConfirmState(stage, state, message) {
 function resetTaskConfirmBars(resumeFromStage = 1) {
   const resumeStage = Math.max(1, Math.min(STAGE_COUNT, Number(resumeFromStage) || 1));
   _waitingConfirmationStage = null;
+  _waitingConfirmationToStage = null;
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
     if (stage < resumeStage) {
       setTaskConfirmState(stage, 'confirmed', `Stage ${stage} already completed before resume.`);
@@ -823,6 +901,7 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
 
   const next = statusMsg.next_stage_confirmation || {};
   const waitingStage = next.required === true ? Number(next.from_stage) : NaN;
+  const waitingToStage = next.required === true ? Number(next.to_stage) : NaN;
   const waitingStageIsValid = Number.isFinite(waitingStage)
     && waitingStage >= 1
     && waitingStage <= TRANSITION_STAGE_MAX
@@ -830,6 +909,9 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
     && isStageDone(statusMsg, waitingStage)
     && !isTransitionConfirmed(statusMsg, waitingStage);
   _waitingConfirmationStage = waitingStageIsValid ? waitingStage : null;
+  _waitingConfirmationToStage = waitingStageIsValid && Number.isFinite(waitingToStage)
+    ? waitingToStage
+    : null;
 
   const resumeStage = Math.max(1, Math.min(STAGE_COUNT, Number(statusMsg.resume_from_stage) || 1));
 
@@ -837,7 +919,11 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
     const stageDone = isStageDone(statusMsg, stage);
 
     if (_waitingConfirmationStage === stage) {
-      setTaskConfirmState(stage, 'waiting', String(next.message || defaultTaskConfirmWaitingMessage(stage)));
+      setTaskConfirmState(
+        stage,
+        'waiting',
+        String(next.message || defaultTaskConfirmWaitingMessage(stage, _waitingConfirmationToStage)),
+      );
       continue;
     }
 
@@ -870,7 +956,12 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
 async function confirmNextStage(stage) {
   if (_waitingConfirmationStage !== stage) return;
 
-  setTaskConfirmState(stage, 'sending', `Stage ${stage} confirmed. Waiting for Stage ${stage + 1} start...`);
+  const toStage = _waitingConfirmationToStage;
+  const target = resolveTransitionTarget(stage, toStage);
+  const waitingMsg = target === Number(stage)
+    ? `Stage ${stage} confirmed. Waiting for the next Stage ${stage} step...`
+    : `Stage ${stage} confirmed. Waiting for Stage ${target} start...`;
+  setTaskConfirmState(stage, 'sending', waitingMsg);
 
   try {
     const res = await fetch('/api/pipeline/confirm-next', { method: 'POST' });
@@ -881,14 +972,15 @@ async function confirmNextStage(stage) {
 
     if (data.status === 'no_waiting_confirmation') {
       _waitingConfirmationStage = null;
-      setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
+      _waitingConfirmationToStage = null;
+      setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage, toStage));
       setTaskConfirmVisibleStage(stageCtrl.activeStage);
       return;
     }
 
     // Keep "sending" state until backend emits stage start or cleared event.
   } catch (e) {
-    setTaskConfirmState(stage, 'waiting', `${defaultTaskConfirmWaitingMessage(stage)} (${e.message})`);
+    setTaskConfirmState(stage, 'waiting', `${defaultTaskConfirmWaitingMessage(stage, toStage)} (${e.message})`);
     appendLog('stderr', `Next-stage confirmation failed at stage ${stage}: ${e.message}\n`, { stage });
   }
 }
