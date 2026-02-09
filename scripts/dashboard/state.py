@@ -96,6 +96,30 @@ class PipelineConfig:
     diffcd_batch_size: int = 5000
     diffcd_n_batches: int = 30000
     diffcd_resolution: int = 512
+    classical_start_subtask: str = "preprocess"
+    classical_preprocess_enabled: bool = True
+    classical_preprocess_voxel_ratio: float = 0.003
+    classical_preprocess_max_points: int = 700000
+    classical_preprocess_sor_neighbors: int = 20
+    classical_preprocess_sor_std_ratio: float = 2.8
+    classical_normal_radius_ratio: float = 0.02
+    classical_normal_max_nn: int = 32
+    classical_normal_orient_k: int = 24
+    classical_poisson_depth: int = 9
+    classical_poisson_scale: float = 1.08
+    classical_poisson_linear_fit: bool = False
+    classical_density_trim_quantile: float = 0.02
+    classical_crop_scale: float = 1.03
+    classical_post_min_component_triangles: int = 400
+    classical_post_min_component_ratio: float = 0.01
+    classical_auto_smooth: bool = False
+    classical_smooth_method: str = "laplacian"
+    classical_smooth_iterations: int = 2
+    classical_smooth_lambda: float = 0.5
+    classical_smooth_taubin_nu: float = -0.53
+    classical_downsample_enabled: bool = True
+    classical_downsample_target_faces: int = 100000
+    classical_downsample_trigger_faces: int = 140000
     texture_size: int = 2048
 
     @classmethod
@@ -333,6 +357,7 @@ class PipelineSession:
             "resume_from_stage": int(self.resume_from_stage),
             "object_name": self.config.object_name,
             "mesh_method": self.config.mesh_method,
+            "classical_start_subtask": self.config.classical_start_subtask,
             "video_path": self.config.video_path,
             "output_dir": self.config.output_dir,
             "frame_count": self.frame_count,

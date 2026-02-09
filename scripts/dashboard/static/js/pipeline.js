@@ -5,10 +5,17 @@
 const STAGE_COUNT = 6;
 const MESH_METHODS = new Set(['diffcd', 'poisson']);
 const POISSON_STEP_ORDER = ['preprocess', 'main', 'postprocess', 'downsample'];
+const POISSON_STEP_RANGES = {
+  preprocess: [0.0, 24.0],
+  main: [24.0, 72.0],
+  postprocess: [72.0, 92.0],
+  downsample: [92.0, 100.0],
+};
 
 function _isDone(info = {}) {
   const status = String(info.status || 'pending');
-  if (status === 'complete' || status === 'interactive') return true;
+  if (status === 'complete') return true;
+  if (status === 'interactive' && Number(info.progress) >= 100) return true;
   return Number(info.progress) >= 100;
 }
 
@@ -321,6 +328,7 @@ export class PipelineUI {
       const step = POISSON_STEP_ORDER[i];
       const pill = this._poissonStepPills[step];
       if (!pill) continue;
+      const localProgress = this._poissonLocalStepProgress(step, normalized);
 
       if (i < activeIndex) {
         this._applyPillState(pill, 'complete', null, 100, detail);
@@ -336,7 +344,7 @@ export class PipelineUI {
         : stageStatus === 'interactive'
           ? 'interactive'
           : 'running';
-      this._applyPillState(pill, currentStatus, null, normalized, detail);
+      this._applyPillState(pill, currentStatus, null, localProgress, detail);
     }
 
     this._poissonFlowState = { activeIndex, done: false };
@@ -382,10 +390,19 @@ export class PipelineUI {
 
   _progressStepIndex(progress) {
     const p = this._normalizeProgress(progress);
-    if (p >= 94) return 3;
-    if (p >= 76) return 2;
-    if (p >= 28) return 1;
+    if (p >= POISSON_STEP_RANGES.downsample[0]) return 3;
+    if (p >= POISSON_STEP_RANGES.postprocess[0]) return 2;
+    if (p >= POISSON_STEP_RANGES.main[0]) return 1;
     return 0;
+  }
+
+  _poissonLocalStepProgress(step, overallProgress) {
+    const [start, end] = POISSON_STEP_RANGES[step] || [0.0, 100.0];
+    const p = this._normalizeProgress(overallProgress);
+    if (p <= start) return 0;
+    if (p >= end) return 100;
+    const span = Math.max(1e-6, end - start);
+    return ((p - start) / span) * 100.0;
   }
 
   _applyPillState(pill, status, elapsed, progress, detail) {

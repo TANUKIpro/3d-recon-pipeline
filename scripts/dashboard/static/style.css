@@ -190,6 +190,10 @@ html, body {
   display: none;
 }
 
+.mesh-poisson-step.subtask-selected {
+  box-shadow: 0 0 0 1px var(--interactive);
+}
+
 #mesh-pill-poisson-pre {
   left: 38px;
 }

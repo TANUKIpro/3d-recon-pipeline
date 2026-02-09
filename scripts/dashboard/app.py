@@ -147,6 +147,8 @@ DENOISE_ALGORITHMS = {
     "dbscan_radius",
 }
 MESH_METHODS = {"poisson", "diffcd"}
+CLASSICAL_SUBTASKS = {"preprocess", "main", "postprocess", "downsample"}
+CLASSICAL_SMOOTH_METHODS = {"laplacian", "taubin"}
 MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
 _LEGACY_DIFFCD_DEFAULTS = (3000, 2500, 384)
 
@@ -341,6 +343,64 @@ def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
                 target.unlink()
 
 
+def _reset_stage5_for_classical_subtask(out: Path, subtask: str) -> None:
+    """Reset Stage 5/6 outputs while preserving selected Classical subtask inputs."""
+    step = _parse_choice(subtask, CLASSICAL_SUBTASKS, "preprocess")
+    if step == "preprocess":
+        _reset_outputs_from_stage(out, int(PipelineStage.DIFFCD_MESH))
+        return
+
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Clear DiffCD outputs whenever Classical mesh is selected.
+    diffcd_dir = out / "diffcd"
+    if diffcd_dir.is_dir():
+        shutil.rmtree(diffcd_dir)
+
+    files_by_step: dict[str, tuple[str, ...]] = {
+        "main": (
+            "object_points_with_normals.ply",
+            "object_mesh_raw.ply",
+            "object_mesh_postprocessed.ply",
+            "object_mesh.ply",
+        ),
+        "postprocess": (
+            "object_mesh_postprocessed.ply",
+            "object_mesh.ply",
+        ),
+        "downsample": ("object_mesh.ply",),
+    }
+    for rel in files_by_step.get(step, ()):
+        target = out / rel
+        if target.is_file():
+            target.unlink()
+
+    classical_dir = out / "classical_mesh"
+    classical_files_by_step: dict[str, tuple[str, ...]] = {
+        "main": (
+            "object_mesh_poisson_raw.ply",
+            "object_mesh_postprocessed.ply",
+            "object_mesh_final.ply",
+        ),
+        "postprocess": (
+            "object_mesh_postprocessed.ply",
+            "object_mesh_final.ply",
+        ),
+        "downsample": ("object_mesh_final.ply",),
+    }
+    if classical_dir.is_dir():
+        for rel in classical_files_by_step.get(step, ()):
+            target = classical_dir / rel
+            if target.is_file():
+                target.unlink()
+
+    # Stage 6 outputs are invalidated whenever Stage 5 reruns.
+    for rel in STAGE_RESET_PATHS[int(PipelineStage.TEXTURE_BAKE)]["files"]:
+        target = out / rel
+        if target.is_file():
+            target.unlink()
+
+
 def _infer_resume_stage(out: Path) -> int:
     stage_complete, _, _ = detect_stage_outputs(out)
     for stage in range(1, 7):
@@ -367,6 +427,17 @@ def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
         if not (out / rel).is_file():
             issues.append(f"missing file: {rel}")
     return issues
+
+
+def _validate_classical_subtask_prerequisites(out: Path, subtask: str) -> list[str]:
+    step = _parse_choice(subtask, CLASSICAL_SUBTASKS, "preprocess")
+    required_by_step: dict[str, tuple[str, ...]] = {
+        "preprocess": (),
+        "main": ("object_mesh_input.ply",),
+        "postprocess": ("object_mesh_raw.ply",),
+        "downsample": ("object_mesh_postprocessed.ply",),
+    }
+    return [f"missing file: {rel}" for rel in required_by_step.get(step, ()) if not (out / rel).is_file()]
 
 
 def _build_pipeline_config(
@@ -408,6 +479,30 @@ def _build_pipeline_config(
             max_pi3x_target,
         ),
     )
+    default_classical_smooth_method = _parse_choice(
+        os.environ.get("CLASSICAL_SMOOTH_METHOD") or os.environ.get("DIFFCD_SMOOTH_METHOD"),
+        CLASSICAL_SMOOTH_METHODS,
+        "laplacian",
+    )
+    classical_downsample_target_faces = max(
+        1000,
+        _parse_int(
+            source.get("classical_downsample_target_faces"),
+            _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 100000),
+        ),
+    )
+    classical_downsample_trigger_faces = max(
+        _parse_int(
+            source.get("classical_downsample_trigger_faces"),
+            _env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 140000),
+        ),
+        classical_downsample_target_faces,
+    )
+    classical_smooth_taubin_nu = _parse_float(
+        source.get("classical_smooth_taubin_nu"),
+        _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", -0.53),
+    )
+    classical_smooth_taubin_nu = min(-0.01, max(-1.5, classical_smooth_taubin_nu))
 
     return PipelineConfig(
         video_path=video_path,
@@ -434,6 +529,137 @@ def _build_pipeline_config(
         diffcd_batch_size=_parse_int(source.get("diffcd_batch_size"), _env_int("DIFFCD_BATCH_SIZE", 5000)),
         diffcd_n_batches=_parse_int(source.get("diffcd_n_batches"), _env_int("DIFFCD_N_BATCHES", 30000)),
         diffcd_resolution=_parse_int(source.get("diffcd_resolution"), _env_int("DIFFCD_RESOLUTION", 512)),
+        classical_start_subtask=_parse_choice(
+            source.get("classical_start_subtask"),
+            CLASSICAL_SUBTASKS,
+            "preprocess",
+        ),
+        classical_preprocess_enabled=_parse_bool(
+            source.get("classical_preprocess_enabled"),
+            _parse_bool(os.environ.get("CLASSICAL_PREPROCESS_ENABLED"), True),
+        ),
+        classical_preprocess_voxel_ratio=max(
+            _parse_float(
+                source.get("classical_preprocess_voxel_ratio"),
+                _env_float("CLASSICAL_PREPROCESS_VOXEL_RATIO", 0.003),
+            ),
+            0.0,
+        ),
+        classical_preprocess_max_points=max(
+            _parse_int(
+                source.get("classical_preprocess_max_points"),
+                _env_int("CLASSICAL_PREPROCESS_MAX_POINTS", 700000),
+            ),
+            50000,
+        ),
+        classical_preprocess_sor_neighbors=max(
+            _parse_int(
+                source.get("classical_preprocess_sor_neighbors"),
+                _env_int("CLASSICAL_PREPROCESS_SOR_NEIGHBORS", 20),
+            ),
+            2,
+        ),
+        classical_preprocess_sor_std_ratio=max(
+            _parse_float(
+                source.get("classical_preprocess_sor_std_ratio"),
+                _env_float("CLASSICAL_PREPROCESS_SOR_STD_RATIO", 2.8),
+            ),
+            0.1,
+        ),
+        classical_normal_radius_ratio=max(
+            _parse_float(
+                source.get("classical_normal_radius_ratio"),
+                _env_float("POISSON_NORMAL_RADIUS_RATIO", 0.02),
+            ),
+            1e-5,
+        ),
+        classical_normal_max_nn=max(
+            _parse_int(
+                source.get("classical_normal_max_nn"),
+                _env_int("POISSON_NORMAL_MAX_NN", 32),
+            ),
+            8,
+        ),
+        classical_normal_orient_k=max(
+            _parse_int(
+                source.get("classical_normal_orient_k"),
+                _env_int("POISSON_NORMAL_ORIENT_K", 24),
+            ),
+            8,
+        ),
+        classical_poisson_depth=max(
+            _parse_int(source.get("classical_poisson_depth"), _env_int("POISSON_DEPTH", 9)),
+            6,
+        ),
+        classical_poisson_scale=max(
+            _parse_float(source.get("classical_poisson_scale"), _env_float("POISSON_SCALE", 1.08)),
+            1.0,
+        ),
+        classical_poisson_linear_fit=_parse_bool(
+            source.get("classical_poisson_linear_fit"),
+            _parse_bool(os.environ.get("POISSON_LINEAR_FIT"), False),
+        ),
+        classical_density_trim_quantile=min(
+            max(
+                _parse_float(
+                    source.get("classical_density_trim_quantile"),
+                    _env_float("POISSON_DENSITY_TRIM_QUANTILE", 0.02),
+                ),
+                0.0,
+            ),
+            0.49,
+        ),
+        classical_crop_scale=max(
+            _parse_float(source.get("classical_crop_scale"), _env_float("POISSON_CROP_SCALE", 1.03)),
+            1.0,
+        ),
+        classical_post_min_component_triangles=max(
+            _parse_int(
+                source.get("classical_post_min_component_triangles"),
+                _env_int("CLASSICAL_POST_MIN_COMPONENT_TRIANGLES", 400),
+            ),
+            0,
+        ),
+        classical_post_min_component_ratio=min(
+            max(
+                _parse_float(
+                    source.get("classical_post_min_component_ratio"),
+                    _env_float("CLASSICAL_POST_MIN_COMPONENT_RATIO", 0.01),
+                ),
+                0.0,
+            ),
+            0.5,
+        ),
+        classical_auto_smooth=_parse_bool(
+            source.get("classical_auto_smooth"),
+            _parse_bool(os.environ.get("CLASSICAL_AUTO_SMOOTH"), False),
+        ),
+        classical_smooth_method=_parse_choice(
+            source.get("classical_smooth_method"),
+            CLASSICAL_SMOOTH_METHODS,
+            default_classical_smooth_method,
+        ),
+        classical_smooth_iterations=max(
+            _parse_int(
+                source.get("classical_smooth_iterations"),
+                _env_int("CLASSICAL_SMOOTH_ITERATIONS", 2),
+            ),
+            0,
+        ),
+        classical_smooth_lambda=max(
+            _parse_float(
+                source.get("classical_smooth_lambda"),
+                _env_float("CLASSICAL_SMOOTH_LAMBDA", 0.5),
+            ),
+            0.01,
+        ),
+        classical_smooth_taubin_nu=classical_smooth_taubin_nu,
+        classical_downsample_enabled=_parse_bool(
+            source.get("classical_downsample_enabled"),
+            _parse_bool(os.environ.get("CLASSICAL_DOWNSAMPLE_ENABLED"), True),
+        ),
+        classical_downsample_target_faces=classical_downsample_target_faces,
+        classical_downsample_trigger_faces=classical_downsample_trigger_faces,
         texture_size=_parse_int(source.get("texture_size"), _env_int("TEXTURE_SIZE", 2048)),
     )
 
@@ -776,10 +1002,34 @@ async def pipeline_start(body: dict | None = None):
     if start_stage == int(PipelineStage.EXTRACT_FRAMES) and not video_path:
         return JSONResponse({"error": "video_path is required for stage 1 restart"}, status_code=400)
 
+    cfg_source = {}
+    if isinstance(existing_meta.get("config"), dict):
+        cfg_source.update(existing_meta["config"])
+    cfg_source.update(raw)
+    requested_mesh_method = _parse_choice(
+        cfg_source.get("mesh_method"),
+        MESH_METHODS,
+        _parse_choice(os.environ.get("MESH_METHOD"), MESH_METHODS, "poisson"),
+    )
+    requested_classical_subtask = _parse_choice(
+        cfg_source.get("classical_start_subtask"),
+        CLASSICAL_SUBTASKS,
+        "preprocess",
+    )
+
     if start_stage > int(PipelineStage.EXTRACT_FRAMES):
         if not object_output_dir.is_dir():
             return JSONResponse({"error": "Object output does not exist for resume"}, status_code=400)
         missing = _validate_resume_prerequisites(object_output_dir, start_stage)
+        if (
+            not missing
+            and start_stage == int(PipelineStage.DIFFCD_MESH)
+            and requested_mesh_method == "poisson"
+        ):
+            missing = _validate_classical_subtask_prerequisites(
+                object_output_dir,
+                requested_classical_subtask,
+            )
         if missing:
             return JSONResponse(
                 {
@@ -791,13 +1041,11 @@ async def pipeline_start(body: dict | None = None):
 
     if start_stage == int(PipelineStage.EXTRACT_FRAMES):
         _prepare_object_output_dir(object_output_dir)
+    elif start_stage == int(PipelineStage.DIFFCD_MESH) and requested_mesh_method == "poisson":
+        _reset_stage5_for_classical_subtask(object_output_dir, requested_classical_subtask)
     else:
         _reset_outputs_from_stage(object_output_dir, start_stage)
 
-    cfg_source = {}
-    if isinstance(existing_meta.get("config"), dict):
-        cfg_source.update(existing_meta["config"])
-    cfg_source.update(raw)
     explicit_diffcd = any(
         key in raw
         for key in ("diffcd_batch_size", "diffcd_n_batches", "diffcd_resolution")
@@ -825,6 +1073,29 @@ async def pipeline_start(body: dict | None = None):
     os.environ["DIFFCD_BATCH_SIZE"] = str(cfg.diffcd_batch_size)
     os.environ["DIFFCD_N_BATCHES"] = str(cfg.diffcd_n_batches)
     os.environ["DIFFCD_RESOLUTION"] = str(cfg.diffcd_resolution)
+    os.environ["CLASSICAL_PREPROCESS_ENABLED"] = "1" if cfg.classical_preprocess_enabled else "0"
+    os.environ["CLASSICAL_PREPROCESS_VOXEL_RATIO"] = str(cfg.classical_preprocess_voxel_ratio)
+    os.environ["CLASSICAL_PREPROCESS_MAX_POINTS"] = str(cfg.classical_preprocess_max_points)
+    os.environ["CLASSICAL_PREPROCESS_SOR_NEIGHBORS"] = str(cfg.classical_preprocess_sor_neighbors)
+    os.environ["CLASSICAL_PREPROCESS_SOR_STD_RATIO"] = str(cfg.classical_preprocess_sor_std_ratio)
+    os.environ["POISSON_NORMAL_RADIUS_RATIO"] = str(cfg.classical_normal_radius_ratio)
+    os.environ["POISSON_NORMAL_MAX_NN"] = str(cfg.classical_normal_max_nn)
+    os.environ["POISSON_NORMAL_ORIENT_K"] = str(cfg.classical_normal_orient_k)
+    os.environ["POISSON_DEPTH"] = str(cfg.classical_poisson_depth)
+    os.environ["POISSON_SCALE"] = str(cfg.classical_poisson_scale)
+    os.environ["POISSON_LINEAR_FIT"] = "1" if cfg.classical_poisson_linear_fit else "0"
+    os.environ["POISSON_DENSITY_TRIM_QUANTILE"] = str(cfg.classical_density_trim_quantile)
+    os.environ["POISSON_CROP_SCALE"] = str(cfg.classical_crop_scale)
+    os.environ["CLASSICAL_POST_MIN_COMPONENT_TRIANGLES"] = str(cfg.classical_post_min_component_triangles)
+    os.environ["CLASSICAL_POST_MIN_COMPONENT_RATIO"] = str(cfg.classical_post_min_component_ratio)
+    os.environ["CLASSICAL_AUTO_SMOOTH"] = "1" if cfg.classical_auto_smooth else "0"
+    os.environ["CLASSICAL_SMOOTH_METHOD"] = str(cfg.classical_smooth_method)
+    os.environ["CLASSICAL_SMOOTH_ITERATIONS"] = str(cfg.classical_smooth_iterations)
+    os.environ["CLASSICAL_SMOOTH_LAMBDA"] = str(cfg.classical_smooth_lambda)
+    os.environ["CLASSICAL_SMOOTH_TAUBIN_NU"] = str(cfg.classical_smooth_taubin_nu)
+    os.environ["CLASSICAL_DOWNSAMPLE_ENABLED"] = "1" if cfg.classical_downsample_enabled else "0"
+    os.environ["CLASSICAL_DOWNSAMPLE_TARGET_FACES"] = str(cfg.classical_downsample_target_faces)
+    os.environ["CLASSICAL_DOWNSAMPLE_TRIGGER_FACES"] = str(cfg.classical_downsample_trigger_faces)
 
     # Launch pipeline as background task
     session._task = asyncio.create_task(run_pipeline(session, sam2_service))

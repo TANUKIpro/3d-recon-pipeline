@@ -430,8 +430,157 @@
           <div id="cfg-mesh-method-summary" class="config-note">
             Classical Mesh chain (Pre -> Main -> Post -> Downsample) is active.
           </div>
-          <div id="cfg-poisson-summary" class="config-note">
-            Classical path runs: preprocess -> main Poisson -> postprocess -> downsample.
+          <div id="cfg-poisson-controls">
+            <div id="cfg-poisson-summary" class="config-note">
+              Classical path runs: preprocess -> main Poisson -> postprocess -> downsample.
+            </div>
+            <div class="form-group">
+              <label for="cfg-classical-start-subtask">Classical Start Subtask</label>
+              <select id="cfg-classical-start-subtask">
+                <option value="preprocess" selected>Preprocess</option>
+                <option value="main">Main Poisson</option>
+                <option value="postprocess">Postprocess</option>
+                <option value="downsample">Downsample</option>
+              </select>
+              <div id="cfg-classical-start-subtask-note" class="config-note">
+                Stage 5 restart runs from the selected subtask to the end of Classical chain.
+              </div>
+            </div>
+            <details class="config-advanced">
+              <summary>Preprocess Parameters</summary>
+              <div class="config-advanced-body">
+                <div class="form-group">
+                  <label for="cfg-classical-preprocess-enabled">Enable Preprocess</label>
+                  <input type="checkbox" id="cfg-classical-preprocess-enabled" checked>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-preprocess-voxel-ratio">Voxel Ratio</label>
+                    <input type="number" id="cfg-classical-preprocess-voxel-ratio" value="0.003" min="0.0" step="0.0001">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-preprocess-max-points">Max Points</label>
+                    <input type="number" id="cfg-classical-preprocess-max-points" value="700000" min="50000" step="1000">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-preprocess-sor-neighbors">SOR Neighbors</label>
+                    <input type="number" id="cfg-classical-preprocess-sor-neighbors" value="20" min="2" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-preprocess-sor-std-ratio">SOR STD Ratio</label>
+                    <input type="number" id="cfg-classical-preprocess-sor-std-ratio" value="2.8" min="0.1" step="0.1">
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="config-advanced">
+              <summary>Main Poisson Parameters</summary>
+              <div class="config-advanced-body">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-normal-radius-ratio">Normal Radius Ratio</label>
+                    <input type="number" id="cfg-classical-normal-radius-ratio" value="0.02" min="0.00001" step="0.0005">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-normal-max-nn">Normal Max NN</label>
+                    <input type="number" id="cfg-classical-normal-max-nn" value="32" min="8" step="1">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-normal-orient-k">Normal Orient K</label>
+                    <input type="number" id="cfg-classical-normal-orient-k" value="24" min="8" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-poisson-depth">Poisson Depth</label>
+                    <input type="number" id="cfg-classical-poisson-depth" value="9" min="6" max="16" step="1">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-poisson-scale">Poisson Scale</label>
+                    <input type="number" id="cfg-classical-poisson-scale" value="1.08" min="1.0" step="0.01">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-density-trim-q">Density Trim Quantile</label>
+                    <input type="number" id="cfg-classical-density-trim-q" value="0.02" min="0" max="0.49" step="0.001">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-crop-scale">Crop Scale</label>
+                    <input type="number" id="cfg-classical-crop-scale" value="1.03" min="1.0" step="0.01">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-poisson-linear-fit">Poisson Linear Fit</label>
+                    <input type="checkbox" id="cfg-classical-poisson-linear-fit">
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="config-advanced">
+              <summary>Postprocess Parameters</summary>
+              <div class="config-advanced-body">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-post-min-component-triangles">Min Component Triangles</label>
+                    <input type="number" id="cfg-classical-post-min-component-triangles" value="400" min="0" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-post-min-component-ratio">Min Component Ratio</label>
+                    <input type="number" id="cfg-classical-post-min-component-ratio" value="0.01" min="0" max="0.5" step="0.001">
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label for="cfg-classical-auto-smooth">Auto Smooth</label>
+                  <input type="checkbox" id="cfg-classical-auto-smooth">
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-smooth-method">Smooth Method</label>
+                    <select id="cfg-classical-smooth-method">
+                      <option value="laplacian" selected>Laplacian</option>
+                      <option value="taubin">Taubin</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-smooth-iterations">Smooth Iterations</label>
+                    <input type="number" id="cfg-classical-smooth-iterations" value="2" min="0" max="100" step="1">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-smooth-lambda">Smooth Lambda</label>
+                    <input type="number" id="cfg-classical-smooth-lambda" value="0.5" min="0.01" max="1.5" step="0.01">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-smooth-taubin-nu">Taubin Nu</label>
+                    <input type="number" id="cfg-classical-smooth-taubin-nu" value="-0.53" min="-1.5" max="-0.01" step="0.01">
+                  </div>
+                </div>
+              </div>
+            </details>
+            <details class="config-advanced">
+              <summary>Downsample Parameters</summary>
+              <div class="config-advanced-body">
+                <div class="form-group">
+                  <label for="cfg-classical-downsample-enabled">Enable Downsample</label>
+                  <input type="checkbox" id="cfg-classical-downsample-enabled" checked>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-classical-downsample-target-faces">Target Faces</label>
+                    <input type="number" id="cfg-classical-downsample-target-faces" value="100000" min="1000" step="1000">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-classical-downsample-trigger-faces">Trigger Faces</label>
+                    <input type="number" id="cfg-classical-downsample-trigger-faces" value="140000" min="1000" step="1000">
+                  </div>
+                </div>
+              </div>
+            </details>
           </div>
           <div id="cfg-diffcd-controls" style="display:none">
             <div class="form-group">

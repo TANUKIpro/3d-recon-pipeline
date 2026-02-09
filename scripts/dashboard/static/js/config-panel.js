@@ -11,6 +11,13 @@ const STAGE_LABELS = {
   5: 'Mesh Reconstruction',
   6: 'Texture Bake',
 };
+const CLASSICAL_SUBTASK_LABELS = {
+  preprocess: 'Preprocess',
+  main: 'Main Poisson',
+  postprocess: 'Postprocess',
+  downsample: 'Downsample',
+};
+const CLASSICAL_SUBTASK_SET = new Set(Object.keys(CLASSICAL_SUBTASK_LABELS));
 const DENOISE_CUSTOM_PRESET = 'custom';
 const DENOISE_ALGO_LABELS = {
   dbscan_sor: 'DBSCAN + SOR',
@@ -127,6 +134,30 @@ export class ConfigPanel {
       diffcd_batch_size: document.getElementById('cfg-diffcd-batch'),
       diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
       diffcd_resolution: document.getElementById('cfg-diffcd-res'),
+      classical_start_subtask: document.getElementById('cfg-classical-start-subtask'),
+      classical_preprocess_enabled: document.getElementById('cfg-classical-preprocess-enabled'),
+      classical_preprocess_voxel_ratio: document.getElementById('cfg-classical-preprocess-voxel-ratio'),
+      classical_preprocess_max_points: document.getElementById('cfg-classical-preprocess-max-points'),
+      classical_preprocess_sor_neighbors: document.getElementById('cfg-classical-preprocess-sor-neighbors'),
+      classical_preprocess_sor_std_ratio: document.getElementById('cfg-classical-preprocess-sor-std-ratio'),
+      classical_normal_radius_ratio: document.getElementById('cfg-classical-normal-radius-ratio'),
+      classical_normal_max_nn: document.getElementById('cfg-classical-normal-max-nn'),
+      classical_normal_orient_k: document.getElementById('cfg-classical-normal-orient-k'),
+      classical_poisson_depth: document.getElementById('cfg-classical-poisson-depth'),
+      classical_poisson_scale: document.getElementById('cfg-classical-poisson-scale'),
+      classical_poisson_linear_fit: document.getElementById('cfg-classical-poisson-linear-fit'),
+      classical_density_trim_quantile: document.getElementById('cfg-classical-density-trim-q'),
+      classical_crop_scale: document.getElementById('cfg-classical-crop-scale'),
+      classical_post_min_component_triangles: document.getElementById('cfg-classical-post-min-component-triangles'),
+      classical_post_min_component_ratio: document.getElementById('cfg-classical-post-min-component-ratio'),
+      classical_auto_smooth: document.getElementById('cfg-classical-auto-smooth'),
+      classical_smooth_method: document.getElementById('cfg-classical-smooth-method'),
+      classical_smooth_iterations: document.getElementById('cfg-classical-smooth-iterations'),
+      classical_smooth_lambda: document.getElementById('cfg-classical-smooth-lambda'),
+      classical_smooth_taubin_nu: document.getElementById('cfg-classical-smooth-taubin-nu'),
+      classical_downsample_enabled: document.getElementById('cfg-classical-downsample-enabled'),
+      classical_downsample_target_faces: document.getElementById('cfg-classical-downsample-target-faces'),
+      classical_downsample_trigger_faces: document.getElementById('cfg-classical-downsample-trigger-faces'),
       texture_size: document.getElementById('cfg-texture-size'),
     };
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
@@ -137,6 +168,8 @@ export class ConfigPanel {
     };
     this._meshMethodSummary = document.getElementById('cfg-mesh-method-summary');
     this._poissonSummary = document.getElementById('cfg-poisson-summary');
+    this._poissonControls = document.getElementById('cfg-poisson-controls');
+    this._classicalStartSubtaskNote = document.getElementById('cfg-classical-start-subtask-note');
     this._diffcdControls = document.getElementById('cfg-diffcd-controls');
 
     this.onStart = null;  // callback(config)
@@ -159,6 +192,7 @@ export class ConfigPanel {
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
+    this.setClassicalStartSubtask(this._inputs.classical_start_subtask?.value || 'preprocess');
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
@@ -237,16 +271,33 @@ export class ConfigPanel {
         ? 'Learning Mesh (DiffCD) is active.'
         : 'Classical Mesh chain (Pre -> Main -> Post -> Downsample) is active.';
     }
-    if (this._poissonSummary) {
-      this._poissonSummary.style.display = isDiffcd ? 'none' : '';
+    if (this._poissonControls) {
+      this._poissonControls.style.display = isDiffcd ? 'none' : '';
     }
     if (this._diffcdControls) {
       this._diffcdControls.style.display = isDiffcd ? '' : 'none';
     }
+    this._updateClassicalSubtaskSummary();
+    this._updateResumeHint();
   }
 
   getMeshMethod() {
     return this._inputs.mesh_method?.value || 'poisson';
+  }
+
+  setClassicalStartSubtask(subtask) {
+    const resolved = this._normalizeClassicalSubtask(subtask);
+    const select = this._inputs.classical_start_subtask;
+    if (select) {
+      this._setSelectValue(select, resolved);
+      select.value = resolved;
+    }
+    this._updateClassicalSubtaskSummary();
+    this._updateResumeHint();
+  }
+
+  getClassicalStartSubtask() {
+    return this._normalizeClassicalSubtask(this._inputs.classical_start_subtask?.value || 'preprocess');
   }
 
   getConfig() {
@@ -285,6 +336,30 @@ export class ConfigPanel {
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
       diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
+      classical_start_subtask: this.getClassicalStartSubtask(),
+      classical_preprocess_enabled: this._inputs.classical_preprocess_enabled?.checked ?? true,
+      classical_preprocess_voxel_ratio: this._parseNonNegativeFloat(this._inputs.classical_preprocess_voxel_ratio.value, 0.003),
+      classical_preprocess_max_points: this._parsePositiveInt(this._inputs.classical_preprocess_max_points.value, 700000),
+      classical_preprocess_sor_neighbors: this._parsePositiveInt(this._inputs.classical_preprocess_sor_neighbors.value, 20),
+      classical_preprocess_sor_std_ratio: this._parsePositiveFloat(this._inputs.classical_preprocess_sor_std_ratio.value, 2.8),
+      classical_normal_radius_ratio: this._parsePositiveFloat(this._inputs.classical_normal_radius_ratio.value, 0.02),
+      classical_normal_max_nn: this._parsePositiveInt(this._inputs.classical_normal_max_nn.value, 32),
+      classical_normal_orient_k: this._parsePositiveInt(this._inputs.classical_normal_orient_k.value, 24),
+      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth.value, 9),
+      classical_poisson_scale: this._parsePositiveFloat(this._inputs.classical_poisson_scale.value, 1.08),
+      classical_poisson_linear_fit: this._inputs.classical_poisson_linear_fit?.checked ?? false,
+      classical_density_trim_quantile: this._parseNonNegativeFloat(this._inputs.classical_density_trim_quantile.value, 0.02),
+      classical_crop_scale: this._parsePositiveFloat(this._inputs.classical_crop_scale.value, 1.03),
+      classical_post_min_component_triangles: this._parseNonNegativeInt(this._inputs.classical_post_min_component_triangles.value, 400),
+      classical_post_min_component_ratio: this._parseNonNegativeFloat(this._inputs.classical_post_min_component_ratio.value, 0.01),
+      classical_auto_smooth: this._inputs.classical_auto_smooth?.checked ?? false,
+      classical_smooth_method: this._inputs.classical_smooth_method?.value || 'laplacian',
+      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations.value, 2),
+      classical_smooth_lambda: this._parsePositiveFloat(this._inputs.classical_smooth_lambda.value, 0.5),
+      classical_smooth_taubin_nu: this._parseNegativeFloat(this._inputs.classical_smooth_taubin_nu.value, -0.53),
+      classical_downsample_enabled: this._inputs.classical_downsample_enabled?.checked ?? true,
+      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces.value, 100000),
+      classical_downsample_trigger_faces: this._parsePositiveInt(this._inputs.classical_downsample_trigger_faces.value, 140000),
       texture_size: parseInt(this._inputs.texture_size.value) || 2048,
     };
   }
@@ -367,6 +442,9 @@ export class ConfigPanel {
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
     this._inputs.pixel_limit.addEventListener('input', () => this._updateFrameBudgetPreview());
     this._inputs.pi3x_frame_target.addEventListener('input', () => this._onPi3xFrameTargetInput());
+    this._inputs.classical_start_subtask.addEventListener('change', () => {
+      this.setClassicalStartSubtask(this._inputs.classical_start_subtask.value);
+    });
     this._inputs.denoise_preset.addEventListener('change', () => {
       const preset = this._inputs.denoise_preset.value;
       if (preset === DENOISE_CUSTOM_PRESET) {
@@ -657,6 +735,24 @@ export class ConfigPanel {
       'diffcd_batch_size',
       'diffcd_n_batches',
       'diffcd_resolution',
+      'classical_preprocess_voxel_ratio',
+      'classical_preprocess_max_points',
+      'classical_preprocess_sor_neighbors',
+      'classical_preprocess_sor_std_ratio',
+      'classical_normal_radius_ratio',
+      'classical_normal_max_nn',
+      'classical_normal_orient_k',
+      'classical_poisson_depth',
+      'classical_poisson_scale',
+      'classical_density_trim_quantile',
+      'classical_crop_scale',
+      'classical_post_min_component_triangles',
+      'classical_post_min_component_ratio',
+      'classical_smooth_iterations',
+      'classical_smooth_lambda',
+      'classical_smooth_taubin_nu',
+      'classical_downsample_target_faces',
+      'classical_downsample_trigger_faces',
       'texture_size',
     ]) {
       if (cfg[key] == null || !this._inputs[key]) continue;
@@ -666,6 +762,22 @@ export class ConfigPanel {
       this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
     }
     this.setMeshMethod(String(cfg.mesh_method || this.getMeshMethod() || 'poisson'));
+    this.setClassicalStartSubtask(String(cfg.classical_start_subtask || 'preprocess'));
+    if (cfg.classical_preprocess_enabled != null && this._inputs.classical_preprocess_enabled) {
+      this._inputs.classical_preprocess_enabled.checked = this._parseBool(cfg.classical_preprocess_enabled, true);
+    }
+    if (cfg.classical_poisson_linear_fit != null && this._inputs.classical_poisson_linear_fit) {
+      this._inputs.classical_poisson_linear_fit.checked = this._parseBool(cfg.classical_poisson_linear_fit, false);
+    }
+    if (cfg.classical_auto_smooth != null && this._inputs.classical_auto_smooth) {
+      this._inputs.classical_auto_smooth.checked = this._parseBool(cfg.classical_auto_smooth, false);
+    }
+    if (cfg.classical_downsample_enabled != null && this._inputs.classical_downsample_enabled) {
+      this._inputs.classical_downsample_enabled.checked = this._parseBool(cfg.classical_downsample_enabled, true);
+    }
+    if (cfg.classical_smooth_method != null) {
+      this._setSelectValue(this._inputs.classical_smooth_method, String(cfg.classical_smooth_method));
+    }
 
     const preset = String(cfg.denoise_preset || '');
     if (preset && preset !== DENOISE_CUSTOM_PRESET && DENOISE_PRESETS[preset]) {
@@ -828,8 +940,14 @@ export class ConfigPanel {
     if (!this._resumeStageInfo) return;
     const manualStage = this._resolveResumeStage();
     const manualLabel = STAGE_LABELS[manualStage] || `Stage ${manualStage}`;
-    this._resumeStageInfo.textContent =
-      `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}).`;
+    if (manualStage === 5 && this.getMeshMethod() === 'poisson') {
+      const subtask = this.getClassicalStartSubtask();
+      const subtaskLabel = CLASSICAL_SUBTASK_LABELS[subtask] || CLASSICAL_SUBTASK_LABELS.preprocess;
+      this._resumeStageInfo.textContent =
+        `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}), Classical subtask ${subtaskLabel}.`;
+      return;
+    }
+    this._resumeStageInfo.textContent = `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}).`;
   }
 
   async _applyObjectVideoPath(path) {
@@ -1029,6 +1147,20 @@ export class ConfigPanel {
     select.value = value;
   }
 
+  _normalizeClassicalSubtask(value) {
+    const candidate = String(value || '').trim().toLowerCase();
+    if (CLASSICAL_SUBTASK_SET.has(candidate)) return candidate;
+    return 'preprocess';
+  }
+
+  _updateClassicalSubtaskSummary() {
+    if (!this._classicalStartSubtaskNote) return;
+    const subtask = this.getClassicalStartSubtask();
+    const label = CLASSICAL_SUBTASK_LABELS[subtask] || CLASSICAL_SUBTASK_LABELS.preprocess;
+    this._classicalStartSubtaskNote.textContent =
+      `Stage 5 restart starts from: ${label}. Previous outputs are reused as inputs.`;
+  }
+
   _valuesAlmostEqual(a, b) {
     const aNum = Number(a);
     const bNum = Number(b);
@@ -1052,5 +1184,26 @@ export class ConfigPanel {
     const n = Number.parseFloat(value);
     if (!Number.isFinite(n) || n < 0) return fallback;
     return n;
+  }
+
+  _parseNonNegativeInt(value, fallback) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || n < 0) return fallback;
+    return n;
+  }
+
+  _parseNegativeFloat(value, fallback) {
+    const n = Number.parseFloat(value);
+    if (!Number.isFinite(n) || n >= 0) return fallback;
+    return n;
+  }
+
+  _parseBool(value, fallback) {
+    if (value == null) return fallback;
+    if (typeof value === 'boolean') return value;
+    const raw = String(value).trim().toLowerCase();
+    if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on' || raw === 'y') return true;
+    if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off' || raw === 'n') return false;
+    return fallback;
   }
 }

@@ -18,6 +18,13 @@ const TRANSITION_STAGE_MAX = 5;
 const DEFAULT_TAUBIN_NU = -0.53;
 const MESH_METHOD_DEFAULT = 'poisson';
 const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
+const CLASSICAL_SUBTASK_LABELS = {
+  preprocess: 'Preprocess',
+  main: 'Main Poisson',
+  postprocess: 'Postprocess',
+  downsample: 'Downsample',
+};
+const CLASSICAL_SUBTASK_SET = new Set(Object.keys(CLASSICAL_SUBTASK_LABELS));
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -70,6 +77,7 @@ let _waitingConfirmationToStage = null;
 let _latestStatusSnapshot = null;
 let _meshPostInFlight = false;
 let _meshMethod = MESH_METHOD_DEFAULT;
+let _classicalSubtask = 'preprocess';
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -156,6 +164,7 @@ config.onStart = async (cfg) => {
   try {
     // Ignore late responses from previous object-load requests while starting a new run.
     _objectLoadRequestId += 1;
+    applyClassicalSubtaskSelection(cfg.classical_start_subtask || _classicalSubtask, { announce: false });
     applyMeshMethod(cfg.mesh_method || _meshMethod, { announce: false });
     config.setRunning(true);
     pipelineUI.setMeshMethodEnabled(false);
@@ -449,6 +458,11 @@ function normalizeMeshMethod(value) {
   return MESH_METHOD_SET.has(method) ? method : MESH_METHOD_DEFAULT;
 }
 
+function normalizeClassicalSubtask(value) {
+  const subtask = String(value || '').trim().toLowerCase();
+  return CLASSICAL_SUBTASK_SET.has(subtask) ? subtask : 'preprocess';
+}
+
 function isPipelineRunning() {
   return _latestStatusSnapshot?.running === true || statusBadge?.classList.contains('badge-running');
 }
@@ -471,6 +485,7 @@ function bindMeshMethodPills() {
       event.preventDefault();
       return;
     }
+    applyClassicalSubtaskSelection('main', { announce: false });
     applyMeshMethod('poisson');
     stageCtrl.activateStage(5);
   };
@@ -483,14 +498,45 @@ function bindMeshMethodPills() {
   });
 
   for (const pill of meshPoissonStepPills) {
-    if (!pill || pill === poissonPill) continue;
-    pill.addEventListener('click', choosePoisson);
+    if (!pill) continue;
+    const subtask = normalizeClassicalSubtask(pill.dataset.meshStep || 'main');
+    const chooseFromStep = (event) => {
+      if (isPipelineRunning()) {
+        event.preventDefault();
+        return;
+      }
+      applyClassicalSubtaskSelection(subtask, { announce: false });
+      applyMeshMethod('poisson');
+      stageCtrl.activateStage(5);
+    };
+    if (pill === poissonPill) {
+      continue;
+    }
+    pill.addEventListener('click', chooseFromStep);
     pill.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        choosePoisson(event);
+        chooseFromStep(event);
       }
     });
+  }
+}
+
+function applyClassicalSubtaskSelection(subtask, opts = {}) {
+  const resolved = normalizeClassicalSubtask(subtask);
+  const changed = resolved !== _classicalSubtask;
+  _classicalSubtask = resolved;
+  config.setClassicalStartSubtask?.(resolved);
+  for (const pill of meshPoissonStepPills) {
+    if (!pill) continue;
+    const step = normalizeClassicalSubtask(pill.dataset.meshStep || 'main');
+    const selected = step === resolved;
+    pill.classList.toggle('subtask-selected', selected);
+    pill.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  }
+  if (changed && opts.announce !== false) {
+    const label = CLASSICAL_SUBTASK_LABELS[resolved] || CLASSICAL_SUBTASK_LABELS.preprocess;
+    appendLog('stdout', `Classical subtask selected: ${label}\n`, { stage: 5 });
   }
 }
 
@@ -501,6 +547,9 @@ function applyMeshMethod(method, opts = {}) {
 
   pipelineUI.setMeshMethod(resolved);
   config.setMeshMethod?.(resolved);
+  if (resolved === 'poisson') {
+    applyClassicalSubtaskSelection(config.getClassicalStartSubtask?.() || _classicalSubtask, { announce: false });
+  }
 
   if (changed && opts.announce !== false) {
     const label = resolved === 'diffcd'
@@ -1021,6 +1070,12 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 
 async function applyStatusSnapshot(statusMsg, opts = {}) {
   _latestStatusSnapshot = statusMsg;
+  applyClassicalSubtaskSelection(
+    statusMsg?.classical_start_subtask
+      || config.getClassicalStartSubtask?.()
+      || _classicalSubtask,
+    { announce: false },
+  );
   applyMeshMethod(statusMsg?.mesh_method || _meshMethod, { announce: false });
   pipelineUI.setMeshMethodEnabled(statusMsg?.running !== true);
   pipelineUI.updateAll(statusMsg);
