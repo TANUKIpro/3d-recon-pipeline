@@ -102,7 +102,7 @@ async def _broadcast_classical_preview_update(
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
-    """Execute the full 6-stage pipeline asynchronously."""
+    """Execute the full 7-stage pipeline asynchronously."""
     cfg = session.config
     output_dir = cfg.output_dir
     start_stage = int(session.resume_from_stage)
@@ -531,8 +531,29 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.DIFFCD_MESH,
+                PipelineStage.MESH_WRAP,
+                f"{mesh_label} complete. Continue to Mesh Wrap?",
+            )
+
+        if start_stage <= int(PipelineStage.MESH_WRAP):
+            _require_file(session.mesh_ply, "Mesh point cloud")
+            # ── Stage 6: Mesh Wrap ────────────────────────────────
+            await _run_stage(
+                session,
+                PipelineStage.MESH_WRAP,
+                _stage_mesh_wrap,
+                session.mesh_ply,
+                output_dir,
+            )
+            wrapped_mesh = Path(output_dir) / "object_mesh_wrapped.ply"
+            if wrapped_mesh.is_file():
+                session.mesh_ply = str(wrapped_mesh)
+            _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.MESH_WRAP,
                 PipelineStage.TEXTURE_BAKE,
-                f"{mesh_label} complete. Continue to Texture Bake?",
+                "Mesh Wrap complete. Continue to Texture Bake?",
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
@@ -541,7 +562,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
             _require_dir(session.mask_dir, "SAM2 masks directory", must_have_suffix=".png")
 
-            # ── Stage 6: Texture Bake ─────────────────────────────
+            # ── Stage 7: Texture Bake ─────────────────────────────
             await _run_stage(
                 session,
                 PipelineStage.TEXTURE_BAKE,
@@ -931,6 +952,12 @@ def _stage_classical_downsample(post_mesh_ply: str, output_dir: str, progress_cb
     from stage_classical_mesh import run_classical_downsample
 
     run_classical_downsample(post_mesh_ply, output_dir, progress_cb=progress_cb)
+
+
+def _stage_mesh_wrap(mesh_ply: str, output_dir: str, progress_cb=None) -> None:
+    from stage_mesh_wrap import run_mesh_wrap
+
+    run_mesh_wrap(mesh_ply, output_dir, progress_cb=progress_cb)
 
 
 def _stage_texture_bake(

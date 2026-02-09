@@ -9,7 +9,8 @@ Pipeline stages:
   3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
   4. Point cloud denoising (CPU)
   5. Mesh reconstruction (Classical Poisson or DiffCD)
-  6. Texture baking (CPU)
+  6. Mesh wrap (CPU)
+  7. Texture baking (CPU)
 """
 
 import argparse
@@ -36,7 +37,7 @@ Examples:
     )
     parser.add_argument("video_path", help="Path to input video (.mp4)")
     parser.add_argument("--output-dir", default="/data/output", help="Output directory")
-    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 7),
+    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 8),
                         help="Skip to stage N (for resuming after interruption)")
     parser.add_argument(
         "--mesh-method",
@@ -67,7 +68,7 @@ Examples:
     # =====================================================================
     if skip_to <= 1:
         print("\n" + "=" * 60)
-        print("Stage 1/6: Frame Extraction")
+        print("Stage 1/7: Frame Extraction")
         print("=" * 60)
         from stage_extract_frames import extract_frames
 
@@ -83,7 +84,7 @@ Examples:
     # =====================================================================
     if skip_to <= 2:
         print("\n" + "=" * 60)
-        print("Stage 2/6: Pi3X 3D Reconstruction")
+        print("Stage 2/7: Pi3X 3D Reconstruction")
         print("=" * 60)
         from stage_pi3x_reconstruct import run_pi3x_inference
 
@@ -101,7 +102,7 @@ Examples:
     # =====================================================================
     if skip_to <= 3:
         print("\n" + "=" * 60)
-        print("Stage 3/6: SAM2 Interactive Segmentation")
+        print("Stage 3/7: SAM2 Interactive Segmentation")
         print("=" * 60)
         print(">>> Open http://localhost:7860 to select the object <<<")
         from stage_sam2_ui import run_sam2_interactive
@@ -122,7 +123,7 @@ Examples:
     # =====================================================================
     if skip_to <= 4:
         print("\n" + "=" * 60)
-        print("Stage 4/6: Point Cloud Denoising")
+        print("Stage 4/7: Point Cloud Denoising")
         print("=" * 60)
         from stage_denoise import denoise
 
@@ -137,12 +138,12 @@ Examples:
     if skip_to <= 5:
         print("\n" + "=" * 60)
         if mesh_method == "diffcd":
-            print("Stage 5/6: Learning Mesh Reconstruction (DiffCD)")
+            print("Stage 5/7: Learning Mesh Reconstruction (DiffCD)")
             from stage_diffcd_mesh import run_diffcd
 
             mesh_ply = run_diffcd(str(denoised_ply), output_dir)
         else:
-            print("Stage 5/6: Classical Mesh Reconstruction (Normals + Poisson)")
+            print("Stage 5/7: Classical Mesh Reconstruction (Normals + Poisson)")
             from stage_classical_mesh import run_classical_mesh
 
             mesh_ply = run_classical_mesh(str(denoised_ply), output_dir)
@@ -152,16 +153,32 @@ Examples:
         mesh_ply = Path(output_dir) / "object_mesh.ply"
 
     # =====================================================================
-    # Stage 6: Texture Baking
+    # Stage 6: Mesh Wrap
     # =====================================================================
     if skip_to <= 6:
         print("\n" + "=" * 60)
-        print("Stage 6/6: Texture Baking")
+        print("Stage 6/7: Mesh Wrap")
+        print("=" * 60)
+        from stage_mesh_wrap import run_mesh_wrap
+
+        wrapped_mesh_ply = run_mesh_wrap(str(mesh_ply), output_dir)
+        print(f"  → {wrapped_mesh_ply}")
+    else:
+        wrapped_mesh_ply = Path(output_dir) / "object_mesh_wrapped.ply"
+        if not wrapped_mesh_ply.exists():
+            wrapped_mesh_ply = Path(output_dir) / "object_mesh.ply"
+
+    # =====================================================================
+    # Stage 7: Texture Baking
+    # =====================================================================
+    if skip_to <= 7:
+        print("\n" + "=" * 60)
+        print("Stage 7/7: Texture Baking")
         print("=" * 60)
         from stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
-            str(mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            str(wrapped_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
         )
         print(f"  → {obj_path}")
 
@@ -178,6 +195,7 @@ Examples:
 
     out = Path(output_dir)
     for name in ["textured_mesh.obj", "textured_mesh.mtl", "texture.png",
+                  "object_mesh_wrapped.ply",
                   "object_mesh.ply", "object_denoised.ply", "object.ply",
                   "camera_poses.json", "intrinsics.json"]:
         p = out / name

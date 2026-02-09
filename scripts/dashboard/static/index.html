@@ -121,6 +121,13 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="6">
       <span class="stage-dot"></span>
+      <span class="stage-label">Mesh Wrap</span>
+      <span class="stage-progress">0%</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector stage-connector-main"></div>
+    <div class="stage-pill" data-stage="7">
+      <span class="stage-dot"></span>
       <span class="stage-label">Texture</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
@@ -223,12 +230,20 @@
         </div>
       </div>
 
-      <!-- Stage 6: Texture Bake -->
+      <!-- Stage 6: Mesh Wrap -->
       <div id="stage-panel-6" class="stage-panel">
         <div class="stage-panel-empty" id="stage-6-empty">
-          <p>Textured mesh will appear here after Stage 6 completes.</p>
+          <p>Wrapped mesh will appear here after Stage 6 completes.</p>
         </div>
         <div id="three-container-6" class="three-container"></div>
+      </div>
+
+      <!-- Stage 7: Texture Bake -->
+      <div id="stage-panel-7" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-7-empty">
+          <p>Textured mesh will appear here after Stage 7 completes.</p>
+        </div>
+        <div id="three-container-7" class="three-container"></div>
       </div>
 
       <div id="task-confirm-dock">
@@ -252,7 +267,11 @@
           <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
           <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
         </div>
-        <div class="task-confirm-bar task-confirm-final" data-stage="6" aria-live="polite">
+        <div class="task-confirm-bar idle" data-stage="6" aria-live="polite">
+          <span class="task-confirm-message">Stage 6 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar task-confirm-final" data-stage="7" aria-live="polite">
           <span class="task-confirm-message">Final stage. No next-stage confirmation.</span>
           <button class="task-confirm-btn btn-small" disabled>Done</button>
         </div>
@@ -461,8 +480,8 @@
           </div>
         </div>
 
-        <!-- Stage 6: Texture Size -->
-        <div class="config-section" data-stages="6">
+        <!-- Stage 6-7: Mesh Wrap / Texture -->
+        <div class="config-section" data-stages="6 7">
           <div class="form-group">
             <label for="cfg-texture-size">Texture Size</label>
             <select id="cfg-texture-size">

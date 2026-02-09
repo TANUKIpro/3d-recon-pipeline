@@ -13,8 +13,8 @@ import { StageController } from './stage-controller.js';
 import { SAM2Verification } from './sam2-verification.js';
 import { CameraOverlay } from './camera-overlay.js';
 
-const STAGE_COUNT = 6;
-const TRANSITION_STAGE_MAX = 5;
+const STAGE_COUNT = 7;
+const TRANSITION_STAGE_MAX = 6;
 const DEFAULT_TAUBIN_NU = -0.53;
 const MESH_METHOD_DEFAULT = 'poisson';
 const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
@@ -103,8 +103,8 @@ document.addEventListener('stage-activated', async (e) => {
   // Config panel: show stage-specific params
   config.setActiveStage(stage);
 
-  // For 3D stages (2=Pi3X, 4-6), activate the renderer if scene is initialized
-  if (stage === 2 || (stage >= 4 && stage <= 6)) {
+  // For 3D stages (2=Pi3X, 4-7), activate the renderer if scene is initialized
+  if (stage === 2 || (stage >= 4 && stage <= 7)) {
     if (preview._stages?.[stage]?.initialized) {
       preview.activateStage(stage);
     }
@@ -187,7 +187,7 @@ config.onStart = async (cfg) => {
       return;
     }
 
-    const resumeFromStage = Math.max(1, Math.min(6, Number(data.resume_from_stage) || 1));
+    const resumeFromStage = Math.max(1, Math.min(STAGE_COUNT, Number(data.resume_from_stage) || 1));
 
     preview.clearFromStage(resumeFromStage);
     cameraOverlay.remove();
@@ -257,7 +257,7 @@ ws.on('stage_start', (msg) => {
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  appendLog('stdout', `\n=== Stage ${msg.stage}/6: ${msg.label} ===\n`, { stage: msg.stage });
+  appendLog('stdout', `\n=== Stage ${msg.stage}/7: ${msg.label} ===\n`, { stage: msg.stage });
   setMeshPostToolbarVisible(false);
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
@@ -298,7 +298,7 @@ ws.on('stage_complete', async (msg) => {
   } else if (msg.stage === 3) {
     // SAM2 complete — reload Pi3X viewer with filtered object.ply
     await preview.loadPi3xResults(cameraOverlay, 'object.ply');
-  } else if (msg.stage >= 4 && msg.stage <= 6) {
+  } else if (msg.stage >= 4 && msg.stage <= 7) {
     if (msg.stage === 5 && _meshMethod === 'poisson') {
       await preview.loadClassicalPhase('downsample', { cacheToken: Date.now() });
     } else {
@@ -436,8 +436,8 @@ ws.on('pipeline_complete', (msg) => {
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
     setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
   }
-  setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
-  setTaskConfirmVisibleStage(6);
+  setTaskConfirmState(7, 'final', 'Final stage complete. No next-stage confirmation.');
+  setTaskConfirmVisibleStage(7);
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   setMeshPostToolbarVisible(true);
@@ -447,7 +447,7 @@ ws.on('pipeline_complete', (msg) => {
   } else {
     setMeshPhaseStatus('', '');
   }
-  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 6 });
+  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 7 });
 });
 
 ws.on('pipeline_error', (msg) => {
@@ -467,7 +467,7 @@ ws.on('pipeline_error', (msg) => {
   setTaskConfirmVisibleStage(stageCtrl.activeStage);
   const cancelled = /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
-  if (msg.stage >= 1 && msg.stage <= 6) {
+  if (msg.stage >= 1 && msg.stage <= 7) {
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
   }
@@ -827,7 +827,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       msg += ` Downsample skipped (target=${apiTargetFaces.toLocaleString()}, trigger=${apiTriggerFaces.toLocaleString()}).`;
     }
     if (data.texture_invalidated) {
-      msg += ' Stage 6 artifacts were cleared.';
+      msg += ' Downstream Stage 6/7 artifacts were cleared.';
     }
     setMeshPostStatus(msg, 'success');
 
@@ -837,7 +837,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       { stage: 5 },
     );
     if (data.texture_invalidated) {
-      appendLog('stdout', 'Texture outputs removed. Re-run Stage 6 for updated texturing.\n', { stage: 6 });
+      appendLog('stdout', 'Wrap/texture outputs removed. Re-run from Stage 6 for updated texturing.\n', { stage: 6 });
     }
 
     if (!isPipelineRunning()) {
@@ -882,8 +882,8 @@ function isStageAvailable(statusMsg, stage) {
 function resolvePreferredStage(statusMsg) {
   if (!statusMsg) return 1;
   const current = Number(statusMsg.current_stage);
-  if (Number.isFinite(current) && current >= 1 && current <= 6) return current;
-  for (let stage = 6; stage >= 1; stage--) {
+  if (Number.isFinite(current) && current >= 1 && current <= STAGE_COUNT) return current;
+  for (let stage = STAGE_COUNT; stage >= 1; stage--) {
     if (isStageDone(statusMsg, stage)) return stage;
   }
   return 1;
@@ -893,7 +893,7 @@ function buildStatusKey(statusMsg) {
   const objectName = statusMsg?.object_name || '';
   const next = statusMsg?.next_stage_confirmation || {};
   const stageState = [];
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= STAGE_COUNT; i++) {
     const info = getStageInfo(statusMsg, i);
     stageState.push(`${info?.status || 'pending'}:${Math.round(Number(info?.progress) || 0)}`);
   }
@@ -907,7 +907,7 @@ function buildStatusKey(statusMsg) {
 }
 
 function syncStageStates(statusMsg) {
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= STAGE_COUNT; i++) {
     const info = getStageInfo(statusMsg, i);
     stageCtrl.setStageState(i, info?.status || 'pending');
   }
@@ -1045,7 +1045,7 @@ function resetTaskConfirmBars(resumeFromStage = 1) {
       setTaskConfirmState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
     }
   }
-  setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
+  setTaskConfirmState(7, 'final', 'Final stage. No next-stage confirmation.');
   setTaskConfirmVisibleStage(resumeStage);
 }
 
@@ -1113,10 +1113,10 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
     setTaskConfirmState(stage, 'idle', resolveTaskConfirmIdleMessage(statusMsg, stage));
   }
 
-  if (isStageDone(statusMsg, 6)) {
-    setTaskConfirmState(6, 'final', 'Final stage complete. No next-stage confirmation.');
+  if (isStageDone(statusMsg, 7)) {
+    setTaskConfirmState(7, 'final', 'Final stage complete. No next-stage confirmation.');
   } else {
-    setTaskConfirmState(6, 'final', 'Final stage. No next-stage confirmation.');
+    setTaskConfirmState(7, 'final', 'Final stage. No next-stage confirmation.');
   }
   setTaskConfirmVisibleStage(resolvePreferredStage(statusMsg));
 }
@@ -1200,6 +1200,7 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
     }
   }
   if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
+  if (isStageDone(statusMsg, 7)) await preview.loadStageResult(7);
 
   if (opts.activate !== false) {
     stageCtrl.activateStage(resolvePreferredStage(statusMsg));
@@ -1234,7 +1235,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
         force: opts.forceHydrate === true,
         activate: false,
       });
-      if (Number.isFinite(waitingFromStage) && waitingFromStage >= 1 && waitingFromStage <= 6) {
+      if (Number.isFinite(waitingFromStage) && waitingFromStage >= 1 && waitingFromStage <= STAGE_COUNT) {
         stageCtrl.activateStage(waitingFromStage);
       } else {
         stageCtrl.activateStage(resolvePreferredStage(statusMsg));
@@ -1248,7 +1249,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   config.setRunning(false);
   config.setActiveStage(null);
 
-  const allDone = [1, 2, 3, 4, 5, 6].every((stage) => isStageDone(statusMsg, stage));
+  const allDone = [1, 2, 3, 4, 5, 6, 7].every((stage) => isStageDone(statusMsg, stage));
   if (allDone) setStatus('complete', 'Done');
   else setStatus('idle', 'Idle');
 
