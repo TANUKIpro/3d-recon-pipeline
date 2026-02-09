@@ -18,6 +18,13 @@ const TRANSITION_STAGE_MAX = 5;
 const DEFAULT_TAUBIN_NU = -0.53;
 const MESH_METHOD_DEFAULT = 'poisson';
 const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
+const POISSON_PREVIEW_STEPS = new Set(['preprocess', 'main', 'postprocess', 'downsample']);
+const POISSON_PREVIEW_TITLES = {
+  preprocess: 'Preprocess result (filtered point cloud)',
+  main: 'Main Poisson result (raw mesh)',
+  postprocess: 'Postprocess result (smoothed mesh)',
+  downsample: 'Downsample result (final mesh)',
+};
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -52,6 +59,8 @@ const meshPostTriggerFacesInput = document.getElementById('mesh-post-trigger-fac
 const meshPostApplyBtn = document.getElementById('mesh-post-apply');
 const meshPostResetBtn = document.getElementById('mesh-post-reset');
 const meshPostStatus = document.getElementById('mesh-post-status');
+const meshPhaseStatusBar = document.getElementById('mesh-phase-status');
+const meshPhaseStatusText = document.getElementById('mesh-phase-status-text');
 const meshMethodPills = {
   diffcd: document.getElementById('mesh-pill-diffcd'),
   poisson: document.getElementById('mesh-pill-poisson'),
@@ -70,6 +79,7 @@ let _waitingConfirmationToStage = null;
 let _latestStatusSnapshot = null;
 let _meshPostInFlight = false;
 let _meshMethod = MESH_METHOD_DEFAULT;
+let _latestPoissonPreviewStep = null;
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -120,6 +130,8 @@ config.onObjectSelected = async (objectName) => {
     resetTaskConfirmBars();
     setMeshPostToolbarVisible(false);
     setMeshPostStatus('');
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('', '');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
     pipelineUI.setMeshMethodEnabled(true);
@@ -188,6 +200,8 @@ config.onStart = async (cfg) => {
     _latestStatusSnapshot = null;
     setMeshPostToolbarVisible(false);
     setMeshPostStatus('');
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('', '');
     setOverallProgress(pipelineUI.getOverallProgress());
 
     if (data.object_name) {
@@ -248,6 +262,13 @@ ws.on('stage_start', (msg) => {
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
   }
+  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('Classical mesh started. Waiting for preprocess output...', 'live');
+  } else if (Number(msg.stage) === 5) {
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('', '');
+  }
 });
 
 ws.on('extract_frames_result', (msg) => {
@@ -260,6 +281,9 @@ ws.on('stage_complete', async (msg) => {
   if (msg.error) {
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
+    if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
+      setMeshPhaseStatus(`Stage 5 failed: ${msg.error}`, 'error');
+    }
     return;
   }
   stageCtrl.setStageState(msg.stage, 'complete');
@@ -279,6 +303,13 @@ ws.on('stage_complete', async (msg) => {
   }
 
   if (msg.stage === 5) {
+    if (_meshMethod === 'poisson') {
+      _latestPoissonPreviewStep = 'downsample';
+      setMeshPhaseStatus(`Showing: ${POISSON_PREVIEW_TITLES.downsample}`, 'ready');
+    } else {
+      _latestPoissonPreviewStep = null;
+      setMeshPhaseStatus('', '');
+    }
     setMeshPostToolbarVisible(true);
     setMeshPostEnabled(true);
     if (!_meshPostInFlight) {
@@ -290,6 +321,28 @@ ws.on('stage_complete', async (msg) => {
 ws.on('stage_progress', (msg) => {
   pipelineUI.stageProgress(msg.stage, msg.progress, msg.detail);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
+  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
+    const step = inferPoissonStep(msg.detail);
+    if (step && step !== _latestPoissonPreviewStep) {
+      setMeshPhaseStatus(`Running: ${POISSON_PREVIEW_TITLES[step]}`, 'live');
+    }
+  }
+});
+
+ws.on('stage_preview_update', async (msg) => {
+  if (Number(msg.stage) !== 5) return;
+  if (String(msg.mesh_method || '').trim().toLowerCase() !== 'poisson') return;
+  const step = normalizePoissonStep(msg.step);
+  if (!step) return;
+
+  const loaded = await previewPoissonStep(step, {
+    file: msg.file,
+    tone: 'ready',
+    silentMissing: true,
+  });
+  if (loaded && msg.detail) {
+    appendLog('stdout', `[Preview] ${msg.detail}\n`, { stage: 5 });
+  }
 });
 
 ws.on('sam2_ready', (msg) => {
@@ -348,6 +401,12 @@ ws.on('next_stage_confirmation_required', (msg) => {
   if (msg.message) {
     appendLog('stdout', `${msg.message}\n`, { stage: fromStage });
   }
+  if (fromStage === 5 && _meshMethod === 'poisson') {
+    const step = inferPoissonStep(msg.message);
+    if (step) {
+      void previewPoissonStep(step, { tone: 'ready', silentMissing: true });
+    }
+  }
 });
 
 ws.on('next_stage_confirmation_cleared', (msg) => {
@@ -379,6 +438,11 @@ ws.on('pipeline_complete', (msg) => {
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   setMeshPostToolbarVisible(true);
   setMeshPostEnabled(true);
+  if (_meshMethod === 'poisson') {
+    setMeshPhaseStatus(`Showing: ${POISSON_PREVIEW_TITLES.downsample}`, 'ready');
+  } else {
+    setMeshPhaseStatus('', '');
+  }
   appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 6 });
 });
 
@@ -407,6 +471,9 @@ ws.on('pipeline_error', (msg) => {
   setMeshPostToolbarVisible(false);
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
+  }
+  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
+    setMeshPhaseStatus(`Stage 5 error: ${msg.error}`, 'error');
   }
   appendLog('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`, { stage: msg.stage });
 });
@@ -453,6 +520,86 @@ function isPipelineRunning() {
   return _latestStatusSnapshot?.running === true || statusBadge?.classList.contains('badge-running');
 }
 
+function normalizePoissonStep(value) {
+  const step = String(value || '').trim().toLowerCase();
+  return POISSON_PREVIEW_STEPS.has(step) ? step : null;
+}
+
+function inferPoissonStep(text) {
+  const lower = String(text || '').toLowerCase();
+  if (!lower) return null;
+
+  if (
+    lower.includes('preprocess complete')
+    || lower.includes('classical/preprocess')
+    || lower.includes('resampling points')
+  ) {
+    return 'preprocess';
+  }
+  if (
+    lower.includes('main poisson complete')
+    || lower.includes('classical/main')
+    || lower.includes('screened poisson')
+    || lower.includes('estimating normals')
+  ) {
+    return 'main';
+  }
+  if (
+    lower.includes('postprocess complete')
+    || lower.includes('classical/postprocess')
+    || lower.includes('applying smoothing')
+    || lower.includes('cleaning mesh')
+  ) {
+    return 'postprocess';
+  }
+  if (
+    lower.includes('classical/downsample')
+    || lower.includes('downsample')
+    || lower.includes('reducing face count')
+  ) {
+    return 'downsample';
+  }
+  return null;
+}
+
+function setMeshPhaseStatus(message, tone = '') {
+  if (!meshPhaseStatusBar || !meshPhaseStatusText) return;
+  const text = String(message || '').trim();
+  meshPhaseStatusBar.classList.remove('live', 'ready', 'error', 'hidden');
+  if (!text) {
+    meshPhaseStatusText.textContent = '';
+    meshPhaseStatusBar.classList.add('hidden');
+    return;
+  }
+  meshPhaseStatusText.textContent = text;
+  if (tone === 'live' || tone === 'ready' || tone === 'error') {
+    meshPhaseStatusBar.classList.add(tone);
+  }
+}
+
+async function previewPoissonStep(step, opts = {}) {
+  const resolvedStep = normalizePoissonStep(step);
+  if (!resolvedStep) return false;
+
+  const overrideFile = String(opts.file || '').trim();
+  const loaded = overrideFile
+    ? await preview.loadStageResult(5, {
+      file: overrideFile,
+      renderMode: resolvedStep === 'preprocess' ? 'points' : 'mesh',
+      cacheToken: Date.now(),
+    })
+    : await preview.loadClassicalPhase(resolvedStep, { cacheToken: Date.now() });
+  if (loaded) {
+    _latestPoissonPreviewStep = resolvedStep;
+    setMeshPhaseStatus(`Showing: ${POISSON_PREVIEW_TITLES[resolvedStep]}`, opts.tone || 'ready');
+    return true;
+  }
+  if (!opts.silentMissing) {
+    setMeshPhaseStatus(`${POISSON_PREVIEW_TITLES[resolvedStep]} is not available yet.`, 'live');
+  }
+  return false;
+}
+
 function bindMeshMethodPills() {
   const diffcdPill = meshMethodPills.diffcd;
   const poissonPill = meshMethodPills.poisson;
@@ -466,29 +613,35 @@ function bindMeshMethodPills() {
     stageCtrl.activateStage(5);
   });
 
-  const choosePoisson = (event) => {
+  const choosePoisson = (event, step = null) => {
     if (isPipelineRunning()) {
       event.preventDefault();
       return;
     }
     applyMeshMethod('poisson');
     stageCtrl.activateStage(5);
+    const normalizedStep = normalizePoissonStep(step);
+    if (normalizedStep) {
+      void previewPoissonStep(normalizedStep, { silentMissing: true });
+    }
   };
-  poissonPill?.addEventListener('click', choosePoisson);
+  poissonPill?.addEventListener('click', (event) => {
+    choosePoisson(event, poissonPill?.dataset.meshStep);
+  });
   poissonPill?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      choosePoisson(event);
+      choosePoisson(event, poissonPill?.dataset.meshStep);
     }
   });
 
   for (const pill of meshPoissonStepPills) {
     if (!pill || pill === poissonPill) continue;
-    pill.addEventListener('click', choosePoisson);
+    pill.addEventListener('click', (event) => choosePoisson(event, pill.dataset.meshStep));
     pill.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        choosePoisson(event);
+        choosePoisson(event, pill.dataset.meshStep);
       }
     });
   }
@@ -501,6 +654,10 @@ function applyMeshMethod(method, opts = {}) {
 
   pipelineUI.setMeshMethod(resolved);
   config.setMeshMethod?.(resolved);
+  if (resolved !== 'poisson') {
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('', '');
+  }
 
   if (changed && opts.announce !== false) {
     const label = resolved === 'diffcd'
@@ -987,6 +1144,8 @@ async function confirmNextStage(stage) {
 
 async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
   if (!statusMsg?.object_name) return;
+  const statusMeshMethod = normalizeMeshMethod(statusMsg?.mesh_method || _meshMethod);
+  const isPoissonMesh = statusMeshMethod === 'poisson';
 
   const key = buildStatusKey(statusMsg);
   if (!opts.force && key === _hydratedStatusKey) {
@@ -1011,7 +1170,23 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
   }
 
   if (isStageDone(statusMsg, 4)) await preview.loadStageResult(4);
-  if (isStageDone(statusMsg, 5)) await preview.loadStageResult(5);
+  if (isStageDone(statusMsg, 5)) {
+    await preview.loadStageResult(5);
+    if (isPoissonMesh) {
+      _latestPoissonPreviewStep = 'downsample';
+      setMeshPhaseStatus(`Showing: ${POISSON_PREVIEW_TITLES.downsample}`, 'ready');
+    } else {
+      _latestPoissonPreviewStep = null;
+      setMeshPhaseStatus('', '');
+    }
+  }
+  if (!isStageDone(statusMsg, 5) && statusMsg.running && Number(statusMsg.current_stage) === 5 && isPoissonMesh) {
+    const hintText = statusMsg?.next_stage_confirmation?.message || getStageInfo(statusMsg, 5)?.detail;
+    const step = inferPoissonStep(hintText);
+    if (step) {
+      await previewPoissonStep(step, { silentMissing: true });
+    }
+  }
   if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
 
   if (opts.activate !== false) {
@@ -1022,6 +1197,10 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 async function applyStatusSnapshot(statusMsg, opts = {}) {
   _latestStatusSnapshot = statusMsg;
   applyMeshMethod(statusMsg?.mesh_method || _meshMethod, { announce: false });
+  if (normalizeMeshMethod(statusMsg?.mesh_method || _meshMethod) !== 'poisson') {
+    _latestPoissonPreviewStep = null;
+    setMeshPhaseStatus('', '');
+  }
   pipelineUI.setMeshMethodEnabled(statusMsg?.running !== true);
   pipelineUI.updateAll(statusMsg);
   syncStageStates(statusMsg);

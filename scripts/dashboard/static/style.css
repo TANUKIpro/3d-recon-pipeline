@@ -578,6 +578,39 @@ html, body {
   font-family: var(--font);
 }
 
+/* ── Stage 5 Classical Phase Status ─────────────────────── */
+.mesh-phase-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.mesh-phase-status.hidden {
+  display: none;
+}
+
+#mesh-phase-status-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font);
+}
+
+.mesh-phase-status.live #mesh-phase-status-text {
+  color: var(--accent);
+}
+
+.mesh-phase-status.ready #mesh-phase-status-text {
+  color: var(--success);
+}
+
+.mesh-phase-status.error #mesh-phase-status-text {
+  color: var(--danger);
+}
+
 /* ── Stage 5 Mesh Post-Process Toolbar ───────────────────── */
 #mesh-post-toolbar {
   display: flex;
