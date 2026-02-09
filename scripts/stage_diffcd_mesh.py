@@ -139,6 +139,15 @@ def mesh_vertex_face_count(mesh_path: str | Path) -> tuple[int, int]:
     return len(mesh.vertices), len(mesh.faces)
 
 
+def _laplacian_volume_constraint(mesh: trimesh.Trimesh) -> bool:
+    """Enable volume-preserving Laplacian smoothing only for closed volume meshes."""
+    try:
+        return bool(mesh.is_volume)
+    except Exception:
+        # Fallback for older trimesh builds or malformed meshes.
+        return False
+
+
 def smooth_mesh_file(
     input_mesh_path: str | Path,
     output_mesh_path: str | Path,
@@ -161,11 +170,24 @@ def smooth_mesh_file(
 
     if iters > 0:
         if method_norm == "laplacian":
-            filtered = trimesh.smoothing.filter_laplacian(
-                smoothed,
-                lamb=float(lamb),
-                iterations=iters,
-            )
+            laplacian_kwargs = {
+                "lamb": float(lamb),
+                "iterations": iters,
+                # Non-volume meshes (typical scan outputs) can spike when constrained.
+                "volume_constraint": _laplacian_volume_constraint(smoothed),
+            }
+            try:
+                filtered = trimesh.smoothing.filter_laplacian(
+                    smoothed,
+                    **laplacian_kwargs,
+                )
+            except TypeError:
+                # Compatibility with older trimesh signatures.
+                laplacian_kwargs.pop("volume_constraint", None)
+                filtered = trimesh.smoothing.filter_laplacian(
+                    smoothed,
+                    **laplacian_kwargs,
+                )
         else:
             taubin_filter = getattr(trimesh.smoothing, "filter_taubin", None)
             if taubin_filter is None:
