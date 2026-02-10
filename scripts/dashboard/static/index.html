@@ -58,62 +58,19 @@
         <span class="stage-time"></span>
       </div>
       <div
-        id="mesh-pill-poisson-pre"
-        class="stage-pill mesh-stage-pill mesh-poisson-step"
-        data-mesh-step="preprocess"
-        role="button"
-        tabindex="0"
-        aria-label="View classical mesh preprocess"
-      >
-        <span class="stage-dot"></span>
-        <span class="stage-label">Mesh Pre</span>
-        <span class="stage-progress">0%</span>
-        <span class="stage-time"></span>
-      </div>
-      <div
         id="mesh-pill-poisson"
-        class="stage-pill mesh-stage-pill mesh-method-pill mesh-poisson-step mesh-method-branch active"
+        class="stage-pill mesh-stage-pill mesh-method-pill mesh-method-branch active"
         data-mesh-method="poisson"
-        data-mesh-step="main"
         role="button"
         tabindex="0"
         aria-label="Select classical mesh reconstruction"
       >
         <span class="stage-dot"></span>
-        <span class="stage-label">Classical Main</span>
-        <span class="stage-progress">0%</span>
-        <span class="stage-time"></span>
-      </div>
-      <div
-        id="mesh-pill-poisson-post"
-        class="stage-pill mesh-stage-pill mesh-poisson-step"
-        data-mesh-step="postprocess"
-        role="button"
-        tabindex="0"
-        aria-label="View classical mesh postprocess"
-      >
-        <span class="stage-dot"></span>
-        <span class="stage-label">Mesh Post</span>
-        <span class="stage-progress">0%</span>
-        <span class="stage-time"></span>
-      </div>
-      <div
-        id="mesh-pill-poisson-downsample"
-        class="stage-pill mesh-stage-pill mesh-poisson-step"
-        data-mesh-step="downsample"
-        role="button"
-        tabindex="0"
-        aria-label="View classical mesh downsampling"
-      >
-        <span class="stage-dot"></span>
-        <span class="stage-label">Downsample</span>
+        <span class="stage-label">Classical Mesh</span>
         <span class="stage-progress">0%</span>
         <span class="stage-time"></span>
       </div>
       <div id="mesh-connector-poisson-left" class="stage-connector stage-connector-branch active"></div>
-      <div id="mesh-connector-poisson-pre-main" class="stage-connector stage-connector-branch active"></div>
-      <div id="mesh-connector-poisson-main-post" class="stage-connector stage-connector-branch active"></div>
-      <div id="mesh-connector-poisson-post-down" class="stage-connector stage-connector-branch active"></div>
       <div id="mesh-connector-poisson-right" class="stage-connector stage-connector-branch active"></div>
       <div id="mesh-connector-diffcd-left" class="stage-connector stage-connector-diffcd"></div>
       <div id="mesh-connector-diffcd-right" class="stage-connector stage-connector-diffcd"></div>
@@ -452,10 +409,10 @@
         <div class="config-section" data-stages="5">
           <input type="hidden" id="cfg-mesh-method" value="poisson">
           <div id="cfg-mesh-method-summary" class="config-note">
-            Classical Mesh chain (Pre -> Main -> Post -> Downsample) is active.
+            Classical Mesh pipeline is active.
           </div>
           <div id="cfg-poisson-summary" class="config-note">
-            Classical path runs: preprocess -> main Poisson -> postprocess -> downsample.
+            Classical path runs as a single Stage 5 task.
           </div>
           <div id="cfg-diffcd-controls" style="display:none">
             <div class="form-group">
