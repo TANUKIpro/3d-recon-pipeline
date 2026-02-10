@@ -31,6 +31,28 @@ export class PreviewPanel {
     this._previewAssetRevision = 0;
   }
 
+  _syncViewportSize(stageNum, retries = 0) {
+    const stage = this._stages[stageNum];
+    if (!stage || !this._renderer) return false;
+
+    const w = stage.container.clientWidth;
+    const h = stage.container.clientHeight;
+    if (w > 0 && h > 0) {
+      this._renderer.setSize(w, h);
+      stage.camera.aspect = w / h;
+      stage.camera.updateProjectionMatrix();
+      return true;
+    }
+
+    if (retries > 0) {
+      requestAnimationFrame(() => {
+        if (this._activeStage !== stageNum) return;
+        this._syncViewportSize(stageNum, retries - 1);
+      });
+    }
+    return false;
+  }
+
   reset() {
     this._sceneFlipX = null;
     this.clearFromStage(1);
@@ -200,6 +222,9 @@ export class PreviewPanel {
       const nw = container.clientWidth;
       const nh = container.clientHeight;
       if (nw > 0 && nh > 0) {
+        if (this._activeStage === stageNum && this._renderer) {
+          this._renderer.setSize(nw, nh);
+        }
         camera.aspect = nw / nh;
         camera.updateProjectionMatrix();
       }
@@ -236,14 +261,8 @@ export class PreviewPanel {
       stage.controls.dampingFactor = 0.1;
     }
 
-    // Resize
-    const w = stage.container.clientWidth;
-    const h = stage.container.clientHeight;
-    if (w > 0 && h > 0) {
-      this._renderer.setSize(w, h);
-      stage.camera.aspect = w / h;
-      stage.camera.updateProjectionMatrix();
-    }
+    // Resize (retry on next frames to avoid zero-size reads right after panel switch).
+    this._syncViewportSize(stageNum, 3);
   }
 
   /**
@@ -900,7 +919,7 @@ export class PreviewPanel {
    */
   _fitCamera(stage, box) {
     const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
+    const maxDim = Math.max(size.x, size.y, size.z, 1e-3);
     const dist = maxDim * 1.5;
     stage.camera.position.set(dist * 0.5, dist * 0.5, dist);
     stage.controls.target.set(0, 0, 0);
