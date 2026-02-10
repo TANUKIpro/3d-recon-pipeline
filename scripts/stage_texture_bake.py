@@ -16,6 +16,11 @@ import cv2
 import numpy as np
 from plyfile import PlyData
 
+try:
+    import torch
+except Exception:  # pragma: no cover - optional dependency for GPU acceleration
+    torch = None
+
 ProgressCallback = Callable[[float, str | None], None]
 
 
@@ -229,6 +234,58 @@ def _project_simple(pts, c2w, K):
     return np.column_stack([u, v]), d
 
 
+def _resolve_texture_device(requested: str | None = None) -> str:
+    mode = (requested or os.environ.get("TEXTURE_DEVICE", "cuda")).strip().lower()
+    if mode == "gpu":
+        mode = "cuda"
+    if mode not in {"auto", "cpu", "cuda"}:
+        print(f"Warning: invalid TEXTURE_DEVICE='{mode}', falling back to cuda")
+        mode = "cuda"
+
+    if mode == "cpu":
+        return "cpu"
+    if mode == "cuda":
+        if torch is not None and torch.cuda.is_available():
+            return "cuda"
+        print("Warning: TEXTURE_DEVICE=cuda requested but CUDA is unavailable; using CPU")
+        return "cpu"
+    # auto
+    if torch is not None and torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
+def _bilinear_sample_torch(img, x, y):
+    h, w = img.shape[:2]
+    x0 = torch.floor(x).to(torch.int64)
+    y0 = torch.floor(y).to(torch.int64)
+    x1 = torch.clamp(x0 + 1, 0, w - 1)
+    y1 = torch.clamp(y0 + 1, 0, h - 1)
+    x0 = torch.clamp(x0, 0, w - 1)
+    y0 = torch.clamp(y0, 0, h - 1)
+    fx = (x - x0.to(x.dtype)).unsqueeze(1)
+    fy = (y - y0.to(y.dtype)).unsqueeze(1)
+    c00 = img[y0, x0]
+    c10 = img[y0, x1]
+    c01 = img[y1, x0]
+    c11 = img[y1, x1]
+    return (
+        (1 - fx) * (1 - fy) * c00
+        + fx * (1 - fy) * c10
+        + (1 - fx) * fy * c01
+        + fx * fy * c11
+    )
+
+
+def _project_simple_torch_w2c(pts, w2c, K):
+    cam = pts @ w2c[:3, :3].T + w2c[:3, 3]
+    d = cam[:, 2].clone()
+    sz = torch.clamp(d, min=1e-10)
+    u = K[0, 0] * cam[:, 0] / sz + K[0, 2]
+    v = K[1, 1] * cam[:, 1] / sz + K[1, 2]
+    return torch.stack((u, v), dim=1), d
+
+
 def bake_texture(
     mesh_ply: str,
     poses_path: str,
@@ -249,6 +306,8 @@ def bake_texture(
         tex_size: Texture resolution. Default from env TEXTURE_SIZE or 2048.
 
     Environment toggles for sharpness/quality:
+        TEXTURE_DEVICE (str): 'cuda' (default), 'auto', or 'cpu' projection backend.
+        TEXTURE_GPU_CHUNK (int): Texel chunk size per view for CUDA projection.
         TEXTURE_OVERSAMPLE (int): Internal supersampling multiplier (1=off, 2=default).
         TEXTURE_BLEND_MODE (str): 'weighted' (default) or 'max' to pick best single view.
         TEXTURE_MIN_COS (float): Minimum normal·view cosine to accept a sample (default 0.2).
@@ -271,6 +330,8 @@ def bake_texture(
     angle_exp = float(os.environ.get("TEXTURE_ANGLE_EXP", "2.0"))
     dist_pow = float(os.environ.get("TEXTURE_DIST_POW", "1.0"))
     sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", "0.15"))
+    texture_device = _resolve_texture_device()
+    texture_gpu_chunk = max(50_000, int(os.environ.get("TEXTURE_GPU_CHUNK", "750000")))
 
     tex_res = tex_size * oversample
 
@@ -359,6 +420,10 @@ def bake_texture(
         "  Weighting: blend=%s, min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f"
         % ("max" if use_max_blend else "weighted", min_cos, angle_exp, dist_pow, sharpen_amt)
     )
+    if texture_device == "cuda":
+        print(f"  Projection backend: CUDA (chunk={texture_gpu_chunk})")
+    else:
+        print("  Projection backend: CPU")
     _emit_progress(progress_cb, 62.0, "Building texel mapping")
     face_id_buf = np.full((tex_res, tex_res), -1, dtype=np.int32)
     uv_scaled = uvs * tex_res
@@ -407,79 +472,178 @@ def bake_texture(
     print(f"  {n_valid} valid texels")
 
     # --- Multi-view texture projection ---
-    color_sum = np.zeros((n_valid, 3), dtype=np.float64)
-    weight_sum = np.zeros(n_valid, dtype=np.float64)
     _emit_progress(progress_cb, 72.0, "Projecting textures from input views")
-
     emit_every_view = max(1, len(poses) // 40)
-    for vidx in range(len(poses)):
-        src_idx = int(pose_frame_indices[vidx])
-        c2w = poses[vidx]
-        cam_pos = c2w[:3, 3]
 
-        try:
-            frame = _load_frame(frames_dir, src_idx)
-        except FileNotFoundError:
-            continue
+    if texture_device == "cuda":
+        color_sum_t = torch.zeros((n_valid, 3), dtype=torch.float32, device="cuda")
+        weight_sum_t = torch.zeros(n_valid, dtype=torch.float32, device="cuda")
+        pos3d_t = torch.as_tensor(pos3d, dtype=torch.float32, device="cuda")
+        normals_t = torch.as_tensor(normals, dtype=torch.float32, device="cuda")
+        K_t = torch.as_tensor(K, dtype=torch.float32, device="cuda")
 
-        try:
-            mask_bool = _load_mask(mask_dir, src_idx)
-        except FileNotFoundError:
-            continue
+        for vidx in range(len(poses)):
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
 
-        # View direction
-        view_dirs = cam_pos - pos3d
-        dists = np.linalg.norm(view_dirs, axis=1, keepdims=True)
-        view_dirs_n = view_dirs / np.maximum(dists, 1e-10)
-        cos_angle = np.sum(normals * view_dirs_n, axis=1)
-        facing = cos_angle > min_cos
+            try:
+                frame = _load_frame(frames_dir, src_idx)
+                mask_bool = _load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
+                continue
 
-        if facing.sum() == 0:
-            continue
+            frame_t = torch.as_tensor(frame, dtype=torch.float32, device="cuda")
+            mask_t = torch.as_tensor(mask_bool, dtype=torch.bool, device="cuda")
+            c2w_t = torch.as_tensor(c2w, dtype=torch.float32, device="cuda")
+            w2c_t = torch.linalg.inv(c2w_t)
+            cam_pos_t = c2w_t[:3, 3]
 
-        uv2d, depths = _project_simple(pos3d[facing], c2w, K)
-        px_proj, py_proj = uv2d[:, 0], uv2d[:, 1]
+            n_ok_view = 0
+            for start in range(0, n_valid, texture_gpu_chunk):
+                end = min(start + texture_gpu_chunk, n_valid)
+                pos_chunk = pos3d_t[start:end]
+                normal_chunk = normals_t[start:end]
 
-        ok = (depths > 0.01) & (px_proj >= 0) & (px_proj < img_w - 1) & (py_proj >= 0) & (py_proj < img_h - 1)
+                view_dirs = cam_pos_t.unsqueeze(0) - pos_chunk
+                dists = torch.linalg.norm(view_dirs, dim=1)
+                view_dirs_n = view_dirs / torch.clamp(dists.unsqueeze(1), min=1e-10)
+                cos_angle = torch.sum(normal_chunk * view_dirs_n, dim=1)
+                facing = cos_angle > min_cos
+                if not torch.any(facing).item():
+                    continue
 
-        pxi = np.clip(px_proj.astype(np.int32), 0, img_w - 1)
-        pyi = np.clip(py_proj.astype(np.int32), 0, img_h - 1)
-        ok = ok & mask_bool[pyi, pxi]
+                facing_indices = torch.nonzero(facing, as_tuple=False).squeeze(1)
+                uv2d, depths = _project_simple_torch_w2c(pos_chunk[facing], w2c_t, K_t)
+                px_proj = uv2d[:, 0]
+                py_proj = uv2d[:, 1]
 
-        n_ok = ok.sum()
-        if n_ok == 0:
-            continue
+                ok = (
+                    (depths > 0.01)
+                    & (px_proj >= 0)
+                    & (px_proj < img_w - 1)
+                    & (py_proj >= 0)
+                    & (py_proj < img_h - 1)
+                )
+                if not torch.any(ok).item():
+                    continue
 
-        colors_sampled = _bilinear_sample(frame, px_proj[ok], py_proj[ok])
+                pxi = torch.clamp(px_proj.to(torch.int64), 0, img_w - 1)
+                pyi = torch.clamp(py_proj.to(torch.int64), 0, img_h - 1)
+                ok = ok & mask_t[pyi, pxi]
+                if not torch.any(ok).item():
+                    continue
 
-        # View weight: sharper angle preference + distance falloff
-        ang = np.maximum(cos_angle[facing][ok], 0.0) ** angle_exp
-        dist_term = np.power(np.maximum(dists[facing][ok, 0], 1e-6), dist_pow)
-        w = ang / dist_term
+                colors_sampled = _bilinear_sample_torch(frame_t, px_proj[ok], py_proj[ok])
 
-        if use_max_blend:
-            # Winner-takes-all per texel
-            facing_indices = np.where(facing)[0]
-            final_indices = facing_indices[ok]
-            better = w > weight_sum[final_indices]
-            if np.any(better):
-                weight_sum[final_indices[better]] = w[better]
-                color_sum[final_indices[better]] = colors_sampled[better]
-        else:
-            facing_indices = np.where(facing)[0]
-            final_indices = facing_indices[ok]
-            color_sum[final_indices] += colors_sampled * w[:, None]
-            weight_sum[final_indices] += w
+                # View weight: sharper angle preference + distance falloff
+                ang = torch.clamp(cos_angle[facing][ok], min=0.0).pow(angle_exp)
+                dist_term = torch.clamp(dists[facing][ok], min=1e-6).pow(dist_pow)
+                w = ang / dist_term
+                final_indices = facing_indices[ok] + start
+                n_ok_view += int(ok.sum().item())
 
-        if vidx % 5 == 0:
-            print(f"  View {vidx+1}/{len(poses)}: {n_ok} texels")
-        if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
-            ratio = (vidx + 1) / max(len(poses), 1)
-            _emit_progress(
-                progress_cb,
-                72.0 + ratio * 20.0,
-                f"Projecting textures ({vidx + 1}/{len(poses)} views)",
-            )
+                if use_max_blend:
+                    # Winner-takes-all per texel
+                    better = w > weight_sum_t[final_indices]
+                    if torch.any(better).item():
+                        better_idx = final_indices[better]
+                        weight_sum_t[better_idx] = w[better]
+                        color_sum_t[better_idx] = colors_sampled[better]
+                else:
+                    color_sum_t.index_add_(0, final_indices, colors_sampled * w.unsqueeze(1))
+                    weight_sum_t.index_add_(0, final_indices, w)
+
+            if vidx % 5 == 0:
+                print(f"  View {vidx+1}/{len(poses)}: {n_ok_view} texels")
+            if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
+                ratio = (vidx + 1) / max(len(poses), 1)
+                _emit_progress(
+                    progress_cb,
+                    72.0 + ratio * 20.0,
+                    f"Projecting textures ({vidx + 1}/{len(poses)} views)",
+                )
+
+        has_color_t = weight_sum_t > 0
+        if not use_max_blend and torch.any(has_color_t).item():
+            color_sum_t[has_color_t] = color_sum_t[has_color_t] / weight_sum_t[has_color_t].unsqueeze(1)
+
+        color_sum = color_sum_t.detach().cpu().numpy().astype(np.float64, copy=False)
+        weight_sum = weight_sum_t.detach().cpu().numpy().astype(np.float64, copy=False)
+        del color_sum_t, weight_sum_t, pos3d_t, normals_t, K_t
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+    else:
+        color_sum = np.zeros((n_valid, 3), dtype=np.float64)
+        weight_sum = np.zeros(n_valid, dtype=np.float64)
+
+        for vidx in range(len(poses)):
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
+            cam_pos = c2w[:3, 3]
+
+            try:
+                frame = _load_frame(frames_dir, src_idx)
+            except FileNotFoundError:
+                continue
+
+            try:
+                mask_bool = _load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
+                continue
+
+            # View direction
+            view_dirs = cam_pos - pos3d
+            dists = np.linalg.norm(view_dirs, axis=1, keepdims=True)
+            view_dirs_n = view_dirs / np.maximum(dists, 1e-10)
+            cos_angle = np.sum(normals * view_dirs_n, axis=1)
+            facing = cos_angle > min_cos
+
+            if facing.sum() == 0:
+                continue
+
+            uv2d, depths = _project_simple(pos3d[facing], c2w, K)
+            px_proj, py_proj = uv2d[:, 0], uv2d[:, 1]
+
+            ok = (depths > 0.01) & (px_proj >= 0) & (px_proj < img_w - 1) & (py_proj >= 0) & (py_proj < img_h - 1)
+
+            pxi = np.clip(px_proj.astype(np.int32), 0, img_w - 1)
+            pyi = np.clip(py_proj.astype(np.int32), 0, img_h - 1)
+            ok = ok & mask_bool[pyi, pxi]
+
+            n_ok = ok.sum()
+            if n_ok == 0:
+                continue
+
+            colors_sampled = _bilinear_sample(frame, px_proj[ok], py_proj[ok])
+
+            # View weight: sharper angle preference + distance falloff
+            ang = np.maximum(cos_angle[facing][ok], 0.0) ** angle_exp
+            dist_term = np.power(np.maximum(dists[facing][ok, 0], 1e-6), dist_pow)
+            w = ang / dist_term
+
+            if use_max_blend:
+                # Winner-takes-all per texel
+                facing_indices = np.where(facing)[0]
+                final_indices = facing_indices[ok]
+                better = w > weight_sum[final_indices]
+                if np.any(better):
+                    weight_sum[final_indices[better]] = w[better]
+                    color_sum[final_indices[better]] = colors_sampled[better]
+            else:
+                facing_indices = np.where(facing)[0]
+                final_indices = facing_indices[ok]
+                color_sum[final_indices] += colors_sampled * w[:, None]
+                weight_sum[final_indices] += w
+
+            if vidx % 5 == 0:
+                print(f"  View {vidx+1}/{len(poses)}: {n_ok} texels")
+            if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
+                ratio = (vidx + 1) / max(len(poses), 1)
+                _emit_progress(
+                    progress_cb,
+                    72.0 + ratio * 20.0,
+                    f"Projecting textures ({vidx + 1}/{len(poses)} views)",
+                )
 
     # Normalize
     has_color = weight_sum > 0

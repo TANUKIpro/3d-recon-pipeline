@@ -10,7 +10,7 @@ Pipeline stages:
   4. Point cloud denoising (CPU)
   5. Mesh reconstruction (Classical Poisson or DiffCD)
   6. Mesh wrap (CPU)
-  7. Texture baking (CPU)
+  7. Texture baking (GPU when available, CPU fallback)
 """
 
 import argparse

@@ -23,7 +23,7 @@ graph TD
     S5C["Classical<br/><i>CPU</i><br/>法線推定 → Screened Poisson → 平滑化"]
     S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
     S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>Iterative Poisson 外皮化"]
-    S7["Stage 7: テクスチャベイキング<br/><i>CPU</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → マルチビュー投影"]
+    S7["Stage 7: テクスチャベイキング<br/><i>GPU (推奨) / CPU</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → マルチビュー投影"]
     OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
 
     INPUT --> S1 --> S2 --> S3 --> S4 --> S5
@@ -224,6 +224,8 @@ docker compose run --rm --entrypoint python3 pipeline \
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `TEXTURE_SIZE` | `2048` | テクスチャアトラスの解像度 (px) |
+| `TEXTURE_DEVICE` | `cuda` | 投影バックエンド (`cuda` / `auto` / `cpu`) |
+| `TEXTURE_GPU_CHUNK` | `750000` | CUDA投影時のテクセルチャンクサイズ |
 
 ## docs タスク別ドキュメント
 
@@ -324,7 +326,7 @@ RTX 4090 Laptop (16GB) での実測値:
 | SAM2 (large) | ~2 GB | ~15秒 (伝播) |
 | Pi3X (20フレーム, 150Kpx) | ~14 GB | ~1分 |
 | DiffCD (res=384, 25Kバッチ) | ~10 GB | ~10分 |
-| デノイズ / テクスチャ | CPU のみ | ~1分 |
+| デノイズ / テクスチャ | CPU / CUDA (Texture) | シーン依存 |
 
 > **注意**: 16GB GPU で品質を優先する場合、まず `MAX_FRAMES` を下げて `PIXEL_LIMIT` は高めに維持する。  
 > 例: `MAX_FRAMES=20~28, PIXEL_LIMIT=220000~255000`。  
