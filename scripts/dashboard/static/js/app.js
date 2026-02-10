@@ -12,6 +12,7 @@ import { PreviewPanel } from './preview.js';
 import { StageController } from './stage-controller.js';
 import { SAM2Verification } from './sam2-verification.js';
 import { CameraOverlay } from './camera-overlay.js';
+import { CheckpointPanel } from './checkpoint-panel.js';
 
 const STAGE_COUNT = 7;
 const TRANSITION_STAGE_MAX = 6;
@@ -31,6 +32,7 @@ const preview = new PreviewPanel();
 const stageCtrl = new StageController();
 const sam2Verify = new SAM2Verification();
 const cameraOverlay = new CameraOverlay();
+const checkpoints = new CheckpointPanel();
 
 function appendLog(stream, text, opts = {}) {
   const stage = Number(opts.stage);
@@ -94,6 +96,7 @@ document.addEventListener('stage-activated', async (e) => {
 
   // Config panel: show stage-specific params
   config.setActiveStage(stage);
+  checkpoints.setActiveStage(stage);
 
   // For 3D stages (2=Pi3X, 4-7), activate the renderer if scene is initialized
   if (stage === 2 || (stage >= 4 && stage <= 7)) {
@@ -127,6 +130,7 @@ config.onObjectSelected = async (objectName) => {
     setStatus('idle', 'Idle');
     pipelineUI.setMeshMethodEnabled(true);
     applyMeshMethod(MESH_METHOD_DEFAULT, { announce: false });
+    checkpoints.reset(1);
     stageCtrl.activateStage(1);
     return;
   }
@@ -186,6 +190,7 @@ config.onStart = async (cfg) => {
     sam2Verify.hide();
     resetTaskConfirmBars(resumeFromStage);
     pipelineUI.resetFromStage(resumeFromStage);
+    checkpoints.reset(resumeFromStage);
     _extractedFrameCount = 0;
     _hydratedStatusKey = '';
     _latestStatusSnapshot = null;
@@ -223,6 +228,7 @@ ws.on('status', async (msg) => {
 });
 
 ws.on('stage_start', (msg) => {
+  checkpoints.onStageStart(msg.stage);
   const prevStage = Number(msg.stage) - 1;
   if (prevStage >= 1 && prevStage <= TRANSITION_STAGE_MAX) {
     const prevStatus = pipelineUI.getStageStatus(prevStage);
@@ -267,6 +273,7 @@ ws.on('stage_complete', async (msg) => {
   pipelineUI.stageComplete(msg.stage, msg.elapsed);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (msg.error) {
+    checkpoints.onStageFailed(msg.stage, msg.error);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
     if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
@@ -274,6 +281,7 @@ ws.on('stage_complete', async (msg) => {
     }
     return;
   }
+  checkpoints.onStageComplete(msg.stage);
   stageCtrl.setStageState(msg.stage, 'complete');
 
   // Auto-load results per stage
@@ -305,6 +313,7 @@ ws.on('stage_complete', async (msg) => {
 });
 
 ws.on('stage_progress', (msg) => {
+  checkpoints.onStageProgress(msg.stage, msg.detail, 'running');
   pipelineUI.stageProgress(msg.stage, msg.progress, msg.detail);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
@@ -313,6 +322,7 @@ ws.on('stage_progress', (msg) => {
 });
 
 ws.on('sam2_ready', (msg) => {
+  checkpoints.onStageInteractive(3, 'Waiting for interactive clicks');
   pipelineUI.stageInteractive(3);
   sam2.activate(msg.frame_count, msg.width, msg.height);
   sam2Verify.hide();
@@ -336,6 +346,7 @@ ws.on('sam2_verification_ready', (msg) => {
 });
 
 ws.on('pi3x_preview_ready', () => {
+  checkpoints.onStageInteractive(2, 'Waiting for next-stage confirmation');
   pipelineUI.stageInteractive(2);
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
@@ -346,6 +357,7 @@ ws.on('next_stage_confirmation_required', (msg) => {
   const fromStage = Number(msg.from_stage);
   const toStage = Number(msg.to_stage);
   if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
+    checkpoints.onStageInteractive(fromStage, String(msg.message || 'Waiting for next-stage confirmation'));
     if (_waitingConfirmationStage !== null && _waitingConfirmationStage !== fromStage) {
       setTaskConfirmState(
         _waitingConfirmationStage,
@@ -384,6 +396,7 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
 });
 
 ws.on('pipeline_complete', (msg) => {
+  checkpoints.onStageComplete(7);
   config.setRunning(false);
   pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
@@ -425,6 +438,7 @@ ws.on('pipeline_error', (msg) => {
   const cancelled = /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
   if (msg.stage >= 1 && msg.stage <= 7) {
+    checkpoints.onStageFailed(msg.stage, msg.error);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
   }
@@ -538,6 +552,7 @@ function applyMeshMethod(method, opts = {}) {
   const changed = resolved !== _meshMethod;
   _meshMethod = resolved;
 
+  checkpoints.setMeshMethod(resolved);
   pipelineUI.setMeshMethod(resolved);
   config.setMeshMethod?.(resolved);
   if (resolved !== 'poisson') {
@@ -1078,6 +1093,7 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 
 async function applyStatusSnapshot(statusMsg, opts = {}) {
   _latestStatusSnapshot = statusMsg;
+  checkpoints.applyStatusSnapshot(statusMsg);
   applyMeshMethod(statusMsg?.mesh_method || _meshMethod, { announce: false });
   if (normalizeMeshMethod(statusMsg?.mesh_method || _meshMethod) !== 'poisson') {
     setMeshPhaseStatus('', '');
