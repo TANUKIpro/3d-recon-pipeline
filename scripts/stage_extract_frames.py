@@ -12,6 +12,7 @@ from typing import Callable
 import cv2
 
 ProgressCallback = Callable[[float, str | None], None]
+CancelCallback = Callable[[], None]
 
 
 def _emit_progress(
@@ -95,6 +96,7 @@ def extract_frames(
     frame_interval: int | None = None,
     max_frames: int | None = None,
     progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
 ) -> Path:
     """Extract frames from a video at regular intervals.
 
@@ -149,6 +151,8 @@ def extract_frames(
     emit_every = max(1, expected_reads // 40)
 
     while True:
+        if cancel_cb is not None:
+            cancel_cb()
         ret, frame = cap.read()
         if not ret:
             break

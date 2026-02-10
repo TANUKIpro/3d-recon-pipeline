@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
@@ -132,6 +135,7 @@ class StageInfo:
     error: str | None = None
     progress: float = 0.0
     detail: str | None = None
+    checkpoint_id: str | None = None
 
 
 @dataclass
@@ -143,8 +147,11 @@ class PipelineSession:
     stages: dict[int, StageInfo] = field(default_factory=dict)
     running: bool = False
     cancelled: bool = False
+    cancel_requested: bool = False
+    cancel_force: bool = False
     resume_from_stage: PipelineStage = PipelineStage.EXTRACT_FRAMES
     pipeline_start_time: float | None = None
+    current_checkpoint_id: str | None = None
 
     # WebSocket clients
     ws_clients: list[Any] = field(default_factory=list)
@@ -166,6 +173,9 @@ class PipelineSession:
 
     # Pipeline task handle
     _task: asyncio.Task | None = field(default=None, repr=False)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    _active_processes: set[Any] = field(default_factory=set, repr=False)
+    _active_process_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # Artifacts produced by each stage
     frames_dir: str | None = None
@@ -189,8 +199,11 @@ class PipelineSession:
         self.current_stage = PipelineStage.IDLE
         self.running = False
         self.cancelled = False
+        self.cancel_requested = False
+        self.cancel_force = False
         self.resume_from_stage = PipelineStage.EXTRACT_FRAMES
         self.pipeline_start_time = None
+        self.current_checkpoint_id = None
         self.sam2_confirm_event = asyncio.Event()
         self.sam2_approve_event = asyncio.Event()
         self.sam2_approved = False
@@ -201,6 +214,9 @@ class PipelineSession:
         self.next_stage_confirmation_message = None
         self.sam2_frame_count = 0
         self._task = None
+        self.cancel_event = threading.Event()
+        self._active_processes = set()
+        self._active_process_lock = threading.Lock()
         self.frames_dir = None
         self.mask_dir = None
         self.ply_full_path = None
@@ -219,6 +235,7 @@ class PipelineSession:
             s.error = None
             s.progress = 0.0
             s.detail = None
+            s.checkpoint_id = None
 
     def hydrate_from_output_dir(self, output_dir: str | Path) -> dict[str, Any]:
         out = Path(output_dir)
@@ -249,6 +266,7 @@ class PipelineSession:
             info.elapsed = None
             info.error = None
             info.detail = None
+            info.checkpoint_id = None
             if stage_complete.get(stage_id, False):
                 info.status = StageStatus.COMPLETE
                 info.progress = 100.0
@@ -266,7 +284,13 @@ class PipelineSession:
 
         self.running = False
         self.cancelled = False
+        self.cancel_requested = False
+        self.cancel_force = False
+        self.current_checkpoint_id = None
         self.pipeline_start_time = None
+        self.cancel_event = threading.Event()
+        self._active_processes = set()
+        self._active_process_lock = threading.Lock()
         self.sam2_approved = False
         self.sam2_frame_count = 0
         self.sam2_width = 0
@@ -289,12 +313,14 @@ class PipelineSession:
         info.start_time = time.time()
         info.progress = 0.0
         info.detail = None
+        info.checkpoint_id = None
 
     def stage_complete(self, stage: PipelineStage) -> None:
         info = self.stages[int(stage)]
         info.status = StageStatus.COMPLETE
         info.progress = 100.0
         info.detail = None
+        info.checkpoint_id = None
         if info.start_time is not None:
             info.elapsed = time.time() - info.start_time
 
@@ -333,12 +359,54 @@ class PipelineSession:
         stage: PipelineStage,
         progress: float | None = None,
         detail: str | None = None,
+        checkpoint_id: str | None = None,
     ) -> None:
         info = self.stages[int(stage)]
         if progress is not None:
             info.progress = max(0.0, min(100.0, float(progress)))
         if detail is not None:
             info.detail = detail
+        if checkpoint_id is not None:
+            info.checkpoint_id = checkpoint_id
+            self.current_checkpoint_id = checkpoint_id
+
+    def request_cancel(self, force: bool = False) -> None:
+        self.cancelled = True
+        self.cancel_requested = True
+        self.cancel_force = bool(force)
+        self.cancel_event.set()
+
+    def clear_cancel(self) -> None:
+        self.cancelled = False
+        self.cancel_requested = False
+        self.cancel_force = False
+        self.cancel_event.clear()
+
+    def register_active_process(self, process: Any) -> None:
+        with self._active_process_lock:
+            self._active_processes.add(process)
+
+    def unregister_active_process(self, process: Any) -> None:
+        with self._active_process_lock:
+            self._active_processes.discard(process)
+
+    def terminate_active_processes(self, grace_seconds: float = 1.0) -> int:
+        with self._active_process_lock:
+            snapshot = list(self._active_processes)
+        terminated = 0
+        for proc in snapshot:
+            if proc is None:
+                continue
+            poll = getattr(proc, "poll", None)
+            if callable(poll):
+                try:
+                    if poll() is not None:
+                        continue
+                except Exception:
+                    pass
+            if _terminate_process_tree(proc, grace_seconds=grace_seconds):
+                terminated += 1
+        return terminated
 
     def overall_progress(self) -> float:
         total = 0.0
@@ -352,11 +420,14 @@ class PipelineSession:
             "current_stage": int(self.current_stage),
             "running": self.running,
             "cancelled": self.cancelled,
+            "cancel_requested": self.cancel_requested,
+            "cancel_force": self.cancel_force,
             "resume_from_stage": int(self.resume_from_stage),
             "object_name": self.config.object_name,
             "mesh_method": self.config.mesh_method,
             "video_path": self.config.video_path,
             "output_dir": self.config.output_dir,
+            "current_checkpoint_id": self.current_checkpoint_id,
             "frame_count": self.frame_count,
             "mask_count": self.mask_count,
             "elapsed": (time.time() - self.pipeline_start_time)
@@ -376,8 +447,65 @@ class PipelineSession:
                     "error": v.error,
                     "progress": round(v.progress, 1),
                     "detail": v.detail,
+                    "checkpoint_id": v.checkpoint_id,
                 }
                 for k, v in self.stages.items()
             },
             "overall_progress": self.overall_progress(),
         }
+
+
+def _terminate_process_tree(process: Any, grace_seconds: float = 1.0) -> bool:
+    """Terminate a process and its process group when available."""
+    try:
+        pid = int(getattr(process, "pid", 0) or 0)
+    except Exception:
+        pid = 0
+
+    wait = getattr(process, "wait", None)
+    terminate = getattr(process, "terminate", None)
+    kill = getattr(process, "kill", None)
+
+    if pid > 0:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except Exception:
+            if callable(terminate):
+                try:
+                    terminate()
+                except Exception:
+                    pass
+    elif callable(terminate):
+        try:
+            terminate()
+        except Exception:
+            pass
+
+    if callable(wait):
+        try:
+            wait(timeout=max(0.1, float(grace_seconds)))
+            return True
+        except Exception:
+            pass
+
+    if pid > 0:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except Exception:
+            if callable(kill):
+                try:
+                    kill()
+                except Exception:
+                    pass
+    elif callable(kill):
+        try:
+            kill()
+        except Exception:
+            pass
+
+    if callable(wait):
+        try:
+            wait(timeout=max(0.1, float(grace_seconds)))
+        except Exception:
+            pass
+    return True

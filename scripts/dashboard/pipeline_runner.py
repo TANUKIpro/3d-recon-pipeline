@@ -17,6 +17,12 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent.parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
+from scripts.dashboard.checkpoints import (
+    cleanup_checkpoint_outputs,
+    first_checkpoint_id,
+    mesh_method_key,
+    resolve_checkpoint_id,
+)
 from scripts.dashboard.log_capture import stage_log_scope
 from scripts.dashboard.state import (
     STAGE_LABELS,
@@ -47,29 +53,84 @@ async def _broadcast_stage_progress(
     stage: PipelineStage,
     progress: float | None = None,
     detail: str | None = None,
+    checkpoint_id: str | None = None,
 ) -> None:
-    session.stage_progress(stage, progress=progress, detail=detail)
-    info = session.stages[int(stage)]
-    await broadcast(session, {
-        "type": "stage_progress",
-        "stage": int(stage),
-        "progress": round(info.progress, 1),
-        "detail": info.detail,
-        "overall_progress": session.overall_progress(),
-    })
-
-
-def _mesh_method_key(value: str | None) -> str:
-    method = str(value or "").strip().lower()
-    if method == "diffcd":
-        return "diffcd"
-    return "poisson"
+    payload = _build_stage_progress_payload(
+        session,
+        stage,
+        progress=progress,
+        detail=detail,
+        checkpoint_id=checkpoint_id,
+    )
+    await broadcast(session, payload)
 
 
 def _mesh_method_label(method: str) -> str:
     if method == "diffcd":
         return "Learning Mesh (DiffCD)"
     return "Classical Mesh"
+
+
+def _build_stage_progress_payload(
+    session: PipelineSession,
+    stage: PipelineStage,
+    progress: float | None = None,
+    detail: str | None = None,
+    checkpoint_id: str | None = None,
+) -> dict:
+    stage_num = int(stage)
+    mesh_method = mesh_method_key(session.config.mesh_method)
+    current = None
+    if int(session.current_stage) == stage_num:
+        current = session.current_checkpoint_id
+    resolved_checkpoint = checkpoint_id or resolve_checkpoint_id(
+        stage_num,
+        detail,
+        mesh_method,
+        current_checkpoint_id=current,
+    )
+    session.stage_progress(
+        stage,
+        progress=progress,
+        detail=detail,
+        checkpoint_id=resolved_checkpoint,
+    )
+    info = session.stages[stage_num]
+    return {
+        "type": "stage_progress",
+        "stage": stage_num,
+        "progress": round(info.progress, 1),
+        "detail": info.detail,
+        "checkpoint_id": info.checkpoint_id,
+        "overall_progress": session.overall_progress(),
+    }
+
+
+def _cleanup_cancelled_outputs(
+    session: PipelineSession,
+    stage: PipelineStage | None,
+) -> dict | None:
+    if stage is None:
+        return None
+    info = session.stages.get(int(stage))
+    if info is not None and info.status == StageStatus.COMPLETE:
+        return {
+            "stage": int(stage),
+            "checkpoint_id": session.current_checkpoint_id,
+            "skipped": True,
+            "reason": "stage_already_complete",
+            "removed_dirs": [],
+            "removed_files": [],
+        }
+    output_dir = session.config.output_dir
+    if not output_dir:
+        return None
+    return cleanup_checkpoint_outputs(
+        output_dir,
+        int(stage),
+        session.current_checkpoint_id,
+        mesh_method_key(session.config.mesh_method),
+    )
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
@@ -81,7 +142,8 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         start_stage = int(PipelineStage.EXTRACT_FRAMES)
     cancelled = False
     session.running = True
-    session.cancelled = False
+    session.clear_cancel()
+    session.current_checkpoint_id = None
     session.pipeline_start_time = time.time()
 
     try:
@@ -148,10 +210,17 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
             # ── Stage 3: SAM2 Interactive Segmentation ────────────
             session.stage_start(PipelineStage.SAM2_SEGMENT)
+            sam2_checkpoint = first_checkpoint_id(
+                int(PipelineStage.SAM2_SEGMENT),
+                mesh_method_key(cfg.mesh_method),
+            )
+            if sam2_checkpoint:
+                session.stage_progress(PipelineStage.SAM2_SEGMENT, checkpoint_id=sam2_checkpoint)
             await broadcast(session, {
                 "type": "stage_start",
                 "stage": int(PipelineStage.SAM2_SEGMENT),
                 "label": STAGE_LABELS[PipelineStage.SAM2_SEGMENT],
+                "checkpoint_id": sam2_checkpoint,
             })
             await _broadcast_stage_progress(
                 session,
@@ -207,13 +276,15 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     loop = asyncio.get_event_loop()
 
                     def _propagate_cb(frame_idx: int, total: int) -> None:
+                        _check_cancelled(session)
                         total = max(total, 1)
                         ratio = (frame_idx + 1) / total
                         progress = 30.0 + ratio * 40.0
                         detail = f"Propagating masks ({frame_idx + 1}/{total})"
 
                         def _push() -> None:
-                            session.stage_progress(
+                            payload = _build_stage_progress_payload(
+                                session,
                                 PipelineStage.SAM2_SEGMENT,
                                 progress=progress,
                                 detail=detail,
@@ -229,13 +300,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                                 })
                             )
                             asyncio.create_task(
-                                broadcast(session, {
-                                    "type": "stage_progress",
-                                    "stage": int(PipelineStage.SAM2_SEGMENT),
-                                    "progress": round(progress, 1),
-                                    "detail": detail,
-                                    "overall_progress": overall,
-                                })
+                                broadcast(session, payload)
                             )
 
                         loop.call_soon_threadsafe(_push)
@@ -283,22 +348,18 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 loop = asyncio.get_event_loop()
 
                 def _mask_progress_cb(progress: float, detail: str | None = None) -> None:
+                    _check_cancelled(session)
                     mapped_progress = 72.0 + (max(0.0, min(100.0, progress)) * 0.28)
 
                     def _push() -> None:
-                        session.stage_progress(
+                        payload = _build_stage_progress_payload(
+                            session,
                             PipelineStage.SAM2_SEGMENT,
                             progress=mapped_progress,
                             detail=detail,
                         )
                         asyncio.create_task(
-                            broadcast(session, {
-                                "type": "stage_progress",
-                                "stage": int(PipelineStage.SAM2_SEGMENT),
-                                "progress": round(mapped_progress, 1),
-                                "detail": detail,
-                                "overall_progress": session.overall_progress(),
-                            })
+                            broadcast(session, payload)
                         )
 
                     loop.call_soon_threadsafe(_push)
@@ -349,7 +410,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             )
             session.denoised_ply = str(Path(output_dir) / "object_denoised.ply")
             _check_cancelled(session)
-            mesh_method = _mesh_method_key(cfg.mesh_method)
+            mesh_method = mesh_method_key(cfg.mesh_method)
             mesh_label = _mesh_method_label(mesh_method)
             await _wait_for_next_stage_confirmation(
                 session,
@@ -361,7 +422,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         if start_stage <= int(PipelineStage.DIFFCD_MESH):
             _require_file(session.denoised_ply, "Denoised point cloud")
             # ── Stage 5: Mesh Reconstruction ──────────────────────
-            mesh_method = _mesh_method_key(cfg.mesh_method)
+            mesh_method = mesh_method_key(cfg.mesh_method)
             mesh_label = _mesh_method_label(mesh_method)
             if mesh_method == "diffcd":
                 await _run_stage(
@@ -452,6 +513,15 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
     except _CancelledError:
         cancelled = True
         stage = _safe_current_stage(session.current_stage)
+        cleanup_meta = None
+        try:
+            cleanup_meta = _cleanup_cancelled_outputs(session, stage)
+        except Exception as cleanup_error:
+            cleanup_meta = {
+                "stage": int(stage) if stage is not None else None,
+                "checkpoint_id": session.current_checkpoint_id,
+                "error": str(cleanup_error),
+            }
         if stage is not None:
             info = session.stages[int(stage)]
             if info.status in {StageStatus.RUNNING, StageStatus.INTERACTIVE}:
@@ -460,10 +530,23 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "type": "pipeline_error",
             "stage": int(stage) if stage is not None else int(PipelineStage.IDLE),
             "error": "Pipeline cancelled by user",
+            "reason_code": "cancelled_force" if session.cancel_force else "cancelled",
+            "checkpoint_id": session.current_checkpoint_id,
+            "cleanup": cleanup_meta,
+            "overall_progress": session.overall_progress(),
         })
     except asyncio.CancelledError:
         cancelled = True
         stage = _safe_current_stage(session.current_stage)
+        cleanup_meta = None
+        try:
+            cleanup_meta = _cleanup_cancelled_outputs(session, stage)
+        except Exception as cleanup_error:
+            cleanup_meta = {
+                "stage": int(stage) if stage is not None else None,
+                "checkpoint_id": session.current_checkpoint_id,
+                "error": str(cleanup_error),
+            }
         if stage is not None:
             info = session.stages[int(stage)]
             if info.status in {StageStatus.RUNNING, StageStatus.INTERACTIVE}:
@@ -472,6 +555,10 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "type": "pipeline_error",
             "stage": int(stage) if stage is not None else int(PipelineStage.IDLE),
             "error": "Pipeline cancelled by user",
+            "reason_code": "cancelled_force" if session.cancel_force else "cancelled",
+            "checkpoint_id": session.current_checkpoint_id,
+            "cleanup": cleanup_meta,
+            "overall_progress": session.overall_progress(),
         })
     except Exception as e:
         stage = _safe_current_stage(session.current_stage)
@@ -481,8 +568,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             "type": "pipeline_error",
             "stage": int(stage) if stage is not None else int(PipelineStage.IDLE),
             "error": str(e),
+            "checkpoint_id": session.current_checkpoint_id,
         })
     finally:
+        try:
+            session.terminate_active_processes(grace_seconds=0.3)
+        except Exception:
+            pass
         try:
             await asyncio.to_thread(sam2_service.release)
         except Exception:
@@ -492,7 +584,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         session._task = None
         if cancelled:
             session.hydrate_from_output_dir(output_dir)
-            session.cancelled = False
+            session.clear_cancel()
             await broadcast(session, {
                 "type": "status",
                 **session.to_status_dict(),
@@ -502,7 +594,8 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 # ── Helpers ───────────────────────────────────────────────────────
 
 class _CancelledError(Exception):
-    pass
+    def __init__(self, message: str = "Pipeline cancelled by user") -> None:
+        super().__init__(message)
 
 
 def _safe_current_stage(stage: PipelineStage | int) -> PipelineStage | None:
@@ -534,7 +627,7 @@ def _require_dir(path: str | None, label: str, must_have_suffix: str | None = No
 
 
 def _check_cancelled(session: PipelineSession) -> None:
-    if session.cancelled:
+    if session.cancelled or session.cancel_requested or session.cancel_event.is_set():
         raise _CancelledError()
 
 
@@ -583,35 +676,56 @@ async def _run_stage(
 ) -> None:
     """Run a blocking stage function in a thread with lifecycle broadcasts."""
     session.stage_start(stage)
+    checkpoint_id = first_checkpoint_id(int(stage), mesh_method_key(session.config.mesh_method))
+    if checkpoint_id:
+        session.stage_progress(stage, checkpoint_id=checkpoint_id)
     await broadcast(session, {
         "type": "stage_start",
         "stage": int(stage),
         "label": label or STAGE_LABELS[stage],
+        "checkpoint_id": checkpoint_id,
     })
     await _broadcast_stage_progress(session, stage, progress=0.0, detail="Starting")
     loop = asyncio.get_running_loop()
 
-    def _progress_cb(progress: float, detail: str | None = None) -> None:
+    def _progress_cb(
+        progress: float,
+        detail: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> None:
+        _check_cancelled(session)
+
         def _push() -> None:
-            session.stage_progress(stage, progress=progress, detail=detail)
+            payload = _build_stage_progress_payload(
+                session,
+                stage,
+                progress=progress,
+                detail=detail,
+                checkpoint_id=checkpoint_id,
+            )
             asyncio.create_task(
-                broadcast(session, {
-                    "type": "stage_progress",
-                    "stage": int(stage),
-                    "progress": round(session.stages[int(stage)].progress, 1),
-                    "detail": session.stages[int(stage)].detail,
-                    "overall_progress": session.overall_progress(),
-                })
+                broadcast(session, payload)
             )
 
         loop.call_soon_threadsafe(_push)
 
+    def _cancel_cb() -> None:
+        _check_cancelled(session)
+
     def _run_with_stage_scope() -> None:
         with stage_log_scope(int(stage)):
-            fn(*args, progress_cb=_progress_cb)
+            fn(
+                *args,
+                progress_cb=_progress_cb,
+                cancel_cb=_cancel_cb,
+                register_process=session.register_active_process,
+                unregister_process=session.unregister_active_process,
+            )
 
     try:
         await asyncio.to_thread(_run_with_stage_scope)
+    except _CancelledError:
+        raise
     except Exception as e:
         session.stage_failed(stage, str(e))
         await broadcast(session, {
@@ -619,6 +733,7 @@ async def _run_stage(
             "stage": int(stage),
             "elapsed": session.stages[int(stage)].elapsed,
             "error": str(e),
+            "checkpoint_id": session.stages[int(stage)].checkpoint_id,
             "overall_progress": session.overall_progress(),
         })
         raise
@@ -639,7 +754,11 @@ def _stage_extract_frames(
     frame_interval: int,
     max_frames: int,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del register_process, unregister_process
     from stage_extract_frames import extract_frames
     extract_frames(
         video_path,
@@ -647,6 +766,7 @@ def _stage_extract_frames(
         frame_interval=frame_interval,
         max_frames=max_frames,
         progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
     )
 
 
@@ -655,7 +775,11 @@ def _stage_pi3x_inference(
     pixel_limit: int, pi3x_frame_target: int,
     conf_threshold: float, edge_rtol: float,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del register_process, unregister_process
     from stage_pi3x_reconstruct import run_pi3x_inference
     from vram_utils import cleanup_pytorch_vram
     run_pi3x_inference(
@@ -665,6 +789,7 @@ def _stage_pi3x_inference(
         conf_threshold=conf_threshold,
         edge_rtol=edge_rtol,
         progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
     )
     cleanup_pytorch_vram()
 
@@ -674,9 +799,19 @@ def _stage_apply_masks(
     mask_dir: str,
     output_dir: str,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del register_process, unregister_process
     from stage_pi3x_reconstruct import apply_sam2_masks
-    apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
+    apply_sam2_masks(
+        cache_path,
+        mask_dir,
+        output_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
 
 
 def _stage_denoise(
@@ -693,7 +828,11 @@ def _stage_denoise(
     denoise_radius_neighbors: int,
     denoise_radius_radius_ratio: float,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del cancel_cb, register_process, unregister_process
     from stage_denoise import denoise
     denoise(
         ply_path,
@@ -712,12 +851,34 @@ def _stage_denoise(
     )
 
 
-def _stage_diffcd(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
+def _stage_diffcd(
+    denoised_ply: str,
+    output_dir: str,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> None:
     from stage_diffcd_mesh import run_diffcd
-    run_diffcd(denoised_ply, output_dir, progress_cb=progress_cb)
+    run_diffcd(
+        denoised_ply,
+        output_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+        register_process=register_process,
+        unregister_process=unregister_process,
+    )
 
 
-def _stage_classical_mesh(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
+def _stage_classical_mesh(
+    denoised_ply: str,
+    output_dir: str,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> None:
+    del cancel_cb, register_process, unregister_process
     from stage_classical_mesh import run_classical_mesh
 
     run_classical_mesh(denoised_ply, output_dir, progress_cb=progress_cb)
@@ -735,7 +896,11 @@ def _stage_mesh_wrap(
     sample_points: int = 180_000,
     normal_radius_ratio: float = 0.035,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del cancel_cb, register_process, unregister_process
     from stage_mesh_wrap import run_mesh_wrap
 
     run_mesh_wrap(
@@ -757,7 +922,11 @@ def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
     progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
 ) -> None:
+    del cancel_cb, register_process, unregister_process
     from stage_texture_bake import bake_texture
     bake_texture(
         mesh_ply,
