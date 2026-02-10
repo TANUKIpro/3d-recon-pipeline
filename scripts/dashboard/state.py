@@ -110,7 +110,7 @@ class PipelineConfig:
     meshwrap_crop_scale: float = 1.08
     meshwrap_sample_points: int = 180_000
     meshwrap_normal_radius_ratio: float = 0.035
-    texture_size: int = 2048
+    texture_size: int = 0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PipelineConfig:

@@ -2,7 +2,7 @@
 
 RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker 完結型パイプライン。
 
-Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物体セグメンテーション、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、マルチビューテクスチャベイキングを1コンテナで実行する。
+Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物体セグメンテーション、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、チャート単位の最適視点テクスチャベイキングを1コンテナで実行する。
 
 ## 現在の実装状態 (2026-02-09)
 
@@ -23,7 +23,7 @@ graph TD
     S5C["Classical<br/><i>CPU</i><br/>法線推定 → Screened Poisson → 平滑化"]
     S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
     S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>Iterative Poisson 外皮化"]
-    S7["Stage 7: テクスチャベイキング<br/><i>GPU (推奨) / CPU</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → マルチビュー投影"]
+    S7["Stage 7: テクスチャベイキング<br/><i>CPU / GPU要求ヒント</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → チャート単位最適視点投影"]
     OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
 
     INPUT --> S1 --> S2 --> S3 --> S4 --> S5
@@ -223,9 +223,11 @@ docker compose run --rm --entrypoint python3 pipeline \
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `TEXTURE_SIZE` | `2048` | テクスチャアトラスの解像度 (px) |
-| `TEXTURE_DEVICE` | `cuda` | 投影バックエンド (`cuda` / `auto` / `cpu`) |
-| `TEXTURE_GPU_CHUNK` | `750000` | CUDA投影時のテクセルチャンクサイズ |
+| `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下なら `round(sqrt(video_width * video_height))` の正方形を自動適用 |
+| `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行チャート選定処理は CPU で実行 |
+| `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
+| `TEXTURE_ANGLE_EXP` | `2.0` | 角度スコア指数 |
+| `TEXTURE_DIST_POW` | `1.0` | 距離減衰指数 |
 
 ## docs タスク別ドキュメント
 
@@ -252,7 +254,7 @@ data/output/
         ├── pi3x_cache.npz         # Stage 2/3間キャッシュ (点群・色・マスク)
         ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
         ├── textured_mesh.mtl      # マテリアル定義
-        ├── texture.png            # テクスチャアトラス (2048x2048)
+        ├── texture.png            # テクスチャアトラス (既定は入力動画と同等画素数の正方形)
         ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
         ├── object_mesh_wrapped.ply # Stage 6出力メッシュ (Texture用ラップ結果)
         ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ

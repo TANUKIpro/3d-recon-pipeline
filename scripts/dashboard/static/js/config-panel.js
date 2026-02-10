@@ -215,6 +215,7 @@ export class ConfigPanel {
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this._applyMeshWrapCustomDefaults();
     this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
+    this._updateTextureAutoOption(null);
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
@@ -350,7 +351,7 @@ export class ConfigPanel {
       meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
       meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 180000),
       meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
-      texture_size: parseInt(this._inputs.texture_size.value) || 2048,
+      texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
     };
   }
 
@@ -392,6 +393,7 @@ export class ConfigPanel {
         opt.value = '';
         opt.textContent = 'No videos found in /data/input/';
         this._videoSelect.appendChild(opt);
+        this._updateTextureAutoOption(null);
         this._applySuggestedObjectName();
         this._updateFrameBudgetPreview();
         return;
@@ -407,6 +409,7 @@ export class ConfigPanel {
       this._onVideoChange();
     } catch (e) {
       this._videoSelect.innerHTML = '<option value="">Error loading videos</option>';
+      this._updateTextureAutoOption(null);
       this._updateFrameBudgetPreview();
     }
   }
@@ -680,6 +683,7 @@ export class ConfigPanel {
     if (!path) {
       this._videoInfo.textContent = '';
       this._videoMeta = null;
+      this._updateTextureAutoOption(null);
       this._applySuggestedObjectName();
       this._updateFrameBudgetPreview();
       return;
@@ -690,6 +694,7 @@ export class ConfigPanel {
       if (!res.ok) {
         this._videoInfo.textContent = 'Failed to load video info';
         this._videoMeta = null;
+        this._updateTextureAutoOption(null);
         this._updateFrameBudgetPreview();
         return;
       }
@@ -697,10 +702,12 @@ export class ConfigPanel {
       if (data.error) {
         this._videoInfo.textContent = data.error;
         this._videoMeta = null;
+        this._updateTextureAutoOption(null);
         this._updateFrameBudgetPreview();
         return;
       }
       this._videoMeta = data;
+      this._updateTextureAutoOption(data);
 
       const suggestedInterval = this._parsePositiveInt(
         data.suggested_frame_interval,
@@ -731,6 +738,7 @@ export class ConfigPanel {
     } catch {
       this._videoInfo.textContent = 'Failed to load video info';
       this._videoMeta = null;
+      this._updateTextureAutoOption(null);
       this._updateFrameBudgetPreview();
     }
   }
@@ -1239,6 +1247,31 @@ export class ConfigPanel {
     const bNum = Number(b);
     if (!Number.isFinite(aNum) || !Number.isFinite(bNum)) return false;
     return Math.abs(aNum - bNum) <= 1e-9;
+  }
+
+  _parseTextureSize(value, fallback = 0) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n)) return fallback;
+    if (n <= 0) return 0;
+    return n;
+  }
+
+  _computeAutoTextureSize(width, height) {
+    const w = Number.parseInt(width, 10);
+    const h = Number.parseInt(height, 10);
+    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+      return null;
+    }
+    return Math.max(1, Math.round(Math.sqrt(w * h)));
+  }
+
+  _updateTextureAutoOption(videoMeta) {
+    const textureInput = this._inputs.texture_size;
+    if (!textureInput) return;
+    const autoOption = Array.from(textureInput.options || []).find((opt) => opt.value === '0');
+    if (!autoOption) return;
+    const autoSize = this._computeAutoTextureSize(videoMeta?.width, videoMeta?.height);
+    autoOption.textContent = autoSize == null ? 'Auto' : `Auto (~${autoSize})`;
   }
 
   _parsePositiveInt(value, fallback) {

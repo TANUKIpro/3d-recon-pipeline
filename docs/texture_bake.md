@@ -34,20 +34,23 @@
    - FOV グリッドサーチ
    - Nelder-Mead で `(fx, fy, cx, cy)` 最適化
 3. `xatlas.parametrize` で UV 展開。
-4. UV テクセルごとに 3D 位置を復元し、全視点投影で色を統合。
-   - 既定は `TEXTURE_DEVICE=cuda`。CUDA が使えない場合は CPU にフォールバック
+4. UVチャート（連結面）ごとに最適視点を選定。
+   - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
+   - チャート単位で primary 視点を貼り付け
+   - 未充填テクセルは次点視点を使って二次候補再探索
 5. UV seam 周辺を反復補間して隙間埋め。
 6. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
 7. OBJ/MTL を生成。
 
 ## アルゴリズム要点
 
-- 視点重み:
-  - `normal・view_dir` の余弦に指数をかけて重み付け
-  - 距離減衰 (`dist_pow`) を適用
-- ブレンド:
-  - `weighted` (加重平均)
-  - `max` (winner-takes-all)
+- 視点選定:
+  - `normal・view_dir` の余弦に指数 (`TEXTURE_ANGLE_EXP`) を適用
+  - 距離減衰 (`TEXTURE_DIST_POW`) を適用
+  - 可視性はビューごとの深度ラスタライズで判定
+- 貼り付け:
+  - UVチャート単位で最適視点を1つ選ぶ
+  - 欠損は二次候補で再探索してから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
 
@@ -55,11 +58,9 @@
 
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
-| `TEXTURE_SIZE` | `2048` | 最終テクスチャ解像度 |
-| `TEXTURE_DEVICE` | `cuda` | 投影バックエンド (`cuda` / `auto` / `cpu`) |
-| `TEXTURE_GPU_CHUNK` | `750000` | CUDA投影時のテクセルチャンクサイズ |
+| `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下は `round(sqrt(video_width * video_height))` の正方形を自動適用 |
+| `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行のチャート選定処理は CPU で実行 |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
-| `TEXTURE_BLEND_MODE` | `weighted` | `weighted` または `max` |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
 | `TEXTURE_ANGLE_EXP` | `2.0` | 角度重み指数 |
 | `TEXTURE_DIST_POW` | `1.0` | 距離減衰指数 |

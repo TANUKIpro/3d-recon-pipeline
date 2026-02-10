@@ -322,5 +322,5 @@ def build_pipeline_config(
             0.001,
             parse_float(raw.get("meshwrap_normal_radius_ratio"), float(meshwrap_defaults["meshwrap_normal_radius_ratio"])),
         ),
-        texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", 2048, env_map)),
+        texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", 0, env_map)),
     )
