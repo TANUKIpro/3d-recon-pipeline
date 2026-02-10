@@ -286,6 +286,17 @@ def _project_simple_torch_w2c(pts, w2c, K):
     return torch.stack((u, v), dim=1), d
 
 
+def _normalize_weighted_colors(
+    color_sum: np.ndarray, weight_sum: np.ndarray, use_max_blend: bool
+) -> np.ndarray:
+    """Normalize accumulated weighted colors exactly once for weighted blend."""
+    if use_max_blend:
+        return color_sum
+    has_color = weight_sum > 0
+    color_sum[has_color] /= weight_sum[has_color, None]
+    return color_sum
+
+
 def bake_texture(
     mesh_ply: str,
     poses_path: str,
@@ -563,10 +574,6 @@ def bake_texture(
                     f"Projecting textures ({vidx + 1}/{len(poses)} views)",
                 )
 
-        has_color_t = weight_sum_t > 0
-        if not use_max_blend and torch.any(has_color_t).item():
-            color_sum_t[has_color_t] = color_sum_t[has_color_t] / weight_sum_t[has_color_t].unsqueeze(1)
-
         color_sum = color_sum_t.detach().cpu().numpy().astype(np.float64, copy=False)
         weight_sum = weight_sum_t.detach().cpu().numpy().astype(np.float64, copy=False)
         del color_sum_t, weight_sum_t, pos3d_t, normals_t, K_t
@@ -647,8 +654,7 @@ def bake_texture(
 
     # Normalize
     has_color = weight_sum > 0
-    if not use_max_blend:
-        color_sum[has_color] /= weight_sum[has_color, None]
+    color_sum = _normalize_weighted_colors(color_sum, weight_sum, use_max_blend)
 
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float32)
     texture[ys, xs] = color_sum.astype(np.float32)
