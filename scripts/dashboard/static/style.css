@@ -178,45 +178,19 @@ html, body {
   transform: translateX(-50%);
 }
 
-.mesh-poisson-step {
+#mesh-pill-poisson {
   position: absolute;
   top: 40px;
-  min-width: 148px;
-  max-width: 148px;
-  justify-content: flex-start;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
-.mesh-poisson-step .stage-time {
-  display: none;
-}
-
-#mesh-pill-poisson-pre {
-  left: 38px;
-}
-
-#mesh-pill-poisson {
-  left: 200px;
-}
-
-#mesh-pill-poisson-post {
-  left: 362px;
-}
-
-#mesh-pill-poisson-downsample {
-  left: 524px;
-}
-
-#mesh-branch-slot.poisson-inactive .mesh-poisson-step {
+#mesh-branch-slot.poisson-inactive #mesh-pill-poisson {
   opacity: 0.52;
 }
 
 #mesh-branch-slot.poisson-inactive .stage-connector-branch {
   opacity: 0.72;
-}
-
-#mesh-pill-poisson {
-  position: absolute;
-  transform: none;
 }
 
 .mesh-method-pill:not(.active) {
@@ -245,27 +219,12 @@ html, body {
 
 #mesh-connector-poisson-left {
   left: 0;
-  width: 32px;
-}
-
-#mesh-connector-poisson-pre-main {
-  left: 186px;
-  width: 14px;
-}
-
-#mesh-connector-poisson-main-post {
-  left: 348px;
-  width: 14px;
-}
-
-#mesh-connector-poisson-post-down {
-  left: 510px;
-  width: 14px;
+  width: calc(50% - 92px);
 }
 
 #mesh-connector-poisson-right {
-  left: 672px;
-  width: 32px;
+  right: 0;
+  width: calc(50% - 92px);
 }
 
 /* ── DiffCD Path Connectors ─────────────────────────────── */

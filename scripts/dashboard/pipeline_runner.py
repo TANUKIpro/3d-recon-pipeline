@@ -69,36 +69,7 @@ def _mesh_method_key(value: str | None) -> str:
 def _mesh_method_label(method: str) -> str:
     if method == "diffcd":
         return "Learning Mesh (DiffCD)"
-    return "Classical Mesh (Pre -> Main -> Post -> Downsample)"
-
-
-def _preview_rel_path(output_dir: str, path: str | Path) -> str:
-    out = Path(output_dir).resolve()
-    target = Path(path).resolve()
-    try:
-        rel = target.relative_to(out)
-        return str(rel).replace("\\", "/")
-    except Exception:
-        return Path(path).name
-
-
-async def _broadcast_classical_preview_update(
-    session: PipelineSession,
-    output_dir: str,
-    *,
-    step: str,
-    file_path: str | Path,
-    detail: str,
-) -> None:
-    await broadcast(session, {
-        "type": "stage_preview_update",
-        "stage": int(PipelineStage.DIFFCD_MESH),
-        "mesh_method": "poisson",
-        "step": step,
-        "file": _preview_rel_path(output_dir, file_path),
-        "detail": detail,
-        "overall_progress": session.overall_progress(),
-    })
+    return "Classical Mesh"
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
@@ -402,129 +373,14 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     label=mesh_label,
                 )
             else:
-                preprocess_ply = Path(output_dir) / "object_mesh_input.ply"
-                raw_mesh_ply = Path(output_dir) / "object_mesh_raw.ply"
-                post_mesh_ply = Path(output_dir) / "object_mesh_postprocessed.ply"
-                final_mesh_ply = Path(output_dir) / "object_mesh.ply"
-
-                # Single stage lifecycle for the entire Classical Mesh flow
-                session.stage_start(PipelineStage.DIFFCD_MESH)
-                await broadcast(session, {
-                    "type": "stage_start",
-                    "stage": int(PipelineStage.DIFFCD_MESH),
-                    "label": mesh_label,
-                })
-
-                # Sub-phase 1: Preprocess (0-24%)
-                await _run_sub_stage(
+                await _run_stage(
                     session,
                     PipelineStage.DIFFCD_MESH,
-                    _stage_classical_preprocess,
+                    _stage_classical_mesh,
                     session.denoised_ply,
                     output_dir,
-                    label="Classical/Preprocess",
-                    progress_start=0.0,
-                    progress_end=24.0,
+                    label=mesh_label,
                 )
-                _check_cancelled(session)
-                _require_file(str(preprocess_ply), "Classical preprocessed point cloud")
-                await _broadcast_classical_preview_update(
-                    session,
-                    output_dir,
-                    step="preprocess",
-                    file_path=preprocess_ply,
-                    detail="Classical preprocess output ready",
-                )
-                await _wait_for_next_stage_confirmation(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    PipelineStage.DIFFCD_MESH,
-                    "Classical preprocess complete. Continue to Main Poisson?",
-                )
-
-                # Sub-phase 2: Main Poisson (24-72%)
-                await _run_sub_stage(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    _stage_classical_main,
-                    str(preprocess_ply),
-                    output_dir,
-                    label="Classical/Main",
-                    progress_start=24.0,
-                    progress_end=72.0,
-                )
-                _check_cancelled(session)
-                _require_file(str(raw_mesh_ply), "Classical raw mesh")
-                await _broadcast_classical_preview_update(
-                    session,
-                    output_dir,
-                    step="main",
-                    file_path=raw_mesh_ply,
-                    detail="Classical main Poisson output ready",
-                )
-                await _wait_for_next_stage_confirmation(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    PipelineStage.DIFFCD_MESH,
-                    "Classical main Poisson complete. Continue to Postprocess?",
-                )
-
-                # Sub-phase 3: Postprocess (72-92%)
-                await _run_sub_stage(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    _stage_classical_postprocess,
-                    str(raw_mesh_ply),
-                    output_dir,
-                    label="Classical/Postprocess",
-                    progress_start=72.0,
-                    progress_end=92.0,
-                )
-                _check_cancelled(session)
-                _require_file(str(post_mesh_ply), "Classical postprocessed mesh")
-                await _broadcast_classical_preview_update(
-                    session,
-                    output_dir,
-                    step="postprocess",
-                    file_path=post_mesh_ply,
-                    detail="Classical postprocess output ready",
-                )
-                await _wait_for_next_stage_confirmation(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    PipelineStage.DIFFCD_MESH,
-                    "Classical postprocess complete. Continue to Mesh Downsample?",
-                )
-
-                # Sub-phase 4: Downsample (92-100%)
-                await _run_sub_stage(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    _stage_classical_downsample,
-                    str(post_mesh_ply),
-                    output_dir,
-                    label="Classical/Downsample",
-                    progress_start=92.0,
-                    progress_end=100.0,
-                )
-                _check_cancelled(session)
-                _require_file(str(final_mesh_ply), "Classical final mesh")
-                await _broadcast_classical_preview_update(
-                    session,
-                    output_dir,
-                    step="downsample",
-                    file_path=final_mesh_ply,
-                    detail="Classical downsample output ready",
-                )
-
-                # Complete the stage once all sub-phases are done
-                session.stage_complete(PipelineStage.DIFFCD_MESH)
-                await broadcast(session, {
-                    "type": "stage_complete",
-                    "stage": int(PipelineStage.DIFFCD_MESH),
-                    "elapsed": session.stages[int(PipelineStage.DIFFCD_MESH)].elapsed,
-                    "overall_progress": session.overall_progress(),
-                })
 
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
@@ -775,77 +631,6 @@ async def _run_stage(
     })
 
 
-async def _run_sub_stage(
-    session: PipelineSession,
-    stage: PipelineStage,
-    fn,
-    *args,
-    label: str | None = None,
-    progress_start: float = 0.0,
-    progress_end: float = 100.0,
-) -> None:
-    """Run a sub-phase within an already-started stage.
-
-    Unlike ``_run_stage``, this does NOT send ``stage_start`` / ``stage_complete``.
-    It maps the sub-phase's internal progress (0-100%) into the caller-specified
-    range (``progress_start`` .. ``progress_end``) of the overall stage, and
-    sends ``stage_progress`` messages with the mapped value.
-
-    On error it marks the stage as failed and broadcasts ``stage_complete`` with
-    the error (so the frontend learns of the failure), then re-raises.
-    """
-    detail_prefix = f"{label}: " if label else ""
-    await _broadcast_stage_progress(
-        session, stage,
-        progress=progress_start,
-        detail=f"{detail_prefix}Starting",
-    )
-    loop = asyncio.get_running_loop()
-    span = max(0.0, progress_end - progress_start)
-
-    def _progress_cb(progress: float, detail: str | None = None) -> None:
-        clamped = max(0.0, min(100.0, float(progress)))
-        mapped = progress_start + (clamped / 100.0) * span
-
-        def _push() -> None:
-            session.stage_progress(stage, progress=mapped, detail=detail)
-            asyncio.create_task(
-                broadcast(session, {
-                    "type": "stage_progress",
-                    "stage": int(stage),
-                    "progress": round(session.stages[int(stage)].progress, 1),
-                    "detail": session.stages[int(stage)].detail,
-                    "overall_progress": session.overall_progress(),
-                })
-            )
-
-        loop.call_soon_threadsafe(_push)
-
-    def _run_with_stage_scope() -> None:
-        with stage_log_scope(int(stage)):
-            fn(*args, progress_cb=_progress_cb)
-
-    try:
-        await asyncio.to_thread(_run_with_stage_scope)
-    except Exception as e:
-        session.stage_failed(stage, str(e))
-        await broadcast(session, {
-            "type": "stage_complete",
-            "stage": int(stage),
-            "elapsed": session.stages[int(stage)].elapsed,
-            "error": str(e),
-            "overall_progress": session.overall_progress(),
-        })
-        raise
-
-    # Update progress to the end of this sub-phase range (don't mark stage complete)
-    await _broadcast_stage_progress(
-        session, stage,
-        progress=progress_end,
-        detail=f"{detail_prefix}Done",
-    )
-
-
 # ── Stage wrappers (call existing functions) ──────────────────────
 
 def _stage_extract_frames(
@@ -936,30 +721,6 @@ def _stage_classical_mesh(denoised_ply: str, output_dir: str, progress_cb=None) 
     from stage_classical_mesh import run_classical_mesh
 
     run_classical_mesh(denoised_ply, output_dir, progress_cb=progress_cb)
-
-
-def _stage_classical_preprocess(denoised_ply: str, output_dir: str, progress_cb=None) -> None:
-    from stage_classical_mesh import run_classical_preprocess
-
-    run_classical_preprocess(denoised_ply, output_dir, progress_cb=progress_cb)
-
-
-def _stage_classical_main(preprocess_ply: str, output_dir: str, progress_cb=None) -> None:
-    from stage_classical_mesh import run_classical_main
-
-    run_classical_main(preprocess_ply, output_dir, progress_cb=progress_cb)
-
-
-def _stage_classical_postprocess(raw_mesh_ply: str, output_dir: str, progress_cb=None) -> None:
-    from stage_classical_mesh import run_classical_postprocess
-
-    run_classical_postprocess(raw_mesh_ply, output_dir, progress_cb=progress_cb)
-
-
-def _stage_classical_downsample(post_mesh_ply: str, output_dir: str, progress_cb=None) -> None:
-    from stage_classical_mesh import run_classical_downsample
-
-    run_classical_downsample(post_mesh_ply, output_dir, progress_cb=progress_cb)
 
 
 def _stage_mesh_wrap(
