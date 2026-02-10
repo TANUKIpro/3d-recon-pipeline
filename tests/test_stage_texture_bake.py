@@ -2,7 +2,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from scripts.stage_texture_bake import _resolve_texture_device
+import numpy as np
+
+from scripts.stage_texture_bake import _normalize_weighted_colors, _resolve_texture_device
 
 
 class _FakeCuda:
@@ -68,3 +70,21 @@ class ResolveTextureDeviceTests(unittest.TestCase):
         with patch.dict(os.environ, {"TEXTURE_DEVICE": "gpu"}, clear=False):
             with patch("scripts.stage_texture_bake.torch", _FakeTorch()):
                 self.assertEqual(_resolve_texture_device(), "cuda")
+
+
+class NormalizeWeightedColorsTests(unittest.TestCase):
+    def test_weighted_blend_normalizes_once(self) -> None:
+        # Simulate post-accumulation weighted sums from one texel pass.
+        color_sum = np.array([[0.4, 0.2, 0.6], [0.9, 0.3, 0.6]], dtype=np.float64)
+        weight_sum = np.array([0.5, 2.0], dtype=np.float64)
+
+        normalized = _normalize_weighted_colors(color_sum.copy(), weight_sum, use_max_blend=False)
+        expected = np.array([[0.8, 0.4, 1.2], [0.45, 0.15, 0.3]], dtype=np.float64)
+        np.testing.assert_allclose(normalized, expected, rtol=0.0, atol=1e-12)
+
+    def test_max_blend_leaves_values_unchanged(self) -> None:
+        color_sum = np.array([[0.1, 0.2, 0.3]], dtype=np.float64)
+        weight_sum = np.array([3.0], dtype=np.float64)
+
+        normalized = _normalize_weighted_colors(color_sum.copy(), weight_sum, use_max_blend=True)
+        np.testing.assert_allclose(normalized, color_sum, rtol=0.0, atol=0.0)
