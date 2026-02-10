@@ -621,13 +621,21 @@ function bindMeshMethodPills() {
   });
 
   const choosePoisson = (event, step = null) => {
+    const normalizedStep = normalizePoissonStep(step);
     if (isPipelineRunning()) {
-      event.preventDefault();
+      // Keep mesh method locked while running, but allow switching among
+      // Classical sub-step previews when Poisson is already active.
+      if (_meshMethod !== 'poisson' || !normalizedStep) {
+        event.preventDefault();
+        return;
+      }
+      stageCtrl.activateStage(5);
+      void previewPoissonStep(normalizedStep, { silentMissing: true });
       return;
     }
+
     applyMeshMethod('poisson');
     stageCtrl.activateStage(5);
-    const normalizedStep = normalizePoissonStep(step);
     if (normalizedStep) {
       void previewPoissonStep(normalizedStep, { silentMissing: true });
     }
