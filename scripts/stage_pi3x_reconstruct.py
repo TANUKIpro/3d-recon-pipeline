@@ -43,6 +43,7 @@ _ALIGN_ORIENTATION_SCORE_EPS = 1e-4
 _TARGET_PLANE_NORMAL = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
 ProgressCallback = Callable[[float, str | None], None]
+CancelCallback = Callable[[], None]
 
 
 def _emit_progress(
@@ -53,6 +54,11 @@ def _emit_progress(
     if progress_cb is None:
         return
     progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _check_cancel(cancel_cb: CancelCallback | None) -> None:
+    if cancel_cb is not None:
+        cancel_cb()
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -241,6 +247,7 @@ def _run_inference_chunked(
     progress_cb: ProgressCallback | None = None,
     progress_start: float = 35.0,
     progress_end: float = 60.0,
+    cancel_cb: CancelCallback | None = None,
 ) -> dict:
     """Fallback: process frames in overlapping windows when a single pass OOMs.
 
@@ -257,6 +264,7 @@ def _run_inference_chunked(
     total_chunks = max(1, len(starts))
 
     for chunk_idx, start in enumerate(starts):
+        _check_cancel(cancel_cb)
         end = min(start + chunk_size, N)
         if end - start < 2:
             break
@@ -723,6 +731,7 @@ def run_pi3x_inference(
     edge_rtol: float | None = None,
     align_camera_plane: bool | None = None,
     progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
 ) -> tuple[Path, Path, Path]:
     """Run Pi3X inference and save full (conf+edge filtered) point cloud.
 
@@ -760,6 +769,7 @@ def run_pi3x_inference(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 3.0, "Scanning input frames")
 
     # --- Count frames and resolve requested frame target ---
@@ -825,6 +835,7 @@ def run_pi3x_inference(
     retry_count = 0
 
     while True:
+        _check_cancel(cancel_cb)
         selected_files, selected_source_indices = _pick_frame_subset(
             frame_files, current_target_frames
         )
@@ -928,6 +939,7 @@ def run_pi3x_inference(
                         progress_cb=progress_cb,
                         progress_start=35.0,
                         progress_end=60.0,
+                        cancel_cb=cancel_cb,
                     )
                 except torch.cuda.OutOfMemoryError as e:
                     del imgs
@@ -977,6 +989,7 @@ def run_pi3x_inference(
         print("Camera-plane alignment disabled (ALIGN_CAMERA_PLANE=0).")
 
     # --- Confidence + edge filtering ---
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 70.0, "Applying confidence and edge filters")
     # Filter 1: Confidence
     conf_mask = torch.sigmoid(results["conf"][..., 0]) > conf_threshold
@@ -994,6 +1007,7 @@ def run_pi3x_inference(
     print(f"  After conf+edge:  {conf_edge_count:>10,} ({100*conf_edge_count/total:.1f}%)")
 
     # --- Save full (conf+edge filtered) point cloud ---
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 80.0, "Saving point cloud")
     ply_full_path = output_path / "object_full.ply"
     if conf_edge_count > 0:
@@ -1007,6 +1021,7 @@ def run_pi3x_inference(
         print("Warning: No points after conf+edge filtering.")
 
     # --- Save camera poses ---
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 90.0, "Saving camera poses")
     poses = results["camera_poses"][0].cpu().numpy()
     poses_path = output_path / "camera_poses.json"
@@ -1025,6 +1040,7 @@ def run_pi3x_inference(
     print(f"Saved camera poses: {poses_path}")
 
     # --- Cache intermediate data for apply_sam2_masks() ---
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 96.0, "Saving Pi3X cache")
     cache_path = output_path / "pi3x_cache.npz"
     np.savez_compressed(
@@ -1053,6 +1069,7 @@ def apply_sam2_masks(
     mask_dir: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
 ) -> Path:
     """Apply SAM2 masks to cached Pi3X results and save filtered point cloud.
 
@@ -1068,6 +1085,7 @@ def apply_sam2_masks(
 
     output_path = Path(output_dir)
     mask_dir = Path(mask_dir)
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 5.0, "Loading Pi3X cache")
 
     # Load cache
@@ -1101,6 +1119,7 @@ def apply_sam2_masks(
     missing_masks = 0
     emit_every = max(1, N // 40)
     for i, frame_idx in enumerate(frame_indices):
+        _check_cancel(cancel_cb)
         mask_path = mask_dir / f"{int(frame_idx):05d}.png"
         if not mask_path.exists() and 0 <= int(frame_idx) < len(mask_files):
             # Backward-compat fallback: treat as positional index.
@@ -1131,6 +1150,7 @@ def apply_sam2_masks(
     sam2_mask = np.stack(sam2_masks)
     final_mask = conf_edge_mask & sam2_mask
     final_count = final_mask.sum()
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 78.0, "Applying SAM2 mask filter")
 
     total = N * H * W
@@ -1172,6 +1192,7 @@ def run_pi3x(
     edge_rtol: float | None = None,
     align_camera_plane: bool | None = None,
     progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
 ) -> tuple[Path, Path]:
     """Run Pi3X inference and save filtered point cloud + camera poses.
 
@@ -1200,8 +1221,15 @@ def run_pi3x(
         edge_rtol=edge_rtol,
         align_camera_plane=align_camera_plane,
         progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
     )
-    ply_path = apply_sam2_masks(cache_path, mask_dir, output_dir, progress_cb=progress_cb)
+    ply_path = apply_sam2_masks(
+        cache_path,
+        mask_dir,
+        output_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
     return ply_path, poses_path
 
 

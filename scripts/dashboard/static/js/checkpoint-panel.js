@@ -73,6 +73,61 @@ const CHECKPOINT_TEMPLATES = {
   ],
 };
 
+const CHECKPOINT_IDS = {
+  1: [
+    's1.inspect',
+    's1.extract',
+    's1.finalize',
+  ],
+  2: [
+    's2.load_model',
+    's2.infer',
+    's2.filter',
+    's2.save_outputs',
+    's2.save_cache',
+  ],
+  3: [
+    's3.initialize',
+    's3.interact',
+    's3.propagate',
+    's3.verify',
+    's3.apply',
+  ],
+  4: [
+    's4.load',
+    's4.denoise',
+    's4.save',
+  ],
+  5: {
+    poisson: [
+      's5.poisson.preprocess',
+      's5.poisson.reconstruct',
+      's5.poisson.postprocess',
+      's5.poisson.downsample',
+    ],
+    diffcd: [
+      's5.diffcd.prepare',
+      's5.diffcd.fit',
+      's5.diffcd.collect',
+      's5.diffcd.smooth',
+    ],
+  },
+  6: [
+    's6.load',
+    's6.wrap',
+    's6.adjust',
+    's6.save',
+  ],
+  7: [
+    's7.load',
+    's7.intrinsics',
+    's7.uv',
+    's7.score',
+    's7.fill',
+    's7.export',
+  ],
+};
+
 const DETAIL_MATCHERS = {
   1: [
     { re: /inspect|metadata/i, idx: 0 },
@@ -144,6 +199,28 @@ function normalizeMeshMethod(method) {
   return String(method || '').trim().toLowerCase() === 'diffcd' ? 'diffcd' : 'poisson';
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isTransitionConfirmationDetail(detail, stage) {
+  const text = String(detail || '').trim();
+  if (!text) return false;
+
+  if (/continue to|confirm to continue/i.test(text)) {
+    return true;
+  }
+
+  const stageNum = clampStage(stage);
+  if (new RegExp(`\\bstage\\s+${stageNum}\\s+(?:step\\s+)?complete\\b`, 'i').test(text)) {
+    return true;
+  }
+
+  const stageLabel = STAGE_LABELS[stageNum];
+  if (!stageLabel) return false;
+  return new RegExp(`\\b${escapeRegExp(stageLabel)}\\s+complete\\b`, 'i').test(text);
+}
+
 function stateToken(state) {
   if (state === 'running') return '[o]';
   if (state === 'complete') return '[x]';
@@ -184,6 +261,7 @@ export class CheckpointPanel {
       this._stageInfo[stage] = {
         status: stage < resume ? 'complete' : 'pending',
         detail: null,
+        checkpointId: null,
       };
       this._lastRunningIndex[stage] = 0;
     }
@@ -198,6 +276,7 @@ export class CheckpointPanel {
       this._stageInfo[stage] = {
         status: normalizeStatus(info.status),
         detail: typeof info.detail === 'string' ? info.detail : null,
+        checkpointId: typeof info.checkpoint_id === 'string' ? info.checkpoint_id : null,
       };
     }
     this._render();
@@ -205,31 +284,39 @@ export class CheckpointPanel {
 
   onStageStart(stage) {
     const s = clampStage(stage);
+    const ids = this._idTemplateFor(s);
     this._stageInfo[s] = {
       status: 'running',
       detail: 'Starting',
+      checkpointId: ids.length > 0 ? ids[0] : null,
     };
     this._renderStageIfActive(s);
   }
 
-  onStageProgress(stage, detail = null, statusHint = null) {
+  onStageProgress(stage, detail = null, statusHint = null, checkpointId = null) {
     const s = clampStage(stage);
-    const current = this._stageInfo[s] || { status: 'pending', detail: null };
+    const current = this._stageInfo[s] || { status: 'pending', detail: null, checkpointId: null };
     const nextStatus = normalizeStatus(statusHint || current.status || 'running');
     const status = nextStatus === 'pending' ? 'running' : nextStatus;
     this._stageInfo[s] = {
       status,
       detail: typeof detail === 'string' ? detail : current.detail,
+      checkpointId: typeof checkpointId === 'string' && checkpointId
+        ? checkpointId
+        : current.checkpointId,
     };
     this._renderStageIfActive(s);
   }
 
-  onStageInteractive(stage, detail = null) {
+  onStageInteractive(stage, detail = null, checkpointId = null) {
     const s = clampStage(stage);
-    const current = this._stageInfo[s] || { status: 'pending', detail: null };
+    const current = this._stageInfo[s] || { status: 'pending', detail: null, checkpointId: null };
     this._stageInfo[s] = {
       status: 'interactive',
       detail: typeof detail === 'string' ? detail : current.detail,
+      checkpointId: typeof checkpointId === 'string' && checkpointId
+        ? checkpointId
+        : current.checkpointId,
     };
     this._renderStageIfActive(s);
   }
@@ -243,12 +330,15 @@ export class CheckpointPanel {
     this._renderStageIfActive(s);
   }
 
-  onStageFailed(stage, error = null) {
+  onStageFailed(stage, error = null, checkpointId = null) {
     const s = clampStage(stage);
-    const current = this._stageInfo[s] || { status: 'pending', detail: null };
+    const current = this._stageInfo[s] || { status: 'pending', detail: null, checkpointId: null };
     this._stageInfo[s] = {
       status: 'failed',
       detail: typeof error === 'string' && error ? error : current.detail,
+      checkpointId: typeof checkpointId === 'string' && checkpointId
+        ? checkpointId
+        : current.checkpointId,
     };
     this._renderStageIfActive(s);
   }
@@ -265,6 +355,13 @@ export class CheckpointPanel {
     return CHECKPOINT_TEMPLATES[stage] || [];
   }
 
+  _idTemplateFor(stage) {
+    if (stage === 5) {
+      return CHECKPOINT_IDS[5][this._meshMethod] || CHECKPOINT_IDS[5].poisson;
+    }
+    return CHECKPOINT_IDS[stage] || [];
+  }
+
   _matchersFor(stage) {
     if (stage === 5) {
       return DETAIL_MATCHERS[`5:${this._meshMethod}`] || [];
@@ -272,9 +369,17 @@ export class CheckpointPanel {
     return DETAIL_MATCHERS[stage] || [];
   }
 
-  _resolveCurrentIndex(stage, detail, checkpointCount) {
+  _resolveCurrentIndex(stage, detail, checkpointCount, checkpointId = null) {
     const text = String(detail || '').trim();
     const maxIndex = Math.max(0, checkpointCount - 1);
+    const ids = this._idTemplateFor(stage);
+
+    if (typeof checkpointId === 'string' && checkpointId) {
+      const idx = ids.indexOf(checkpointId);
+      if (idx >= 0) {
+        return Math.max(0, Math.min(maxIndex, idx));
+      }
+    }
 
     if (text) {
       for (const matcher of this._matchersFor(stage)) {
@@ -298,6 +403,7 @@ export class CheckpointPanel {
     const states = new Array(checkpointCount).fill('pending');
     const status = normalizeStatus(info?.status);
     const detail = info?.detail;
+    const checkpointId = info?.checkpointId;
 
     if (checkpointCount === 0) return states;
 
@@ -317,8 +423,13 @@ export class CheckpointPanel {
       this._lastRunningIndex[stage] = checkpointCount - 1;
       return states;
     }
+    if (status === 'interactive' && isTransitionConfirmationDetail(detail, stage)) {
+      states.fill('complete');
+      this._lastRunningIndex[stage] = checkpointCount - 1;
+      return states;
+    }
 
-    const current = this._resolveCurrentIndex(stage, detail, checkpointCount);
+    const current = this._resolveCurrentIndex(stage, detail, checkpointCount, checkpointId);
     for (let i = 0; i < current; i++) {
       states[i] = 'complete';
     }

@@ -273,7 +273,7 @@ ws.on('stage_complete', async (msg) => {
   pipelineUI.stageComplete(msg.stage, msg.elapsed);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (msg.error) {
-    checkpoints.onStageFailed(msg.stage, msg.error);
+    checkpoints.onStageFailed(msg.stage, msg.error, msg.checkpoint_id);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
     if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
@@ -313,7 +313,7 @@ ws.on('stage_complete', async (msg) => {
 });
 
 ws.on('stage_progress', (msg) => {
-  checkpoints.onStageProgress(msg.stage, msg.detail, 'running');
+  checkpoints.onStageProgress(msg.stage, msg.detail, 'running', msg.checkpoint_id);
   pipelineUI.stageProgress(msg.stage, msg.progress, msg.detail);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
@@ -357,7 +357,8 @@ ws.on('next_stage_confirmation_required', (msg) => {
   const fromStage = Number(msg.from_stage);
   const toStage = Number(msg.to_stage);
   if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
-    checkpoints.onStageInteractive(fromStage, String(msg.message || 'Waiting for next-stage confirmation'));
+    // Keep checkpoint detail machine-readable for deterministic completion mapping.
+    checkpoints.onStageInteractive(fromStage, 'Waiting for next-stage confirmation');
     if (_waitingConfirmationStage !== null && _waitingConfirmationStage !== fromStage) {
       setTaskConfirmState(
         _waitingConfirmationStage,
@@ -435,10 +436,11 @@ ws.on('pipeline_error', (msg) => {
     _waitingConfirmationToStage = null;
   }
   setTaskConfirmVisibleStage(stageCtrl.activeStage);
-  const cancelled = /cancel/i.test(String(msg.error || ''));
+  const cancelled = String(msg.reason_code || '').startsWith('cancelled')
+    || /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
   if (msg.stage >= 1 && msg.stage <= 7) {
-    checkpoints.onStageFailed(msg.stage, msg.error);
+    checkpoints.onStageFailed(msg.stage, msg.error, msg.checkpoint_id);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
   }

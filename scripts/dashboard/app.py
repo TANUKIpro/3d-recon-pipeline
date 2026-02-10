@@ -660,13 +660,16 @@ async def pipeline_cancel():
     if not session.running:
         return JSONResponse({"error": "No pipeline running"}, status_code=409)
 
-    session.cancelled = True
+    session.request_cancel(force=True)
+    terminated = await asyncio.to_thread(session.terminate_active_processes, 1.0)
     stage_num = int(session.current_stage)
+    checkpoint_id = session.current_checkpoint_id
     if int(PipelineStage.EXTRACT_FRAMES) <= stage_num <= int(PipelineStage.TEXTURE_BAKE):
         stage = PipelineStage(stage_num)
         session.stage_progress(
             stage,
-            detail="Cancellation requested. Waiting for a safe stop point.",
+            detail="Cancellation requested. Stopping immediately.",
+            checkpoint_id=checkpoint_id,
         )
         await broadcast(
             session,
@@ -675,6 +678,7 @@ async def pipeline_cancel():
                 "stage": stage_num,
                 "progress": round(session.stages[stage_num].progress, 1),
                 "detail": session.stages[stage_num].detail,
+                "checkpoint_id": session.stages[stage_num].checkpoint_id,
                 "overall_progress": session.overall_progress(),
             },
         )
@@ -683,7 +687,16 @@ async def pipeline_cancel():
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
     session.next_stage_confirm_event.set()
-    return JSONResponse({"status": "cancelling", "stage": stage_num})
+    return JSONResponse(
+        {
+            "status": "cancelling",
+            "mode": "force",
+            "stage": stage_num,
+            "checkpoint_id": checkpoint_id,
+            "terminated_processes": terminated,
+            "cleanup_started": True,
+        }
+    )
 
 
 # ── Global stage-transition approval API ───────────────────────────

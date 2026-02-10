@@ -9,9 +9,11 @@ Based on im2pc/colab_diffcd.md and tmp/DiffCD.ipynb patterns.
 import math
 import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from collections import deque
 from pathlib import Path
 from typing import Callable
@@ -27,6 +29,8 @@ from vram_utils import (
 )
 
 ProgressCallback = Callable[[float, str | None], None]
+CancelCallback = Callable[[], None]
+ProcessCallback = Callable[[subprocess.Popen], None]
 _TQDM_PERCENT_RE = re.compile(r"(\d{1,3})%\|")
 _ITER_FRACTION_RE = re.compile(
     r"(?:batch|iter|step|epoch)[^\d]{0,16}(\d+)\s*/\s*(\d+)",
@@ -115,6 +119,36 @@ def _emit_progress(
     if progress_cb is None:
         return
     progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _check_cancel(cancel_cb: CancelCallback | None) -> None:
+    if cancel_cb is not None:
+        cancel_cb()
+
+
+def _terminate_process_group(process: subprocess.Popen, grace_seconds: float = 1.0) -> None:
+    if process.poll() is not None:
+        return
+    pid = int(process.pid)
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except Exception:
+        try:
+            process.terminate()
+        except Exception:
+            pass
+    try:
+        process.wait(timeout=max(0.1, grace_seconds))
+        return
+    except Exception:
+        pass
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
 
 
 def _load_mesh(mesh_path: str | Path) -> trimesh.Trimesh:
@@ -233,6 +267,7 @@ def _downsample_to_npy(
     ply_path: str,
     npy_path: str,
     target_points: int = 1_000_000,
+    cancel_cb: CancelCallback | None = None,
 ) -> tuple[Path, int]:
     """Convert PLY to downsampled NPY (xyz float32) for DiffCD.
 
@@ -246,11 +281,13 @@ def _downsample_to_npy(
     """
     import open3d as o3d
 
+    _check_cancel(cancel_cb)
     pcd = o3d.io.read_point_cloud(str(ply_path))
     n_original = len(pcd.points)
     print(f"Original: {n_original:,} points")
 
     if n_original > target_points:
+        _check_cancel(cancel_cb)
         bbox = pcd.get_axis_aligned_bounding_box()
         bbox_extent = bbox.get_extent()
         volume = np.prod(bbox_extent)
@@ -260,6 +297,7 @@ def _downsample_to_npy(
 
         # Iterative adjustment to get within +-10% of target.
         for _ in range(10):
+            _check_cancel(cancel_cb)
             n = len(pcd_down.points)
             if target_points * 0.9 <= n <= target_points * 1.1:
                 break
@@ -275,6 +313,7 @@ def _downsample_to_npy(
         print(f"No downsampling needed: {len(pcd_down.points):,} points")
 
     points = np.asarray(pcd_down.points, dtype=np.float32)
+    _check_cancel(cancel_cb)
     np.save(str(npy_path), points)
     print(f"Saved: {npy_path} ({points.shape})")
     return Path(npy_path), int(points.shape[0])
@@ -433,6 +472,9 @@ def _run_diffcd_subprocess(
     progress_cb: ProgressCallback | None = None,
     attempt_idx: int = 1,
     total_attempts: int = 1,
+    cancel_cb: CancelCallback | None = None,
+    register_process: ProcessCallback | None = None,
+    unregister_process: ProcessCallback | None = None,
 ) -> tuple[int, bool, list[str]]:
     process = subprocess.Popen(
         cmd,
@@ -442,44 +484,63 @@ def _run_diffcd_subprocess(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
+    if register_process is not None:
+        register_process(process)
 
     last_reported = 20.0
     saw_oom = False
     tail_lines: deque[str] = deque(maxlen=80)
 
-    if process.stdout is not None:
-        for line in process.stdout:
-            print(line, end="")
-            tail_lines.append(line.rstrip())
-            if _looks_like_oom(line):
-                saw_oom = True
+    try:
+        if process.stdout is not None:
+            while True:
+                _check_cancel(cancel_cb)
+                line = process.stdout.readline()
+                if not line:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.05)
+                    continue
+                print(line, end="")
+                tail_lines.append(line.rstrip())
+                if _looks_like_oom(line):
+                    saw_oom = True
 
-            ratio = _parse_progress_ratio(line)
-            if ratio is None:
-                continue
+                ratio = _parse_progress_ratio(line)
+                if ratio is None:
+                    continue
 
-            stage_pct = 20.0 + ratio * 65.0
-            if stage_pct - last_reported >= 0.5:
-                suffix = (
-                    f", attempt {attempt_idx}/{total_attempts}"
-                    if total_attempts > 1
-                    else ""
-                )
-                _emit_progress(
-                    progress_cb,
-                    stage_pct,
-                    f"DiffCD fitting ({int(ratio * 100)}%{suffix})",
-                )
-                last_reported = stage_pct
-
-    return process.wait(), saw_oom, list(tail_lines)
+                stage_pct = 20.0 + ratio * 65.0
+                if stage_pct - last_reported >= 0.5:
+                    suffix = (
+                        f", attempt {attempt_idx}/{total_attempts}"
+                        if total_attempts > 1
+                        else ""
+                    )
+                    _emit_progress(
+                        progress_cb,
+                        stage_pct,
+                        f"DiffCD fitting ({int(ratio * 100)}%{suffix})",
+                    )
+                    last_reported = stage_pct
+        return process.wait(), saw_oom, list(tail_lines)
+    except Exception:
+        _terminate_process_group(process)
+        raise
+    finally:
+        if unregister_process is not None:
+            unregister_process(process)
 
 
 def run_diffcd(
     denoised_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
+    register_process: ProcessCallback | None = None,
+    unregister_process: ProcessCallback | None = None,
 ) -> Path:
     """Run DiffCD mesh reconstruction as a subprocess.
 
@@ -502,12 +563,14 @@ def run_diffcd(
     # Step 1: Convert PLY to NPY
     npy_path = output_path / "object_points.npy"
     print("=== DiffCD: Preparing point cloud ===")
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 5.0, "Preparing point cloud for DiffCD")
-    npy_file, n_points = _downsample_to_npy(denoised_ply, str(npy_path))
+    npy_file, n_points = _downsample_to_npy(denoised_ply, str(npy_path), cancel_cb=cancel_cb)
     _emit_progress(progress_cb, 15.0, f"Point cloud prepared ({n_points:,} points)")
 
     # Step 2: Run DiffCD as subprocess
     print("\n=== DiffCD: Running implicit surface fitting ===")
+    _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 20.0, "Running DiffCD fitting")
     prepare_for_jax()
     log_vram("before DiffCD")
@@ -542,6 +605,7 @@ def run_diffcd(
     last_error_tail: list[str] = []
     total_attempts = len(attempts)
     for i, (try_batch, try_n_batches, reason) in enumerate(attempts, start=1):
+        _check_cancel(cancel_cb)
         attempt_dir = diffcd_dir / f"run_{i:02d}_b{try_batch}_n{try_n_batches}"
         if attempt_dir.exists():
             shutil.rmtree(attempt_dir)
@@ -579,7 +643,11 @@ def run_diffcd(
             progress_cb=progress_cb,
             attempt_idx=i,
             total_attempts=total_attempts,
+            cancel_cb=cancel_cb,
+            register_process=register_process,
+            unregister_process=unregister_process,
         )
+        _check_cancel(cancel_cb)
 
         if return_code == 0:
             success_dir = attempt_dir
@@ -605,6 +673,7 @@ def run_diffcd(
         tail_preview = "\n".join(last_error_tail[-20:])
         raise RuntimeError(f"DiffCD failed after retries.\n{tail_preview}")
 
+    _check_cancel(cancel_cb)
     print(
         f"DiffCD complete (batch={batch_size}, n_batches={n_batches}, resolution={resolution})"
     )
@@ -623,6 +692,7 @@ def run_diffcd(
     if not mesh_files:
         raise FileNotFoundError(f"DiffCD output mesh not found in {success_dir}")
 
+    _check_cancel(cancel_cb)
     raw_mesh_path = mesh_files[-1]
     print(f"\nDiffCD output: {raw_mesh_path}")
 
@@ -660,6 +730,7 @@ def run_diffcd(
     print(detail)
     _emit_progress(progress_cb, 94.0, "Applying mesh smoothing")
 
+    _check_cancel(cancel_cb)
     final_path = output_path / "object_mesh.ply"
     smooth_mesh_file(
         raw_copy_path,
