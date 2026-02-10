@@ -35,6 +35,7 @@
    - Nelder-Mead で `(fx, fy, cx, cy)` 最適化
 3. `xatlas.parametrize` で UV 展開。
 4. UV テクセルごとに 3D 位置を復元し、全視点投影で色を統合。
+   - 既定は `TEXTURE_DEVICE=cuda`。CUDA が使えない場合は CPU にフォールバック
 5. UV seam 周辺を反復補間して隙間埋め。
 6. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
 7. OBJ/MTL を生成。
@@ -55,6 +56,8 @@
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
 | `TEXTURE_SIZE` | `2048` | 最終テクスチャ解像度 |
+| `TEXTURE_DEVICE` | `cuda` | 投影バックエンド (`cuda` / `auto` / `cpu`) |
+| `TEXTURE_GPU_CHUNK` | `750000` | CUDA投影時のテクセルチャンクサイズ |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
 | `TEXTURE_BLEND_MODE` | `weighted` | `weighted` または `max` |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
