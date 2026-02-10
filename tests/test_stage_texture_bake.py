@@ -4,7 +4,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from scripts.stage_texture_bake import _normalize_weighted_colors, _resolve_texture_device
+from scripts.stage_texture_bake import (
+    _build_face_charts,
+    _rank_chart_view_candidates,
+    _resolve_texture_device,
+    _resolve_texture_size,
+    _secondary_min_cos_levels,
+)
 
 
 class _FakeCuda:
@@ -72,19 +78,72 @@ class ResolveTextureDeviceTests(unittest.TestCase):
                 self.assertEqual(_resolve_texture_device(), "cuda")
 
 
-class NormalizeWeightedColorsTests(unittest.TestCase):
-    def test_weighted_blend_normalizes_once(self) -> None:
-        # Simulate post-accumulation weighted sums from one texel pass.
-        color_sum = np.array([[0.4, 0.2, 0.6], [0.9, 0.3, 0.6]], dtype=np.float64)
-        weight_sum = np.array([0.5, 2.0], dtype=np.float64)
+class BuildFaceChartsTests(unittest.TestCase):
+    def test_faces_connected_by_edge_share_chart(self) -> None:
+        faces = np.array(
+            [
+                [0, 1, 2],
+                [2, 1, 3],  # shares edge (1,2) with face 0
+                [4, 5, 6],  # separate island
+            ],
+            dtype=np.int32,
+        )
+        chart_ids, n_charts = _build_face_charts(faces)
 
-        normalized = _normalize_weighted_colors(color_sum.copy(), weight_sum, use_max_blend=False)
-        expected = np.array([[0.8, 0.4, 1.2], [0.45, 0.15, 0.3]], dtype=np.float64)
-        np.testing.assert_allclose(normalized, expected, rtol=0.0, atol=1e-12)
+        self.assertEqual(n_charts, 2)
+        self.assertEqual(int(chart_ids[0]), int(chart_ids[1]))
+        self.assertNotEqual(int(chart_ids[0]), int(chart_ids[2]))
 
-    def test_max_blend_leaves_values_unchanged(self) -> None:
-        color_sum = np.array([[0.1, 0.2, 0.3]], dtype=np.float64)
-        weight_sum = np.array([3.0], dtype=np.float64)
 
-        normalized = _normalize_weighted_colors(color_sum.copy(), weight_sum, use_max_blend=True)
-        np.testing.assert_allclose(normalized, color_sum, rtol=0.0, atol=0.0)
+class RankChartViewCandidatesTests(unittest.TestCase):
+    def test_ranking_prioritizes_coverage_then_score(self) -> None:
+        chart_candidates = [
+            [(0.40, 10.0, 0), (0.60, 1.0, 1), (0.60, 0.5, 2)],
+            [],
+        ]
+        primary, orders = _rank_chart_view_candidates(chart_candidates, n_views=4)
+
+        self.assertEqual(int(primary[0]), 1)
+        self.assertEqual(orders[0][:3], [1, 2, 0])
+        self.assertEqual(int(primary[1]), -1)
+        self.assertEqual(orders[1][:4], [0, 1, 2, 3])
+
+
+class SecondaryMinCosLevelsTests(unittest.TestCase):
+    def test_relaxed_levels_are_unique_and_strictly_lower(self) -> None:
+        levels = _secondary_min_cos_levels(0.2)
+
+        self.assertGreater(len(levels), 0)
+        self.assertEqual(levels, sorted(levels, reverse=True))
+        for level in levels:
+            self.assertLess(level, 0.2)
+        self.assertEqual(len(levels), len(set(levels)))
+
+
+class ResolveTextureSizeTests(unittest.TestCase):
+    def test_manual_size_kept(self) -> None:
+        size, is_auto = _resolve_texture_size(2048, 1920, 1080)
+        self.assertEqual(size, 2048)
+        self.assertFalse(is_auto)
+
+    def test_auto_size_from_video_pixels(self) -> None:
+        size, is_auto = _resolve_texture_size(0, 1920, 1080)
+        self.assertEqual(size, 1440)
+        self.assertTrue(is_auto)
+
+    def test_none_uses_env_auto_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            old = os.environ.pop("TEXTURE_SIZE", None)
+            try:
+                size, is_auto = _resolve_texture_size(None, 1280, 720)
+                self.assertEqual(size, 960)
+                self.assertTrue(is_auto)
+            finally:
+                if old is not None:
+                    os.environ["TEXTURE_SIZE"] = old
+
+    def test_invalid_env_value_falls_back_to_auto(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_SIZE": "invalid"}, clear=False):
+            size, is_auto = _resolve_texture_size(None, 640, 360)
+            self.assertEqual(size, 480)
+            self.assertTrue(is_auto)

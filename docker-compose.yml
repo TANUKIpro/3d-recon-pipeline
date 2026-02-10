@@ -37,7 +37,7 @@ services:
       - DIFFCD_GPU_INDEX=${DIFFCD_GPU_INDEX:-}
       - DIFFCD_XLA_MEM_FRACTION=${DIFFCD_XLA_MEM_FRACTION:-}
       - JAX_COMPILATION_CACHE_DIR=${JAX_COMPILATION_CACHE_DIR:-/root/.cache/jax_compilation_cache}
-      - TEXTURE_SIZE=${TEXTURE_SIZE:-2048}
+      - TEXTURE_SIZE=${TEXTURE_SIZE:-0}
     # stdin_open/tty removed — dashboard is non-interactive
 
 volumes:

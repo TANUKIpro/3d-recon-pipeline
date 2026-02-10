@@ -61,6 +61,19 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.denoise_radius_neighbors, 1)
         self.assertEqual(cfg.denoise_radius_radius_ratio, 0.0001)
 
+    def test_texture_size_zero_is_preserved_for_auto_mode(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "texture_size": 0,
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={"TEXTURE_SIZE": "2048"},
+        )
+
+        self.assertEqual(cfg.texture_size, 0)
+
 
 class DetectStageOutputsTests(unittest.TestCase):
     def test_stage6_requires_wrapped_mesh(self) -> None:
