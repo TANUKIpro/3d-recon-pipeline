@@ -68,10 +68,11 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         ),
     },
     6: {
-        "dirs": ("mesh_wrap", "contact_hole_repair"),
-        "files": ("object_mesh_wrapped.ply", "object_mesh_repaired.ply"),
+        "dirs": ("mesh_wrap",),
+        "files": ("object_mesh_wrapped.ply",),
     },
-    7: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    7: {"dirs": ("contact_hole_repair",), "files": ("object_mesh_repaired.ply",)},
+    8: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
 RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
@@ -80,7 +81,8 @@ RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
     4: {"dirs": (), "files": ("object.ply",)},
     5: {"dirs": (), "files": ("object_denoised.ply",)},
     6: {"dirs": (), "files": ("object_mesh.ply",)},
-    7: {"dirs": ("frames", "masks"), "files": ("camera_poses.json",)},
+    7: {"dirs": (), "files": ("object_mesh_wrapped.ply",)},
+    8: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "object_mesh_repaired.ply")},
 }
 
 PRIMARY_ARTIFACT_PATHS = (
@@ -259,15 +261,6 @@ def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
     for rel in req.get("files", ()):
         if not (out / rel).is_file():
             issues.append(f"missing file: {rel}")
-    if start_stage == int(PipelineStage.TEXTURE_BAKE):
-        if not any(
-            (out / rel).is_file()
-            for rel in ("object_mesh_repaired.ply", "object_mesh_wrapped.ply", "object_mesh.ply")
-        ):
-            issues.append(
-                "missing file: one of object_mesh_repaired.ply / "
-                "object_mesh_wrapped.ply / object_mesh.ply"
-            )
     return issues
 
 
@@ -654,6 +647,10 @@ async def pipeline_start(body: dict | None = None):
     os.environ["DIFFCD_BATCH_SIZE"] = str(cfg.diffcd_batch_size)
     os.environ["DIFFCD_N_BATCHES"] = str(cfg.diffcd_n_batches)
     os.environ["DIFFCD_RESOLUTION"] = str(cfg.diffcd_resolution)
+    os.environ["MESH_REPAIR_ENABLED"] = "1" if cfg.mesh_repair_enabled else "0"
+    os.environ["MESH_REPAIR_MAX_DIAMETER_RATIO"] = str(cfg.mesh_repair_max_diameter_ratio)
+    os.environ["MESH_REPAIR_Y_BAND_RATIO"] = str(cfg.mesh_repair_y_band_ratio)
+    os.environ["MESH_REPAIR_SMOOTH_ITERS"] = str(cfg.mesh_repair_smooth_iters)
 
     # Launch pipeline as background task
     session._task = asyncio.create_task(run_pipeline(session, sam2_service))

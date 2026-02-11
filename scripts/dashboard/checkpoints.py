@@ -233,34 +233,59 @@ _CHECKPOINTS: dict[int, Any] = {
     7: (
         _checkpoint(
             "s7.load",
+            label="Load wrapped mesh",
+            patterns=_patterns(r"contact hole repair: loading mesh"),
+        ),
+        _checkpoint(
+            "s7.find_loops",
+            label="Find and evaluate boundary loops",
+            patterns=_patterns(
+                r"contact hole repair: extracting boundary loops|"
+                r"contact hole repair: evaluating boundary loop",
+            ),
+        ),
+        _checkpoint(
+            "s7.save",
+            label="Save repaired mesh",
+            patterns=_patterns(
+                r"contact hole repair: writing repaired mesh|"
+                r"saved repaired mesh|contact hole repair: complete|"
+                r"contact hole repair: skipped",
+            ),
+            cleanup_files=("object_mesh_repaired.ply", "contact_hole_repair/object_mesh_repaired.ply"),
+        ),
+    ),
+    8: (
+        _checkpoint(
+            "s8.load",
             label="Load mesh",
             patterns=_patterns(r"loading mesh"),
         ),
         _checkpoint(
-            "s7.intrinsics",
+            "s8.intrinsics",
             label="Estimate camera intrinsics",
             patterns=_patterns(r"estimating camera intrinsics|intrinsics optimization complete|camera intrinsics estimated"),
             cleanup_files=("intrinsics.json",),
         ),
         _checkpoint(
-            "s7.uv",
+            "s8.uv",
             label="Generate UV atlas / texel mapping",
             patterns=_patterns(r"generating uv atlas|building texel mapping"),
         ),
         _checkpoint(
-            "s7.score",
+            "s8.score",
             label="Score and project views",
             patterns=_patterns(
                 r"scoring camera views|scoring views|projecting primary chart textures|applying primary views",
             ),
         ),
         _checkpoint(
-            "s7.fill",
+            "s8.fill",
             label="Secondary fill and seam padding",
             patterns=_patterns(r"secondary view search|padding uv seams|padding seams"),
         ),
         _checkpoint(
-            "s7.export",
+            "s8.export",
             label="Export textured mesh",
             patterns=_patterns(r"exporting textured mesh|texture stage complete"),
             cleanup_files=("textured_mesh.obj", "textured_mesh.mtl", "texture.png"),
@@ -285,7 +310,8 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
         ),
     },
     6: {"dirs": ("mesh_wrap",), "files": ("object_mesh_wrapped.ply",)},
-    7: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    7: {"dirs": ("contact_hole_repair",), "files": ("object_mesh_repaired.ply",)},
+    8: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
 

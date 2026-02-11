@@ -28,7 +28,7 @@
 後段利用:
 
 - Stage 4 (`denoise_point_cloud`) が `object.ply` を入力
-- Stage 7 (`texture_bake`) が `masks/` を利用
+- Stage 8 (`texture_bake`) が `masks/` を利用
 
 ## 詳細フロー
 

@@ -3,9 +3,7 @@
 ## 対象タスク
 
 - Stage 6: Mesh Wrap (Iterative Poisson shell)
-- Stage 6.5 相当: Contact Hole Repair (接地候補穴の局所補修)
 - 実装: `scripts/stage_mesh_wrap.py`
-- 実装: `scripts/stage_contact_hole_repair.py`
 
 ## 概要
 
@@ -21,17 +19,14 @@ Stage 5 のメッシュを入力に、Poisson 再構成ベースで外皮メッ�
 主出力:
 
 - `<output_dir>/object_mesh_wrapped.ply`
-- `<output_dir>/object_mesh_repaired.ply`
 
 補助出力:
 
 - `<output_dir>/mesh_wrap/object_mesh_wrapped.ply`
-- `<output_dir>/contact_hole_repair/object_mesh_repaired.ply`
 
 後段利用:
 
-- Stage 7 (`texture_bake`) が `<output_dir>/object_mesh_repaired.ply` を優先使用
-- `object_mesh_repaired.ply` が無い場合は `object_mesh_wrapped.ply` を使用
+- Stage 7 (`mesh_repair`) が `<output_dir>/object_mesh_wrapped.ply` を入力
 
 ## 詳細フロー
 
@@ -62,10 +57,6 @@ Stage 5 のメッシュを入力に、Poisson 再構成ベースで外皮メッ�
 | `MESH_WRAP_MIN_FACES` | `25000` | 目標面数の下限 |
 | `MESH_WRAP_MAX_FACES` | `120000` | 目標面数の上限 |
 | `MESH_WRAP_PRESERVE_INPUT_ON_FAILURE` | `1` | 失敗時に入力メッシュを保存して続行 |
-| `CONTACT_HOLE_REPAIR_ENABLED` | `1` | 接地候補穴補修を有効化 |
-| `CONTACT_HOLE_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
-| `CONTACT_HOLE_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域 (下端からbbox対角比) |
-| `CONTACT_HOLE_SMOOTH_ITERS` | `2` | 補修後の局所平滑反復数 |
 
 ## 補足
 

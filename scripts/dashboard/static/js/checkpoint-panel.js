@@ -6,7 +6,7 @@
  */
 
 const STAGE_MIN = 1;
-const STAGE_MAX = 7;
+const STAGE_MAX = 8;
 
 const STAGE_LABELS = {
   1: 'Extract Frames',
@@ -15,7 +15,8 @@ const STAGE_LABELS = {
   4: 'Denoise',
   5: 'Mesh Reconstruction',
   6: 'Mesh Wrap',
-  7: 'Texture Bake',
+  7: 'Mesh Repair',
+  8: 'Texture Bake',
 };
 
 const CHECKPOINT_TEMPLATES = {
@@ -64,6 +65,11 @@ const CHECKPOINT_TEMPLATES = {
     'Save wrapped mesh',
   ],
   7: [
+    'Load wrapped mesh',
+    'Find and evaluate boundary loops',
+    'Save repaired mesh',
+  ],
+  8: [
     'Load mesh',
     'Estimate camera intrinsics',
     'Generate UV atlas / texel mapping',
@@ -120,11 +126,16 @@ const CHECKPOINT_IDS = {
   ],
   7: [
     's7.load',
-    's7.intrinsics',
-    's7.uv',
-    's7.score',
-    's7.fill',
-    's7.export',
+    's7.find_loops',
+    's7.save',
+  ],
+  8: [
+    's8.load',
+    's8.intrinsics',
+    's8.uv',
+    's8.score',
+    's8.fill',
+    's8.export',
   ],
 };
 
@@ -172,6 +183,11 @@ const DETAIL_MATCHERS = {
     { re: /mesh wrap: saving wrapped mesh|mesh wrap: complete/i, idx: 3 },
   ],
   7: [
+    { re: /contact hole repair: loading mesh/i, idx: 0 },
+    { re: /contact hole repair: extracting boundary loops|contact hole repair: evaluating boundary loop/i, idx: 1 },
+    { re: /contact hole repair: writing repaired mesh|saved repaired mesh|contact hole repair: complete|contact hole repair: skipped/i, idx: 2 },
+  ],
+  8: [
     { re: /loading mesh/i, idx: 0 },
     { re: /estimating camera intrinsics|intrinsics optimization complete|camera intrinsics estimated/i, idx: 1 },
     { re: /generating uv atlas|building texel mapping/i, idx: 2 },

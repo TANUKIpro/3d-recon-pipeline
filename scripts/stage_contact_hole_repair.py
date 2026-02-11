@@ -1,4 +1,4 @@
-"""Stage 6.5: contact-region hole repair for wrapped meshes.
+"""Stage 7: mesh repair for wrapped meshes.
 
 This stage targets holes near the support/contact region (typically ground-facing
 openings) and performs conservative polygon fill on selected boundary loops.
@@ -138,14 +138,14 @@ def _resolve_params(overrides: dict | None = None) -> ContactHoleRepairParams:
         return _env_int(env_key, default)
 
     return ContactHoleRepairParams(
-        enabled=_ov_bool("enabled", "CONTACT_HOLE_REPAIR_ENABLED", _DEFAULT_ENABLED),
+        enabled=_ov_bool("enabled", "MESH_REPAIR_ENABLED", _DEFAULT_ENABLED),
         max_diameter_ratio=max(
             0.005,
             min(
                 1.50,
                 _ov_float(
                     "max_diameter_ratio",
-                    "CONTACT_HOLE_MAX_DIAMETER_RATIO",
+                    "MESH_REPAIR_MAX_DIAMETER_RATIO",
                     _DEFAULT_MAX_DIAMETER_RATIO,
                 ),
             ),
@@ -156,7 +156,7 @@ def _resolve_params(overrides: dict | None = None) -> ContactHoleRepairParams:
                 0.50,
                 _ov_float(
                     "y_band_ratio",
-                    "CONTACT_HOLE_Y_BAND_RATIO",
+                    "MESH_REPAIR_Y_BAND_RATIO",
                     _DEFAULT_Y_BAND_RATIO,
                 ),
             ),
@@ -165,7 +165,7 @@ def _resolve_params(overrides: dict | None = None) -> ContactHoleRepairParams:
             0,
             min(
                 12,
-                _ov_int("smooth_iters", "CONTACT_HOLE_SMOOTH_ITERS", _DEFAULT_SMOOTH_ITERS),
+                _ov_int("smooth_iters", "MESH_REPAIR_SMOOTH_ITERS", _DEFAULT_SMOOTH_ITERS),
             ),
         ),
         smooth_lambda=max(0.0, min(0.45, _DEFAULT_SMOOTH_LAMBDA)),
@@ -629,7 +629,7 @@ def run_contact_hole_repair(
         }
     )
 
-    print("=== Contact Hole Repair (Stage 6.5) ===")
+    print("=== Mesh Repair (Stage 7) ===")
     print(
         "Params: "
         f"enabled={params.enabled}, "
@@ -652,7 +652,7 @@ def run_contact_hole_repair(
     mesh.remove_unreferenced_vertices()
 
     if not params.enabled:
-        print("Contact hole repair disabled. Saving input mesh as repaired output.")
+        print("Mesh repair disabled. Saving input mesh as repaired output.")
         mesh.compute_vertex_normals()
         _write_mesh_safe(repaired_path, mesh)
         _write_mesh_safe(repaired_copy_path, mesh)

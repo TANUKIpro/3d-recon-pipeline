@@ -14,8 +14,8 @@ import { SAM2Verification } from './sam2-verification.js';
 import { CameraOverlay } from './camera-overlay.js';
 import { CheckpointPanel } from './checkpoint-panel.js';
 
-const STAGE_COUNT = 7;
-const TRANSITION_STAGE_MAX = 6;
+const STAGE_COUNT = 8;
+const TRANSITION_STAGE_MAX = 7;
 const DEFAULT_TAUBIN_NU = -0.53;
 const MESH_METHOD_DEFAULT = 'poisson';
 const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
@@ -98,8 +98,8 @@ document.addEventListener('stage-activated', async (e) => {
   config.setActiveStage(stage);
   checkpoints.setActiveStage(stage);
 
-  // For 3D stages (2=Pi3X, 4-7), activate the renderer if scene is initialized
-  if (stage === 2 || (stage >= 4 && stage <= 7)) {
+  // For 3D stages (2=Pi3X, 4-8), activate the renderer if scene is initialized
+  if (stage === 2 || (stage >= 4 && stage <= 8)) {
     if (preview._stages?.[stage]?.initialized) {
       preview.activateStage(stage);
     }
@@ -253,7 +253,7 @@ ws.on('stage_start', (msg) => {
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  appendLog('stdout', `\n=== Stage ${msg.stage}/7: ${msg.label} ===\n`, { stage: msg.stage });
+  appendLog('stdout', `\n=== Stage ${msg.stage}/8: ${msg.label} ===\n`, { stage: msg.stage });
   setMeshPostToolbarVisible(false);
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
@@ -294,7 +294,7 @@ ws.on('stage_complete', async (msg) => {
   } else if (msg.stage === 3) {
     // SAM2 complete — reload Pi3X viewer with filtered object.ply
     await preview.loadPi3xResults(cameraOverlay, 'object.ply');
-  } else if (msg.stage >= 4 && msg.stage <= 7) {
+  } else if (msg.stage >= 4 && msg.stage <= 8) {
     await preview.loadStageResult(msg.stage);
   }
 
@@ -397,7 +397,7 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
 });
 
 ws.on('pipeline_complete', (msg) => {
-  checkpoints.onStageComplete(7);
+  checkpoints.onStageComplete(8);
   config.setRunning(false);
   pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
@@ -407,8 +407,8 @@ ws.on('pipeline_complete', (msg) => {
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
     setTaskConfirmState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
   }
-  setTaskConfirmState(7, 'final', 'Final stage complete. No next-stage confirmation.');
-  setTaskConfirmVisibleStage(7);
+  setTaskConfirmState(8, 'final', 'Final stage complete. No next-stage confirmation.');
+  setTaskConfirmVisibleStage(8);
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   setMeshPostToolbarVisible(true);
@@ -418,7 +418,7 @@ ws.on('pipeline_complete', (msg) => {
   } else {
     setMeshPhaseStatus('', '');
   }
-  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 7 });
+  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 8 });
 });
 
 ws.on('pipeline_error', (msg) => {
@@ -439,7 +439,7 @@ ws.on('pipeline_error', (msg) => {
   const cancelled = String(msg.reason_code || '').startsWith('cancelled')
     || /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
-  if (msg.stage >= 1 && msg.stage <= 7) {
+  if (msg.stage >= 1 && msg.stage <= 8) {
     checkpoints.onStageFailed(msg.stage, msg.error, msg.checkpoint_id);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
@@ -721,7 +721,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       msg += ` Downsample skipped (target=${apiTargetFaces.toLocaleString()}, trigger=${apiTriggerFaces.toLocaleString()}).`;
     }
     if (data.texture_invalidated) {
-      msg += ' Downstream Stage 6/7 artifacts were cleared.';
+      msg += ' Downstream Stage 6/7/8 artifacts were cleared.';
     }
     setMeshPostStatus(msg, 'success');
 
@@ -731,7 +731,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       { stage: 5 },
     );
     if (data.texture_invalidated) {
-      appendLog('stdout', 'Wrap/texture outputs removed. Re-run from Stage 6 for updated texturing.\n', { stage: 6 });
+      appendLog('stdout', 'Wrap/repair/texture outputs removed. Re-run from Stage 6 for updated texturing.\n', { stage: 6 });
     }
 
     if (!isPipelineRunning()) {
@@ -939,7 +939,7 @@ function resetTaskConfirmBars(resumeFromStage = 1) {
       setTaskConfirmState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
     }
   }
-  setTaskConfirmState(7, 'final', 'Final stage. No next-stage confirmation.');
+  setTaskConfirmState(8, 'final', 'Final stage. No next-stage confirmation.');
   setTaskConfirmVisibleStage(resumeStage);
 }
 
@@ -1007,10 +1007,10 @@ function syncTaskConfirmBarsFromStatus(statusMsg) {
     setTaskConfirmState(stage, 'idle', resolveTaskConfirmIdleMessage(statusMsg, stage));
   }
 
-  if (isStageDone(statusMsg, 7)) {
-    setTaskConfirmState(7, 'final', 'Final stage complete. No next-stage confirmation.');
+  if (isStageDone(statusMsg, 8)) {
+    setTaskConfirmState(8, 'final', 'Final stage complete. No next-stage confirmation.');
   } else {
-    setTaskConfirmState(7, 'final', 'Final stage. No next-stage confirmation.');
+    setTaskConfirmState(8, 'final', 'Final stage. No next-stage confirmation.');
   }
   setTaskConfirmVisibleStage(resolvePreferredStage(statusMsg));
 }
@@ -1087,6 +1087,7 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
   }
   if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
   if (isStageDone(statusMsg, 7)) await preview.loadStageResult(7);
+  if (isStageDone(statusMsg, 8)) await preview.loadStageResult(8);
 
   if (opts.activate !== false) {
     stageCtrl.activateStage(resolvePreferredStage(statusMsg));
@@ -1135,7 +1136,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   config.setRunning(false);
   config.setActiveStage(null);
 
-  const allDone = [1, 2, 3, 4, 5, 6, 7].every((stage) => isStageDone(statusMsg, stage));
+  const allDone = [1, 2, 3, 4, 5, 6, 7, 8].every((stage) => isStageDone(statusMsg, stage));
   if (allDone) setStatus('complete', 'Done');
   else setStatus('idle', 'Idle');
 

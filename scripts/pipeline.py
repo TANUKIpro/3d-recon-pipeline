@@ -9,8 +9,9 @@ Pipeline stages:
   3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
   4. Point cloud denoising (CPU)
   5. Mesh reconstruction (Classical Poisson or DiffCD)
-  6. Mesh wrap + contact-region hole repair (CPU)
-  7. Texture baking (GPU when available, CPU fallback)
+  6. Mesh wrap (CPU)
+  7. Mesh repair (CPU)
+  8. Texture baking (GPU when available, CPU fallback)
 """
 
 import argparse
@@ -37,7 +38,7 @@ Examples:
     )
     parser.add_argument("video_path", help="Path to input video (.mp4)")
     parser.add_argument("--output-dir", default="/data/output", help="Output directory")
-    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 8),
+    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 9),
                         help="Skip to stage N (for resuming after interruption)")
     parser.add_argument(
         "--mesh-method",
@@ -68,7 +69,7 @@ Examples:
     # =====================================================================
     if skip_to <= 1:
         print("\n" + "=" * 60)
-        print("Stage 1/7: Frame Extraction")
+        print("Stage 1/8: Frame Extraction")
         print("=" * 60)
         from stage_extract_frames import extract_frames
 
@@ -84,7 +85,7 @@ Examples:
     # =====================================================================
     if skip_to <= 2:
         print("\n" + "=" * 60)
-        print("Stage 2/7: Pi3X 3D Reconstruction")
+        print("Stage 2/8: Pi3X 3D Reconstruction")
         print("=" * 60)
         from stage_pi3x_reconstruct import run_pi3x_inference
 
@@ -102,7 +103,7 @@ Examples:
     # =====================================================================
     if skip_to <= 3:
         print("\n" + "=" * 60)
-        print("Stage 3/7: SAM2 Interactive Segmentation")
+        print("Stage 3/8: SAM2 Interactive Segmentation")
         print("=" * 60)
         print(">>> Open http://localhost:7860 to select the object <<<")
         from stage_sam2_ui import run_sam2_interactive
@@ -123,7 +124,7 @@ Examples:
     # =====================================================================
     if skip_to <= 4:
         print("\n" + "=" * 60)
-        print("Stage 4/7: Point Cloud Denoising")
+        print("Stage 4/8: Point Cloud Denoising")
         print("=" * 60)
         from stage_denoise import denoise
 
@@ -138,12 +139,12 @@ Examples:
     if skip_to <= 5:
         print("\n" + "=" * 60)
         if mesh_method == "diffcd":
-            print("Stage 5/7: Learning Mesh Reconstruction (DiffCD)")
+            print("Stage 5/8: Learning Mesh Reconstruction (DiffCD)")
             from stage_diffcd_mesh import run_diffcd
 
             mesh_ply = run_diffcd(str(denoised_ply), output_dir)
         else:
-            print("Stage 5/7: Classical Mesh Reconstruction (Normals + Poisson)")
+            print("Stage 5/8: Classical Mesh Reconstruction (Normals + Poisson)")
             from stage_classical_mesh import run_classical_mesh
 
             mesh_ply = run_classical_mesh(str(denoised_ply), output_dir)
@@ -153,40 +154,50 @@ Examples:
         mesh_ply = Path(output_dir) / "object_mesh.ply"
 
     # =====================================================================
-    # Stage 6: Mesh Wrap + Contact Hole Repair
+    # Stage 6: Mesh Wrap
     # =====================================================================
     if skip_to <= 6:
         print("\n" + "=" * 60)
-        print("Stage 6/7: Mesh Wrap + Contact Hole Repair")
+        print("Stage 6/8: Mesh Wrap")
         print("=" * 60)
         from stage_mesh_wrap import run_mesh_wrap
-        from stage_contact_hole_repair import run_contact_hole_repair
 
         wrapped_mesh_ply = run_mesh_wrap(str(mesh_ply), output_dir)
-        repaired_mesh_ply = run_contact_hole_repair(str(wrapped_mesh_ply), output_dir)
-        print(f"  → Wrapped:  {wrapped_mesh_ply}")
-        print(f"  → Repaired: {repaired_mesh_ply}")
+        print(f"  → Wrapped: {wrapped_mesh_ply}")
     else:
-        repaired_mesh_ply = Path(output_dir) / "object_mesh_repaired.ply"
         wrapped_mesh_ply = Path(output_dir) / "object_mesh_wrapped.ply"
-        if not repaired_mesh_ply.exists():
-            repaired_mesh_ply = wrapped_mesh_ply
-        if not repaired_mesh_ply.exists():
-            repaired_mesh_ply = Path(output_dir) / "object_mesh.ply"
-
-    texture_mesh_ply = repaired_mesh_ply
+        if not wrapped_mesh_ply.exists():
+            wrapped_mesh_ply = Path(output_dir) / "object_mesh.ply"
 
     # =====================================================================
-    # Stage 7: Texture Baking
+    # Stage 7: Mesh Repair
     # =====================================================================
     if skip_to <= 7:
         print("\n" + "=" * 60)
-        print("Stage 7/7: Texture Baking")
+        print("Stage 7/8: Mesh Repair")
+        print("=" * 60)
+        from stage_contact_hole_repair import run_contact_hole_repair
+
+        repaired_mesh_ply = run_contact_hole_repair(str(wrapped_mesh_ply), output_dir)
+        print(f"  → Repaired: {repaired_mesh_ply}")
+    else:
+        repaired_mesh_ply = Path(output_dir) / "object_mesh_repaired.ply"
+        if not repaired_mesh_ply.exists():
+            raise FileNotFoundError(
+                f"Stage 8 requires repaired mesh, but file is missing: {repaired_mesh_ply}"
+            )
+
+    # =====================================================================
+    # Stage 8: Texture Baking
+    # =====================================================================
+    if skip_to <= 8:
+        print("\n" + "=" * 60)
+        print("Stage 8/8: Texture Baking")
         print("=" * 60)
         from stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
-            str(texture_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            str(repaired_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
         )
         print(f"  → {obj_path}")
 
