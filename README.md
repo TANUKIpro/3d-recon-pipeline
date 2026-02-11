@@ -22,7 +22,7 @@ graph TD
     S5{"Stage 5: メッシュ再構成"}
     S5C["Classical<br/><i>CPU</i><br/>法線推定 → Screened Poisson → 平滑化"]
     S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
-    S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>Iterative Poisson 外皮化"]
+    S6["Stage 6: メッシュラップ + 接地穴補修<br/><i>CPU</i><br/>外皮化 → 接地候補穴を局所補修"]
     S7["Stage 7: テクスチャベイキング<br/><i>CPU / GPU要求ヒント</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → チャート単位最適視点投影"]
     OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
 
@@ -218,6 +218,10 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `MESH_WRAP_ITERATIONS` | `1` | Wrap 反復回数 |
 | `MESH_WRAP_SAMPLE_POINTS` | `180000` | 各反復の点サンプル数 |
 | `MESH_WRAP_POISSON_DEPTH` | `8` | Wrap Poisson 深さ |
+| `CONTACT_HOLE_REPAIR_ENABLED` | `1` | 接地候補穴補修 (Stage 6.5相当) を有効化 |
+| `CONTACT_HOLE_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
+| `CONTACT_HOLE_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域幅 (下端からbbox対角比) |
+| `CONTACT_HOLE_SMOOTH_ITERS` | `2` | 補修後の局所平滑化反復数 |
 
 ### テクスチャベイキング (Stage 7)
 
@@ -240,6 +244,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 - `docs/mesh_classical.md`
 - `docs/mesh_diffcd.md`
 - `docs/mesh_wrap.md`
+- `docs/contact_hole_repair.md`
 - `docs/texture_bake.md`
 
 ## 出力ファイル
@@ -257,6 +262,7 @@ data/output/
         ├── texture.png            # テクスチャアトラス (既定は入力動画と同等画素数の正方形)
         ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
         ├── object_mesh_wrapped.ply # Stage 6出力メッシュ (Texture用ラップ結果)
+        ├── object_mesh_repaired.ply # Stage 6.5相当出力 (接地候補穴補修後, Texture入力優先)
         ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ
         ├── object_mesh_postprocessed.ply  # Stage 5後処理後メッシュ
         ├── object_mesh_input.ply  # Stage 5前処理後点群

@@ -67,7 +67,10 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
             "object_points_with_normals.ply",
         ),
     },
-    6: {"dirs": ("mesh_wrap",), "files": ("object_mesh_wrapped.ply",)},
+    6: {
+        "dirs": ("mesh_wrap", "contact_hole_repair"),
+        "files": ("object_mesh_wrapped.ply", "object_mesh_repaired.ply"),
+    },
     7: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
@@ -77,7 +80,7 @@ RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
     4: {"dirs": (), "files": ("object.ply",)},
     5: {"dirs": (), "files": ("object_denoised.ply",)},
     6: {"dirs": (), "files": ("object_mesh.ply",)},
-    7: {"dirs": ("frames", "masks"), "files": ("object_mesh.ply", "camera_poses.json")},
+    7: {"dirs": ("frames", "masks"), "files": ("camera_poses.json",)},
 }
 
 PRIMARY_ARTIFACT_PATHS = (
@@ -87,6 +90,7 @@ PRIMARY_ARTIFACT_PATHS = (
     "object_denoised.ply",
     "object_mesh.ply",
     "object_mesh_wrapped.ply",
+    "object_mesh_repaired.ply",
     "textured_mesh.obj",
     "texture.png",
     "intrinsics.json",
@@ -255,6 +259,15 @@ def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
     for rel in req.get("files", ()):
         if not (out / rel).is_file():
             issues.append(f"missing file: {rel}")
+    if start_stage == int(PipelineStage.TEXTURE_BAKE):
+        if not any(
+            (out / rel).is_file()
+            for rel in ("object_mesh_repaired.ply", "object_mesh_wrapped.ply", "object_mesh.ply")
+        ):
+            issues.append(
+                "missing file: one of object_mesh_repaired.ply / "
+                "object_mesh_wrapped.ply / object_mesh.ply"
+            )
     return issues
 
 

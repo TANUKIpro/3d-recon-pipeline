@@ -469,16 +469,23 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.meshwrap_crop_scale,
                 cfg.meshwrap_sample_points,
                 cfg.meshwrap_normal_radius_ratio,
+                cfg.contact_hole_repair_enabled,
+                cfg.contact_hole_max_diameter_ratio,
+                cfg.contact_hole_y_band_ratio,
+                cfg.contact_hole_smooth_iters,
             )
+            repaired_mesh = Path(output_dir) / "object_mesh_repaired.ply"
             wrapped_mesh = Path(output_dir) / "object_mesh_wrapped.ply"
-            if wrapped_mesh.is_file():
+            if repaired_mesh.is_file():
+                session.mesh_ply = str(repaired_mesh)
+            elif wrapped_mesh.is_file():
                 session.mesh_ply = str(wrapped_mesh)
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.MESH_WRAP,
                 PipelineStage.TEXTURE_BAKE,
-                "Mesh Wrap complete. Continue to Texture Bake?",
+                "Mesh Wrap + Contact Hole Repair complete. Continue to Texture Bake?",
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
@@ -895,18 +902,27 @@ def _stage_mesh_wrap(
     crop_scale: float = 1.08,
     sample_points: int = 180_000,
     normal_radius_ratio: float = 0.035,
+    contact_hole_repair_enabled: bool = True,
+    contact_hole_max_diameter_ratio: float = 0.08,
+    contact_hole_y_band_ratio: float = 0.06,
+    contact_hole_smooth_iters: int = 2,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
     unregister_process=None,
 ) -> None:
-    del cancel_cb, register_process, unregister_process
+    del register_process, unregister_process
+    from stage_contact_hole_repair import run_contact_hole_repair
     from stage_mesh_wrap import run_mesh_wrap
 
-    run_mesh_wrap(
+    def _emit_mapped_progress(mapped: float, detail: str | None) -> None:
+        if progress_cb is not None:
+            progress_cb(mapped, detail)
+
+    wrapped_path = run_mesh_wrap(
         mesh_ply,
         output_dir,
-        progress_cb=progress_cb,
+        progress_cb=lambda p, d=None: _emit_mapped_progress(p * 0.72, d),
         poisson_depth=poisson_depth,
         poisson_scale=poisson_scale,
         density_trim_q=density_trim_q,
@@ -915,6 +931,16 @@ def _stage_mesh_wrap(
         crop_scale=crop_scale,
         sample_points=sample_points,
         normal_radius_ratio=normal_radius_ratio,
+    )
+    run_contact_hole_repair(
+        str(wrapped_path),
+        output_dir,
+        progress_cb=lambda p, d=None: _emit_mapped_progress(72.0 + (p * 0.28), d),
+        cancel_cb=cancel_cb,
+        enabled=contact_hole_repair_enabled,
+        max_diameter_ratio=contact_hole_max_diameter_ratio,
+        y_band_ratio=contact_hole_y_band_ratio,
+        smooth_iters=contact_hole_smooth_iters,
     )
 
 

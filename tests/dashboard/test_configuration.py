@@ -74,6 +74,25 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_size, 0)
 
+    def test_contact_hole_repair_fields_are_parsed_and_clamped(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "contact_hole_repair_enabled": False,
+                "contact_hole_max_diameter_ratio": -1.0,
+                "contact_hole_y_band_ratio": 9.9,
+                "contact_hole_smooth_iters": 999,
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertFalse(cfg.contact_hole_repair_enabled)
+        self.assertEqual(cfg.contact_hole_max_diameter_ratio, 0.005)
+        self.assertEqual(cfg.contact_hole_y_band_ratio, 0.5)
+        self.assertEqual(cfg.contact_hole_smooth_iters, 12)
+
 
 class DetectStageOutputsTests(unittest.TestCase):
     def test_stage6_requires_wrapped_mesh(self) -> None:
@@ -89,6 +108,14 @@ class DetectStageOutputsTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "object_mesh_wrapped.ply").write_text("ply\n", encoding="utf-8")
+            stages, _, _ = detect_stage_outputs(out)
+
+            self.assertTrue(stages[6])
+
+    def test_stage6_complete_when_repaired_mesh_exists(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "object_mesh_repaired.ply").write_text("ply\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
 
             self.assertTrue(stages[6])
