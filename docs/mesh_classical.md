@@ -32,7 +32,8 @@
 後段利用:
 
 - Stage 6 (`mesh_wrap`) が `<output_dir>/object_mesh.ply` を使用
-- Stage 7 (`texture_bake`) が `<output_dir>/object_mesh_wrapped.ply` を使用
+- Stage 7 (`mesh_repair`) が `<output_dir>/object_mesh_wrapped.ply` を使用
+- Stage 8 (`texture_bake`) が `<output_dir>/object_mesh_repaired.ply` を使用
 
 ## 詳細フロー
 

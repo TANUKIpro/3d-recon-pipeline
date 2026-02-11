@@ -9,8 +9,9 @@ const STAGE_LABELS = {
   3: 'SAM2',
   4: 'Denoise',
   5: 'Mesh Reconstruction',
-  6: 'Mesh Wrap + Hole Repair',
-  7: 'Texture Bake',
+  6: 'Mesh Wrap',
+  7: 'Mesh Repair',
+  8: 'Texture Bake',
 };
 const DENOISE_CUSTOM_PRESET = 'custom';
 const DENOISE_ALGO_LABELS = {
@@ -181,10 +182,10 @@ export class ConfigPanel {
       meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
       meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
       meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
-      contact_hole_repair_enabled: document.getElementById('cfg-contact-hole-repair-enabled'),
-      contact_hole_max_diameter_ratio: document.getElementById('cfg-contact-hole-max-diameter-ratio'),
-      contact_hole_y_band_ratio: document.getElementById('cfg-contact-hole-y-band-ratio'),
-      contact_hole_smooth_iters: document.getElementById('cfg-contact-hole-smooth-iters'),
+      mesh_repair_enabled: document.getElementById('cfg-mesh-repair-enabled'),
+      mesh_repair_max_diameter_ratio: document.getElementById('cfg-mesh-repair-max-diameter-ratio'),
+      mesh_repair_y_band_ratio: document.getElementById('cfg-mesh-repair-y-band-ratio'),
+      mesh_repair_smooth_iters: document.getElementById('cfg-mesh-repair-smooth-iters'),
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
@@ -355,10 +356,10 @@ export class ConfigPanel {
       meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
       meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 180000),
       meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
-      contact_hole_repair_enabled: Boolean(this._inputs.contact_hole_repair_enabled?.checked),
-      contact_hole_max_diameter_ratio: this._parsePositiveFloat(this._inputs.contact_hole_max_diameter_ratio?.value, 0.08),
-      contact_hole_y_band_ratio: this._parsePositiveFloat(this._inputs.contact_hole_y_band_ratio?.value, 0.06),
-      contact_hole_smooth_iters: this._parseNonNegativeInt(this._inputs.contact_hole_smooth_iters?.value, 2),
+      mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
+      mesh_repair_max_diameter_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_max_diameter_ratio?.value, 0.08),
+      mesh_repair_y_band_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_y_band_ratio?.value, 0.06),
+      mesh_repair_smooth_iters: this._parseNonNegativeInt(this._inputs.mesh_repair_smooth_iters?.value, 2),
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
     };
   }
@@ -488,16 +489,22 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
-      'contact_hole_max_diameter_ratio',
-      'contact_hole_y_band_ratio',
-      'contact_hole_smooth_iters',
     ]) {
       if (this._inputs[key]) {
         this._inputs[key].addEventListener('input', () => this._onMeshWrapInputChanged());
       }
     }
-    if (this._inputs.contact_hole_repair_enabled) {
-      this._inputs.contact_hole_repair_enabled.addEventListener('change', () => this._onMeshWrapInputChanged());
+    for (const key of [
+      'mesh_repair_max_diameter_ratio',
+      'mesh_repair_y_band_ratio',
+      'mesh_repair_smooth_iters',
+    ]) {
+      if (this._inputs[key]) {
+        this._inputs[key].addEventListener('input', () => this._updateMeshWrapSummary());
+      }
+    }
+    if (this._inputs.mesh_repair_enabled) {
+      this._inputs.mesh_repair_enabled.addEventListener('change', () => this._updateMeshWrapSummary());
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -556,7 +563,7 @@ export class ConfigPanel {
     for (const o of objects) {
       const opt = document.createElement('option');
       opt.value = o.name;
-      opt.textContent = `${o.name} (${o.complete_stages || 0}/7)`;
+      opt.textContent = `${o.name} (${o.complete_stages || 0}/8)`;
       this._objectSelect.appendChild(opt);
     }
   }
@@ -630,7 +637,7 @@ export class ConfigPanel {
   _renderObjectSummary(object, fallbackName = '') {
     if (object) {
       const details = [
-        `${object.complete_stages || 0}/7 stages`,
+        `${object.complete_stages || 0}/8 stages`,
         `${object.file_count || 0} files`,
         `${this._formatSize(object.size_mb)}`,
       ];
@@ -820,16 +827,22 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
-      'contact_hole_max_diameter_ratio',
-      'contact_hole_y_band_ratio',
-      'contact_hole_smooth_iters',
     ]) {
       if (cfg[key] != null && this._inputs[key]) {
         this._inputs[key].value = String(cfg[key]);
       }
     }
-    if (cfg.contact_hole_repair_enabled != null && this._inputs.contact_hole_repair_enabled) {
-      this._inputs.contact_hole_repair_enabled.checked = Boolean(cfg.contact_hole_repair_enabled);
+    for (const key of [
+      'mesh_repair_max_diameter_ratio',
+      'mesh_repair_y_band_ratio',
+      'mesh_repair_smooth_iters',
+    ]) {
+      if (cfg[key] != null && this._inputs[key]) {
+        this._inputs[key].value = String(cfg[key]);
+      }
+    }
+    if (cfg.mesh_repair_enabled != null && this._inputs.mesh_repair_enabled) {
+      this._inputs.mesh_repair_enabled.checked = Boolean(cfg.mesh_repair_enabled);
     }
 
     this._maxFramesAuto = false;
@@ -1024,11 +1037,8 @@ export class ConfigPanel {
     const scale = this._inputs.meshwrap_poisson_scale?.value || '1.18';
     const iters = this._inputs.meshwrap_iterations?.value || '2';
     const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.80';
-    const holeEnabled = this._inputs.contact_hole_repair_enabled?.checked ? 'on' : 'off';
-    const holeDiameter = this._inputs.contact_hole_max_diameter_ratio?.value || '0.08';
-    const holeBand = this._inputs.contact_hole_y_band_ratio?.value || '0.06';
     this._meshwrapSummary.textContent =
-      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}, hole_repair=${holeEnabled}, hole_diam=${holeDiameter}, hole_band=${holeBand}`;
+      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
   }
 
   _applySuggestedObjectName(force = false) {
@@ -1057,7 +1067,7 @@ export class ConfigPanel {
 
   _clampStage(stage) {
     const n = Number(stage) || 1;
-    return Math.max(1, Math.min(7, Math.round(n)));
+    return Math.max(1, Math.min(8, Math.round(n)));
   }
 
   _updateResumeHint() {

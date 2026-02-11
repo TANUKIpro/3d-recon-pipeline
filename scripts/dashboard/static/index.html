@@ -78,12 +78,19 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="6">
       <span class="stage-dot"></span>
-      <span class="stage-label">Wrap+Repair</span>
+      <span class="stage-label">Wrap</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="7">
+      <span class="stage-dot"></span>
+      <span class="stage-label">Repair</span>
+      <span class="stage-progress">0%</span>
+      <span class="stage-time"></span>
+    </div>
+    <div class="stage-connector stage-connector-main"></div>
+    <div class="stage-pill" data-stage="8">
       <span class="stage-dot"></span>
       <span class="stage-label">Texture</span>
       <span class="stage-progress">0%</span>
@@ -187,20 +194,28 @@
         </div>
       </div>
 
-      <!-- Stage 6: Mesh Wrap + Hole Repair -->
+      <!-- Stage 6: Mesh Wrap -->
       <div id="stage-panel-6" class="stage-panel">
         <div class="stage-panel-empty" id="stage-6-empty">
-          <p>Wrapped/repaired mesh will appear here after Stage 6 completes.</p>
+          <p>Wrapped mesh will appear here after Stage 6 completes.</p>
         </div>
         <div id="three-container-6" class="three-container"></div>
       </div>
 
-      <!-- Stage 7: Texture Bake -->
+      <!-- Stage 7: Mesh Repair -->
       <div id="stage-panel-7" class="stage-panel">
         <div class="stage-panel-empty" id="stage-7-empty">
-          <p>Textured mesh will appear here after Stage 7 completes.</p>
+          <p>Repaired mesh will appear here after Stage 7 completes.</p>
         </div>
         <div id="three-container-7" class="three-container"></div>
+      </div>
+
+      <!-- Stage 8: Texture Bake -->
+      <div id="stage-panel-8" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-8-empty">
+          <p>Textured mesh will appear here after Stage 8 completes.</p>
+        </div>
+        <div id="three-container-8" class="three-container"></div>
       </div>
 
       <div id="task-confirm-dock">
@@ -228,7 +243,11 @@
           <span class="task-confirm-message">Stage 6 confirmation will appear after completion.</span>
           <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
         </div>
-        <div class="task-confirm-bar task-confirm-final" data-stage="7" aria-live="polite">
+        <div class="task-confirm-bar idle" data-stage="7" aria-live="polite">
+          <span class="task-confirm-message">Stage 7 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar task-confirm-final" data-stage="8" aria-live="polite">
           <span class="task-confirm-message">Final stage. No next-stage confirmation.</span>
           <button class="task-confirm-btn btn-small" disabled>Done</button>
         </div>
@@ -437,7 +456,7 @@
           </div>
         </div>
 
-        <!-- Stage 6: Mesh Wrap + Hole Repair -->
+        <!-- Stage 6: Mesh Wrap -->
         <div class="config-section" data-stages="6">
           <div class="form-group">
             <label for="cfg-meshwrap-preset">MeshWrap Preset</label>
@@ -499,26 +518,35 @@
                   </div>
                 </div>
               </div>
+            </div>
+          </details>
+        </div>
+
+        <!-- Stage 7: Mesh Repair -->
+        <div class="config-section" data-stages="7">
+          <details class="config-advanced" open>
+            <summary>Mesh Repair Parameters</summary>
+            <div class="config-advanced-body">
               <div class="meshwrap-param-group">
                 <div class="meshwrap-param-title">Contact Hole Repair</div>
                 <div class="form-row">
                   <div class="form-group">
-                    <label for="cfg-contact-hole-repair-enabled">Enabled</label>
-                    <input type="checkbox" id="cfg-contact-hole-repair-enabled" checked>
+                    <label for="cfg-mesh-repair-enabled">Enabled</label>
+                    <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
                   </div>
                   <div class="form-group">
-                    <label for="cfg-contact-hole-smooth-iters">Smooth Iters</label>
-                    <input type="number" id="cfg-contact-hole-smooth-iters" value="2" min="0" max="12" step="1">
+                    <label for="cfg-mesh-repair-smooth-iters">Smooth Iters</label>
+                    <input type="number" id="cfg-mesh-repair-smooth-iters" value="2" min="0" max="12" step="1">
                   </div>
                 </div>
                 <div class="form-row">
                   <div class="form-group">
-                    <label for="cfg-contact-hole-max-diameter-ratio">Max Diameter Ratio</label>
-                    <input type="number" id="cfg-contact-hole-max-diameter-ratio" value="0.08" min="0.005" max="1.5" step="0.005">
+                    <label for="cfg-mesh-repair-max-diameter-ratio">Max Diameter Ratio</label>
+                    <input type="number" id="cfg-mesh-repair-max-diameter-ratio" value="0.08" min="0.005" max="1.5" step="0.005">
                   </div>
                   <div class="form-group">
-                    <label for="cfg-contact-hole-y-band-ratio">Y Band Ratio</label>
-                    <input type="number" id="cfg-contact-hole-y-band-ratio" value="0.06" min="0.005" max="0.5" step="0.005">
+                    <label for="cfg-mesh-repair-y-band-ratio">Y Band Ratio</label>
+                    <input type="number" id="cfg-mesh-repair-y-band-ratio" value="0.06" min="0.005" max="0.5" step="0.005">
                   </div>
                 </div>
               </div>
@@ -526,8 +554,8 @@
           </details>
         </div>
 
-        <!-- Stage 7: Texture -->
-        <div class="config-section" data-stages="7">
+        <!-- Stage 8: Texture -->
+        <div class="config-section" data-stages="8">
           <div class="form-group">
             <label for="cfg-texture-size">Texture Size</label>
             <select id="cfg-texture-size">

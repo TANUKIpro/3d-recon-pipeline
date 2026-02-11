@@ -2,7 +2,7 @@
 
 ## 対象タスク
 
-- Stage 6.5 相当: 接地候補穴の局所補修
+- Stage 7: Mesh Repair (接地候補穴の局所補修)
 - 実装: `scripts/stage_contact_hole_repair.py`
 
 ## 概要
@@ -27,16 +27,16 @@
 
 後段利用:
 
-- Stage 7 (`texture_bake`) が `object_mesh_repaired.ply` を優先入力
+- Stage 8 (`texture_bake`) が `object_mesh_repaired.ply` を入力
 
 ## パラメータ
 
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
-| `CONTACT_HOLE_REPAIR_ENABLED` | `1` | 補修有効化 |
-| `CONTACT_HOLE_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
-| `CONTACT_HOLE_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域 (下端からbbox対角比) |
-| `CONTACT_HOLE_SMOOTH_ITERS` | `2` | 局所平滑化反復数 |
+| `MESH_REPAIR_ENABLED` | `1` | 補修有効化 |
+| `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
+| `MESH_REPAIR_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域 (下端からbbox対角比) |
+| `MESH_REPAIR_SMOOTH_ITERS` | `2` | 局所平滑化反復数 |
 
 ## 失敗時の挙動
 

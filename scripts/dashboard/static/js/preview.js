@@ -15,6 +15,7 @@ const FIRST_MESH_PREVIEW_FILES = new Set([
   'object_mesh_raw.ply',
   'object_mesh_poisson_raw.ply',
   'object_mesh_wrapped.ply',
+  'object_mesh_repaired.ply',
 ]);
 
 export class PreviewPanel {
@@ -59,7 +60,7 @@ export class PreviewPanel {
   }
 
   clearFromStage(startStage = 1) {
-    const start = Math.max(1, Math.min(7, Number(startStage) || 1));
+    const start = Math.max(1, Math.min(8, Number(startStage) || 1));
 
     if (start <= 1) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -102,6 +103,12 @@ export class PreviewPanel {
     if (start <= 7) {
       this._clearStageScene(7);
       const empty = document.getElementById('stage-7-empty');
+      if (empty) empty.classList.remove('hidden');
+    }
+
+    if (start <= 8) {
+      this._clearStageScene(8);
+      const empty = document.getElementById('stage-8-empty');
       if (empty) empty.classList.remove('hidden');
     }
   }
@@ -189,7 +196,7 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
     scene.add(grid);
 
-    // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-7 use inferred flip when available.
+    // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-8 use inferred flip when available.
     const sceneRoot = new THREE.Group();
     sceneRoot.rotation.x = this._defaultSceneFlipX(stageNum) ? Math.PI : 0;
     scene.add(sceneRoot);
@@ -444,14 +451,14 @@ export class PreviewPanel {
 
   _applySceneFlipToLoadedStages(sceneFlipX) {
     const rotationX = sceneFlipX ? Math.PI : 0;
-    for (const stageNum of [2, 4, 5, 6, 7]) {
+    for (const stageNum of [2, 4, 5, 6, 7, 8]) {
       const stage = this._stages[stageNum];
       if (stage?.sceneRoot) stage.sceneRoot.rotation.x = rotationX;
     }
   }
 
   async _ensureSceneFlipForStage(stageNum) {
-    if (stageNum < 4 || stageNum > 7) return;
+    if (stageNum < 4 || stageNum > 8) return;
     if (this._sceneFlipX == null) {
       this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses();
     }
@@ -679,7 +686,8 @@ export class PreviewPanel {
       4: 'object_denoised.ply',
       5: 'object_mesh.ply',
       6: 'object_mesh_wrapped.ply',
-      7: 'textured_mesh.obj',
+      7: 'object_mesh_repaired.ply',
+      8: 'textured_mesh.obj',
     };
 
     const overrideFile = String(opts.file || '').trim();

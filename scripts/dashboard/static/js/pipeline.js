@@ -2,7 +2,7 @@
  * Stage progress bar UI controller.
  */
 
-const STAGE_COUNT = 7;
+const STAGE_COUNT = 8;
 const MESH_METHODS = new Set(['diffcd', 'poisson']);
 
 function _isDone(info = {}) {
@@ -280,6 +280,7 @@ export class PipelineUI {
     const stage5Done = _isDone(this._stageMeta[5]);
     const stage6Done = _isDone(this._stageMeta[6]);
     const stage7Done = _isDone(this._stageMeta[7]);
+    const stage8Done = _isDone(this._stageMeta[8]);
     const poissonActive = this._meshMethod === 'poisson';
 
     // Connectors around the mesh branch slot are shared trunk lines.
@@ -294,10 +295,15 @@ export class PipelineUI {
       meshRightTrunk.classList.toggle('active', true);
       meshRightTrunk.classList.toggle('done', stage6Done);
     }
-    const textureTrunk = this._mainConnectors[5];
+    const repairTrunk = this._mainConnectors[5];
+    if (repairTrunk) {
+      repairTrunk.classList.toggle('active', true);
+      repairTrunk.classList.toggle('done', stage7Done);
+    }
+    const textureTrunk = this._mainConnectors[6];
     if (textureTrunk) {
       textureTrunk.classList.toggle('active', true);
-      textureTrunk.classList.toggle('done', stage7Done);
+      textureTrunk.classList.toggle('done', stage8Done);
     }
 
     this._setConnectorState(this._poissonConnectors.left, poissonActive, poissonActive && stage5Done);

@@ -7,7 +7,7 @@
 
 export class StageController {
   constructor() {
-    this._stageCount = 7;
+    this._stageCount = 8;
     this._panels = {};
     this._pills = {};
     this._meshStagePills = Array.from(document.querySelectorAll('.mesh-stage-pill'));

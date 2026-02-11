@@ -327,37 +327,37 @@ def build_pipeline_config(
             0.001,
             parse_float(raw.get("meshwrap_normal_radius_ratio"), float(meshwrap_defaults["meshwrap_normal_radius_ratio"])),
         ),
-        contact_hole_repair_enabled=parse_bool(
-            raw.get("contact_hole_repair_enabled"),
-            env_bool("CONTACT_HOLE_REPAIR_ENABLED", True, env_map),
+        mesh_repair_enabled=parse_bool(
+            raw.get("mesh_repair_enabled"),
+            env_bool("MESH_REPAIR_ENABLED", True, env_map),
         ),
-        contact_hole_max_diameter_ratio=max(
+        mesh_repair_max_diameter_ratio=max(
             0.005,
             min(
                 1.50,
                 parse_float(
-                    raw.get("contact_hole_max_diameter_ratio"),
-                    env_float("CONTACT_HOLE_MAX_DIAMETER_RATIO", 0.08, env_map),
+                    raw.get("mesh_repair_max_diameter_ratio"),
+                    env_float("MESH_REPAIR_MAX_DIAMETER_RATIO", 0.08, env_map),
                 ),
             ),
         ),
-        contact_hole_y_band_ratio=max(
+        mesh_repair_y_band_ratio=max(
             0.005,
             min(
                 0.50,
                 parse_float(
-                    raw.get("contact_hole_y_band_ratio"),
-                    env_float("CONTACT_HOLE_Y_BAND_RATIO", 0.06, env_map),
+                    raw.get("mesh_repair_y_band_ratio"),
+                    env_float("MESH_REPAIR_Y_BAND_RATIO", 0.06, env_map),
                 ),
             ),
         ),
-        contact_hole_smooth_iters=max(
+        mesh_repair_smooth_iters=max(
             0,
             min(
                 12,
                 parse_int(
-                    raw.get("contact_hole_smooth_iters"),
-                    env_int("CONTACT_HOLE_SMOOTH_ITERS", 2, env_map),
+                    raw.get("mesh_repair_smooth_iters"),
+                    env_int("MESH_REPAIR_SMOOTH_ITERS", 2, env_map),
                 ),
             ),
         ),

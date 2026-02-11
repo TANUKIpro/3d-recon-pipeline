@@ -74,13 +74,13 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_size, 0)
 
-    def test_contact_hole_repair_fields_are_parsed_and_clamped(self) -> None:
+    def test_mesh_repair_fields_are_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
             {
-                "contact_hole_repair_enabled": False,
-                "contact_hole_max_diameter_ratio": -1.0,
-                "contact_hole_y_band_ratio": 9.9,
-                "contact_hole_smooth_iters": 999,
+                "mesh_repair_enabled": False,
+                "mesh_repair_max_diameter_ratio": -1.0,
+                "mesh_repair_y_band_ratio": 9.9,
+                "mesh_repair_smooth_iters": 999,
             },
             video_path="input.mp4",
             object_name="sample",
@@ -88,21 +88,22 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertFalse(cfg.contact_hole_repair_enabled)
-        self.assertEqual(cfg.contact_hole_max_diameter_ratio, 0.005)
-        self.assertEqual(cfg.contact_hole_y_band_ratio, 0.5)
-        self.assertEqual(cfg.contact_hole_smooth_iters, 12)
+        self.assertFalse(cfg.mesh_repair_enabled)
+        self.assertEqual(cfg.mesh_repair_max_diameter_ratio, 0.005)
+        self.assertEqual(cfg.mesh_repair_y_band_ratio, 0.5)
+        self.assertEqual(cfg.mesh_repair_smooth_iters, 12)
 
 
 class DetectStageOutputsTests(unittest.TestCase):
-    def test_stage6_requires_wrapped_mesh(self) -> None:
+    def test_stage6_and_stage7_require_mesh_outputs(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "textured_mesh.obj").write_text("v 0 0 0\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
 
             self.assertFalse(stages[6])
-            self.assertTrue(stages[7])
+            self.assertFalse(stages[7])
+            self.assertTrue(stages[8])
 
     def test_stage6_complete_when_wrapped_mesh_exists(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -112,13 +113,14 @@ class DetectStageOutputsTests(unittest.TestCase):
 
             self.assertTrue(stages[6])
 
-    def test_stage6_complete_when_repaired_mesh_exists(self) -> None:
+    def test_stage7_complete_when_repaired_mesh_exists(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "object_mesh_repaired.ply").write_text("ply\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
 
-            self.assertTrue(stages[6])
+            self.assertFalse(stages[6])
+            self.assertTrue(stages[7])
 
 
 if __name__ == "__main__":
