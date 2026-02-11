@@ -39,7 +39,7 @@ STAGE_LABELS: dict[int, str] = {
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.DENOISE: "Point Cloud Denoise",
     PipelineStage.DIFFCD_MESH: "Mesh Reconstruction",
-    PipelineStage.MESH_WRAP: "Mesh Wrap",
+    PipelineStage.MESH_WRAP: "Mesh Wrap + Hole Repair",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
 }
 
@@ -48,7 +48,7 @@ STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
     3: ("object.ply",),
     4: ("object_denoised.ply",),
     5: ("object_mesh.ply",),
-    6: ("object_mesh_wrapped.ply",),
+    6: ("object_mesh_wrapped.ply", "object_mesh_repaired.ply"),
     7: ("textured_mesh.obj",),
 }
 
@@ -70,7 +70,7 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
         3: (out / "object.ply").is_file() and mask_count > 0,
         4: (out / "object_denoised.ply").is_file(),
         5: (out / "object_mesh.ply").is_file(),
-        6: (out / "object_mesh_wrapped.ply").is_file(),
+        6: (out / "object_mesh_wrapped.ply").is_file() or (out / "object_mesh_repaired.ply").is_file(),
         7: textured_ready,
     }
     return stage_complete, frame_count, mask_count
@@ -113,6 +113,10 @@ class PipelineConfig:
     meshwrap_crop_scale: float = 1.08
     meshwrap_sample_points: int = 180_000
     meshwrap_normal_radius_ratio: float = 0.035
+    contact_hole_repair_enabled: bool = True
+    contact_hole_max_diameter_ratio: float = 0.08
+    contact_hole_y_band_ratio: float = 0.06
+    contact_hole_smooth_iters: int = 2
     texture_size: int = 0
 
     @classmethod
@@ -250,9 +254,12 @@ class PipelineSession:
         self.poses_path = str(out / "camera_poses.json") if (out / "camera_poses.json").is_file() else None
         self.ply_path = str(out / "object.ply") if (out / "object.ply").is_file() else None
         self.denoised_ply = str(out / "object_denoised.ply") if (out / "object_denoised.ply").is_file() else None
+        repaired_mesh = out / "object_mesh_repaired.ply"
         wrapped_mesh = out / "object_mesh_wrapped.ply"
         base_mesh = out / "object_mesh.ply"
-        if wrapped_mesh.is_file():
+        if repaired_mesh.is_file():
+            self.mesh_ply = str(repaired_mesh)
+        elif wrapped_mesh.is_file():
             self.mesh_ply = str(wrapped_mesh)
         elif base_mesh.is_file():
             self.mesh_ply = str(base_mesh)

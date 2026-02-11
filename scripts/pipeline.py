@@ -9,7 +9,7 @@ Pipeline stages:
   3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
   4. Point cloud denoising (CPU)
   5. Mesh reconstruction (Classical Poisson or DiffCD)
-  6. Mesh wrap (CPU)
+  6. Mesh wrap + contact-region hole repair (CPU)
   7. Texture baking (GPU when available, CPU fallback)
 """
 
@@ -153,20 +153,28 @@ Examples:
         mesh_ply = Path(output_dir) / "object_mesh.ply"
 
     # =====================================================================
-    # Stage 6: Mesh Wrap
+    # Stage 6: Mesh Wrap + Contact Hole Repair
     # =====================================================================
     if skip_to <= 6:
         print("\n" + "=" * 60)
-        print("Stage 6/7: Mesh Wrap")
+        print("Stage 6/7: Mesh Wrap + Contact Hole Repair")
         print("=" * 60)
         from stage_mesh_wrap import run_mesh_wrap
+        from stage_contact_hole_repair import run_contact_hole_repair
 
         wrapped_mesh_ply = run_mesh_wrap(str(mesh_ply), output_dir)
-        print(f"  → {wrapped_mesh_ply}")
+        repaired_mesh_ply = run_contact_hole_repair(str(wrapped_mesh_ply), output_dir)
+        print(f"  → Wrapped:  {wrapped_mesh_ply}")
+        print(f"  → Repaired: {repaired_mesh_ply}")
     else:
+        repaired_mesh_ply = Path(output_dir) / "object_mesh_repaired.ply"
         wrapped_mesh_ply = Path(output_dir) / "object_mesh_wrapped.ply"
-        if not wrapped_mesh_ply.exists():
-            wrapped_mesh_ply = Path(output_dir) / "object_mesh.ply"
+        if not repaired_mesh_ply.exists():
+            repaired_mesh_ply = wrapped_mesh_ply
+        if not repaired_mesh_ply.exists():
+            repaired_mesh_ply = Path(output_dir) / "object_mesh.ply"
+
+    texture_mesh_ply = repaired_mesh_ply
 
     # =====================================================================
     # Stage 7: Texture Baking
@@ -178,7 +186,7 @@ Examples:
         from stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
-            str(wrapped_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            str(texture_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
         )
         print(f"  → {obj_path}")
 
@@ -195,6 +203,7 @@ Examples:
 
     out = Path(output_dir)
     for name in ["textured_mesh.obj", "textured_mesh.mtl", "texture.png",
+                  "object_mesh_repaired.ply",
                   "object_mesh_wrapped.ply",
                   "object_mesh.ply", "object_denoised.ply", "object.ply",
                   "camera_poses.json", "intrinsics.json"]:

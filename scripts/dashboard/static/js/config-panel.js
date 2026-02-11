@@ -9,7 +9,7 @@ const STAGE_LABELS = {
   3: 'SAM2',
   4: 'Denoise',
   5: 'Mesh Reconstruction',
-  6: 'Mesh Wrap',
+  6: 'Mesh Wrap + Hole Repair',
   7: 'Texture Bake',
 };
 const DENOISE_CUSTOM_PRESET = 'custom';
@@ -181,6 +181,10 @@ export class ConfigPanel {
       meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
       meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
       meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
+      contact_hole_repair_enabled: document.getElementById('cfg-contact-hole-repair-enabled'),
+      contact_hole_max_diameter_ratio: document.getElementById('cfg-contact-hole-max-diameter-ratio'),
+      contact_hole_y_band_ratio: document.getElementById('cfg-contact-hole-y-band-ratio'),
+      contact_hole_smooth_iters: document.getElementById('cfg-contact-hole-smooth-iters'),
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
@@ -351,6 +355,10 @@ export class ConfigPanel {
       meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
       meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 180000),
       meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
+      contact_hole_repair_enabled: Boolean(this._inputs.contact_hole_repair_enabled?.checked),
+      contact_hole_max_diameter_ratio: this._parsePositiveFloat(this._inputs.contact_hole_max_diameter_ratio?.value, 0.08),
+      contact_hole_y_band_ratio: this._parsePositiveFloat(this._inputs.contact_hole_y_band_ratio?.value, 0.06),
+      contact_hole_smooth_iters: this._parseNonNegativeInt(this._inputs.contact_hole_smooth_iters?.value, 2),
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
     };
   }
@@ -480,10 +488,16 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
+      'contact_hole_max_diameter_ratio',
+      'contact_hole_y_band_ratio',
+      'contact_hole_smooth_iters',
     ]) {
       if (this._inputs[key]) {
         this._inputs[key].addEventListener('input', () => this._onMeshWrapInputChanged());
       }
+    }
+    if (this._inputs.contact_hole_repair_enabled) {
+      this._inputs.contact_hole_repair_enabled.addEventListener('change', () => this._onMeshWrapInputChanged());
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -806,10 +820,16 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
+      'contact_hole_max_diameter_ratio',
+      'contact_hole_y_band_ratio',
+      'contact_hole_smooth_iters',
     ]) {
       if (cfg[key] != null && this._inputs[key]) {
         this._inputs[key].value = String(cfg[key]);
       }
+    }
+    if (cfg.contact_hole_repair_enabled != null && this._inputs.contact_hole_repair_enabled) {
+      this._inputs.contact_hole_repair_enabled.checked = Boolean(cfg.contact_hole_repair_enabled);
     }
 
     this._maxFramesAuto = false;
@@ -1004,8 +1024,11 @@ export class ConfigPanel {
     const scale = this._inputs.meshwrap_poisson_scale?.value || '1.18';
     const iters = this._inputs.meshwrap_iterations?.value || '2';
     const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.80';
+    const holeEnabled = this._inputs.contact_hole_repair_enabled?.checked ? 'on' : 'off';
+    const holeDiameter = this._inputs.contact_hole_max_diameter_ratio?.value || '0.08';
+    const holeBand = this._inputs.contact_hole_y_band_ratio?.value || '0.06';
     this._meshwrapSummary.textContent =
-      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
+      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}, hole_repair=${holeEnabled}, hole_diam=${holeDiameter}, hole_band=${holeBand}`;
   }
 
   _applySuggestedObjectName(force = false) {
@@ -1277,6 +1300,12 @@ export class ConfigPanel {
   _parsePositiveInt(value, fallback) {
     const n = Number.parseInt(value, 10);
     if (!Number.isFinite(n) || n <= 0) return fallback;
+    return n;
+  }
+
+  _parseNonNegativeInt(value, fallback) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n) || n < 0) return fallback;
     return n;
   }
 

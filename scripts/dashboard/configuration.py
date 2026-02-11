@@ -173,6 +173,11 @@ def env_float(name: str, fallback: float, env: Mapping[str, str] | None = None) 
     return parse_float(env_map.get(name, fallback), fallback)
 
 
+def env_bool(name: str, fallback: bool, env: Mapping[str, str] | None = None) -> bool:
+    env_map = os.environ if env is None else env
+    return parse_bool(env_map.get(name), fallback)
+
+
 def build_pipeline_config(
     raw: dict[str, Any],
     *,
@@ -321,6 +326,40 @@ def build_pipeline_config(
         meshwrap_normal_radius_ratio=max(
             0.001,
             parse_float(raw.get("meshwrap_normal_radius_ratio"), float(meshwrap_defaults["meshwrap_normal_radius_ratio"])),
+        ),
+        contact_hole_repair_enabled=parse_bool(
+            raw.get("contact_hole_repair_enabled"),
+            env_bool("CONTACT_HOLE_REPAIR_ENABLED", True, env_map),
+        ),
+        contact_hole_max_diameter_ratio=max(
+            0.005,
+            min(
+                1.50,
+                parse_float(
+                    raw.get("contact_hole_max_diameter_ratio"),
+                    env_float("CONTACT_HOLE_MAX_DIAMETER_RATIO", 0.08, env_map),
+                ),
+            ),
+        ),
+        contact_hole_y_band_ratio=max(
+            0.005,
+            min(
+                0.50,
+                parse_float(
+                    raw.get("contact_hole_y_band_ratio"),
+                    env_float("CONTACT_HOLE_Y_BAND_RATIO", 0.06, env_map),
+                ),
+            ),
+        ),
+        contact_hole_smooth_iters=max(
+            0,
+            min(
+                12,
+                parse_int(
+                    raw.get("contact_hole_smooth_iters"),
+                    env_int("CONTACT_HOLE_SMOOTH_ITERS", 2, env_map),
+                ),
+            ),
         ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", 0, env_map)),
     )
