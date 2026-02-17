@@ -29,6 +29,39 @@ function clampMeshRepairThreshold(value) {
   return Math.max(MESH_REPAIR_THRESHOLD_MIN, Math.min(MESH_REPAIR_THRESHOLD_MAX, parsed));
 }
 
+const SCENE_THEMES = {
+  dark: {
+    background:    0x0a0a14,
+    gridPrimary:   0x333355,
+    gridSecondary: 0x222244,
+    meshColor:     0xb3b3b3,
+    edgeColor:     0x101820,
+    edgeOpacity:   0.35,
+    pointColor:    0x4a9eff,
+    shadowColor:   0x000000,
+    shadowOpacity: 0.28,
+    ambientInt:    0.6,
+    dirInt:        0.8,
+    shadowAmbientInt: 0.36,
+    shadowDirInt:     1.05,
+  },
+  light: {
+    background:    0xe8e8ef,
+    gridPrimary:   0xc0c0d0,
+    gridSecondary: 0xd5d5e0,
+    meshColor:     0x6a6a7a,
+    edgeColor:     0x888899,
+    edgeOpacity:   0.25,
+    pointColor:    0x2d7cd6,
+    shadowColor:   0x444466,
+    shadowOpacity: 0.15,
+    ambientInt:    0.7,
+    dirInt:        0.7,
+    shadowAmbientInt: 0.5,
+    shadowDirInt:     0.9,
+  },
+};
+
 export class PreviewPanel {
   constructor() {
     this._galleryGrid = document.getElementById('gallery-grid');
@@ -39,6 +72,7 @@ export class PreviewPanel {
     this._threeLoaded = false;
     this._activeStage = null;
     this._animating = false;
+    this._currentTheme = 'dark';
     this._sceneFlipX = null;
     this._previewAssetRevision = 0;
     this.onMeshRepairSelectionChanged = null;
@@ -206,8 +240,10 @@ export class PreviewPanel {
     const w = container.clientWidth || 640;
     const h = container.clientHeight || 480;
 
+    const palette = SCENE_THEMES[this._currentTheme];
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0a14);
+    scene.background = new THREE.Color(palette.background);
 
     const camera = new THREE.PerspectiveCamera(60, w / h, 0.01, 100);
     camera.position.set(0, 0, 2);
@@ -217,9 +253,9 @@ export class PreviewPanel {
     controls.dampingFactor = 0.1;
 
     // Lights
-    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambient = new THREE.AmbientLight(0xffffff, palette.ambientInt);
     scene.add(ambient);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const dirLight = new THREE.DirectionalLight(0xffffff, palette.dirInt);
     dirLight.position.set(2, 3, 4);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.set(1024, 1024);
@@ -234,7 +270,7 @@ export class PreviewPanel {
     scene.add(dirLight);
 
     // Grid
-    const grid = new THREE.GridHelper(4, 20, 0x333355, 0x222244);
+    const grid = new THREE.GridHelper(4, 20, palette.gridPrimary, palette.gridSecondary);
     scene.add(grid);
 
     // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-8 use inferred flip when available.
@@ -245,7 +281,7 @@ export class PreviewPanel {
     // Hidden by default. Enabled only when mesh-shadow profile is active.
     const shadowFloor = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
-      new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.28 }),
+      new THREE.ShadowMaterial({ color: palette.shadowColor, opacity: palette.shadowOpacity }),
     );
     shadowFloor.material.side = THREE.DoubleSide;
     shadowFloor.rotation.x = -Math.PI / 2;
@@ -260,6 +296,7 @@ export class PreviewPanel {
       scene, sceneRoot, camera, controls, container,
       currentObject: null,
       _loadGeneration: 0,
+      grid,
       ambientLight: ambient,
       keyLight: dirLight,
       shadowFloor,
@@ -742,6 +779,67 @@ export class PreviewPanel {
     this._updateMeshRepairColors();
     this._setMeshRepairClickEnabled(true);
     this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
+  }
+
+  /**
+   * Apply a colour theme (light/dark) to all initialized 3D scenes.
+   * Updates background, grid, lights, shadow floor, and object materials
+   * without resetting camera or reloading geometry.
+   */
+  applyTheme(themeName) {
+    const name = (themeName === 'light') ? 'light' : 'dark';
+    this._currentTheme = name;
+    const palette = SCENE_THEMES[name];
+
+    for (const stage of Object.values(this._stages)) {
+      if (!stage?.initialized) continue;
+
+      // Scene background
+      stage.scene.background.setHex(palette.background);
+
+      // Grid: recreate (vertex-colored, can't repaint in place)
+      if (stage.grid) {
+        stage.scene.remove(stage.grid);
+        stage.grid.geometry.dispose();
+        stage.grid.material.dispose();
+      }
+      const newGrid = new THREE.GridHelper(4, 20, palette.gridPrimary, palette.gridSecondary);
+      stage.scene.add(newGrid);
+      stage.grid = newGrid;
+
+      // Lights — respect active shadow profile
+      const shadowActive = stage.shadowFloor?.visible === true;
+      if (stage.ambientLight) {
+        stage.ambientLight.intensity = shadowActive
+          ? palette.shadowAmbientInt : palette.ambientInt;
+      }
+      if (stage.keyLight) {
+        stage.keyLight.intensity = shadowActive
+          ? palette.shadowDirInt : palette.dirInt;
+      }
+
+      // Shadow floor
+      if (stage.shadowFloor?.material) {
+        stage.shadowFloor.material.color.setHex(palette.shadowColor);
+        stage.shadowFloor.material.opacity = palette.shadowOpacity;
+      }
+
+      // Update materials on current object (mesh / edges / points)
+      if (stage.currentObject) {
+        stage.currentObject.traverse((node) => {
+          if (!node.material) return;
+          const mat = node.material;
+          if (mat.isMeshStandardMaterial && !mat.vertexColors) {
+            mat.color.setHex(palette.meshColor);
+          } else if (mat.isLineBasicMaterial && node.isLineSegments) {
+            mat.color.setHex(palette.edgeColor);
+            mat.opacity = palette.edgeOpacity;
+          } else if (mat.isPointsMaterial && !mat.vertexColors) {
+            mat.color.setHex(palette.pointColor);
+          }
+        });
+      }
+    }
   }
 
   /**
@@ -1229,7 +1327,7 @@ export class PreviewPanel {
         const hasColor = geometry.hasAttribute('color');
         const meshMat = new THREE.MeshStandardMaterial({
           vertexColors: hasColor,
-          color: hasColor ? undefined : 0xb3b3b3,
+          color: hasColor ? undefined : SCENE_THEMES[this._currentTheme].meshColor,
           roughness: 0.9,
           metalness: 0.02,
           side: THREE.DoubleSide,
@@ -1244,9 +1342,9 @@ export class PreviewPanel {
         try {
           const edges = new THREE.EdgesGeometry(geometry, 25);
           const lineMat = new THREE.LineBasicMaterial({
-            color: 0x101820,
+            color: SCENE_THEMES[this._currentTheme].edgeColor,
             transparent: true,
-            opacity: 0.35,
+            opacity: SCENE_THEMES[this._currentTheme].edgeOpacity,
           });
           overlay = new THREE.LineSegments(edges, lineMat);
         } catch (edgeErr) {
@@ -1264,7 +1362,7 @@ export class PreviewPanel {
           sizeAttenuation: true,
         };
         if (!geometry.hasAttribute('color')) {
-          materialParams.color = 0x4a9eff;
+          materialParams.color = SCENE_THEMES[this._currentTheme].pointColor;
         }
         const material = new THREE.PointsMaterial(materialParams);
         obj = new THREE.Points(geometry, material);
@@ -1360,11 +1458,12 @@ export class PreviewPanel {
    */
   _setMeshShadowProfile(stage, box, enabled) {
     if (!stage) return;
+    const p = SCENE_THEMES[this._currentTheme];
     if (stage.ambientLight) {
-      stage.ambientLight.intensity = enabled ? 0.36 : 0.6;
+      stage.ambientLight.intensity = enabled ? p.shadowAmbientInt : p.ambientInt;
     }
     if (stage.keyLight) {
-      stage.keyLight.intensity = enabled ? 1.05 : 0.8;
+      stage.keyLight.intensity = enabled ? p.shadowDirInt : p.dirInt;
     }
 
     const floor = stage.shadowFloor;

@@ -50,6 +50,8 @@ settings.onLogSettingsChanged = ({ autoScroll, maxLines }) => {
   log.setAutoScroll(autoScroll);
   log.setMaxLines(maxLines);
 };
+settings.onThemeChanged = (theme) => { preview.applyTheme(theme); };
+preview.applyTheme(settings.theme);
 
 // Apply stored log settings at startup
 log.setAutoScroll(settings.autoScroll);

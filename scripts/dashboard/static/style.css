@@ -1208,9 +1208,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   --interactive: #9333ea;
 }
 
-/* Keep 3D viewports dark regardless of theme */
+/* Match 3D viewport background to theme */
 [data-theme="light"] .three-container {
-  background: #0a0a14;
+  background: #e8e8ef;
 }
 
 [data-theme="light"] #sam2-container {
