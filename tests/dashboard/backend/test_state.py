@@ -26,7 +26,7 @@ from scripts.dashboard.state import (
     detect_stage_outputs,
 )
 
-FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "coffee01"
+FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures" / "coffee01"
 
 
 # ------------------------------------------------------------------ helpers ---
@@ -213,6 +213,7 @@ class TestPipelineSessionReset(unittest.TestCase):
         self.session.mask_count = 50
         self.session.stages[1].status = StageStatus.COMPLETE
         self.session.stages[1].progress = 100.0
+        self.session.cancel_event.set()
         self.session.reset()
 
     def test_runtime_fields_cleared(self) -> None:
