@@ -934,6 +934,16 @@ def run_contact_hole_repair(
             except (TypeError, ValueError) as e:
                 raise ValueError(f"Invalid loop id: {raw_id!r}") from e
         if not parsed:
+            if require_selection:
+                print("Selected loop mode: 0 loops (skip)")
+                _check_cancel(cancel_cb)
+                _emit_progress(progress_cb, 90.0, "Contact Hole Repair: writing repaired mesh (skip)")
+                mesh.compute_vertex_normals()
+                _write_mesh_safe(repaired_path, mesh)
+                _write_mesh_safe(repaired_copy_path, mesh)
+                print(f"Saved repaired mesh: {repaired_path}")
+                _emit_progress(progress_cb, 100.0, "Contact Hole Repair: skipped (no selection)")
+                return repaired_path
             raise ValueError("selected_loop_ids must not be empty")
 
         analysis_candidates, _analysis_stats = _collect_repair_candidates(vertices, faces)
