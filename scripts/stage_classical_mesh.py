@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import open3d as o3d
@@ -123,10 +123,12 @@ def _resolve_smooth_method() -> str:
     return method
 
 
-def _resolve_params() -> ClassicalMeshParams:
-    preprocess_enabled = _env_bool(
-        "CLASSICAL_PREPROCESS_ENABLED",
-        _DEFAULT_PREPROCESS_ENABLED,
+def _resolve_params(overrides: dict[str, Any] | None = None) -> ClassicalMeshParams:
+    ov = overrides or {}
+    preprocess_enabled = (
+        ov["preprocess_enabled"]
+        if "preprocess_enabled" in ov
+        else _env_bool("CLASSICAL_PREPROCESS_ENABLED", _DEFAULT_PREPROCESS_ENABLED)
     )
     preprocess_voxel_ratio = max(
         _env_float("CLASSICAL_PREPROCESS_VOXEL_RATIO", _DEFAULT_PREPROCESS_VOXEL_RATIO),
@@ -151,11 +153,21 @@ def _resolve_params() -> ClassicalMeshParams:
     )
     normal_max_nn = max(_env_int("POISSON_NORMAL_MAX_NN", _DEFAULT_NORMAL_MAX_NN), 8)
     normal_orient_k = max(_env_int("POISSON_NORMAL_ORIENT_K", _DEFAULT_NORMAL_ORIENT_K), 8)
-    poisson_depth = max(_env_int("POISSON_DEPTH", _DEFAULT_POISSON_DEPTH), 6)
+    poisson_depth = max(
+        ov["poisson_depth"]
+        if "poisson_depth" in ov
+        else _env_int("POISSON_DEPTH", _DEFAULT_POISSON_DEPTH),
+        6,
+    )
     poisson_scale = max(_env_float("POISSON_SCALE", _DEFAULT_POISSON_SCALE), 1.0)
     poisson_linear_fit = _env_bool("POISSON_LINEAR_FIT", _DEFAULT_POISSON_LINEAR_FIT)
     density_trim_q = min(
-        max(_env_float("POISSON_DENSITY_TRIM_QUANTILE", _DEFAULT_DENSITY_TRIM_QUANTILE), 0.0),
+        max(
+            ov["density_trim_q"]
+            if "density_trim_q" in ov
+            else _env_float("POISSON_DENSITY_TRIM_QUANTILE", _DEFAULT_DENSITY_TRIM_QUANTILE),
+            0.0,
+        ),
         0.49,
     )
     crop_scale = max(_env_float("POISSON_CROP_SCALE", _DEFAULT_CROP_SCALE), 1.0)
@@ -178,21 +190,30 @@ def _resolve_params() -> ClassicalMeshParams:
         0.5,
     )
 
-    auto_smooth = _env_bool("CLASSICAL_AUTO_SMOOTH", _DEFAULT_AUTO_SMOOTH)
+    auto_smooth = (
+        ov["auto_smooth"]
+        if "auto_smooth" in ov
+        else _env_bool("CLASSICAL_AUTO_SMOOTH", _DEFAULT_AUTO_SMOOTH)
+    )
     smooth_method = _resolve_smooth_method()
     smooth_iterations = max(
         0,
-        _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
+        ov["smooth_iterations"]
+        if "smooth_iterations" in ov
+        else _env_int("CLASSICAL_SMOOTH_ITERATIONS", _DEFAULT_SMOOTH_ITERATIONS),
     )
     smooth_lambda = _env_float("CLASSICAL_SMOOTH_LAMBDA", _DEFAULT_SMOOTH_LAMBDA)
     smooth_taubin_nu = _env_float("CLASSICAL_SMOOTH_TAUBIN_NU", _DEFAULT_SMOOTH_TAUBIN_NU)
 
-    downsample_enabled = _env_bool(
-        "CLASSICAL_DOWNSAMPLE_ENABLED",
-        _DEFAULT_DOWNSAMPLE_ENABLED,
+    downsample_enabled = (
+        ov["downsample_enabled"]
+        if "downsample_enabled" in ov
+        else _env_bool("CLASSICAL_DOWNSAMPLE_ENABLED", _DEFAULT_DOWNSAMPLE_ENABLED)
     )
     downsample_target_faces = max(
-        _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", _DEFAULT_DOWNSAMPLE_TARGET_FACES),
+        ov["downsample_target_faces"]
+        if "downsample_target_faces" in ov
+        else _env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", _DEFAULT_DOWNSAMPLE_TARGET_FACES),
         1000,
     )
     downsample_trigger_faces = max(
@@ -375,8 +396,9 @@ def run_classical_preprocess(
     denoised_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> Path:
-    params = _resolve_params()
+    params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Preprocess point cloud ===")
     _emit_progress(progress_cb, 8.0, "Classical/Preprocess: loading denoised point cloud")
@@ -431,8 +453,9 @@ def run_classical_main(
     preprocess_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> Path:
-    params = _resolve_params()
+    params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Main (normals + Screened Poisson) ===")
     pcd = o3d.io.read_point_cloud(str(preprocess_ply))
@@ -533,8 +556,9 @@ def run_classical_postprocess(
     raw_mesh_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> Path:
-    params = _resolve_params()
+    params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Postprocess mesh ===")
     mesh = o3d.io.read_triangle_mesh(str(raw_mesh_ply))
@@ -591,8 +615,9 @@ def run_classical_downsample(
     post_mesh_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    overrides: dict[str, Any] | None = None,
 ) -> Path:
-    params = _resolve_params()
+    params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Downsample mesh ===")
     downsample_mesh = o3d.io.read_triangle_mesh(str(post_mesh_ply))
@@ -648,27 +673,33 @@ def run_classical_mesh(
     denoised_ply: str,
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
+    **kwargs: Any,
 ) -> Path:
     """Run classical mesh as a 4-step chain: pre -> main -> post -> downsample."""
+    overrides = kwargs or None
     preprocess_path = run_classical_preprocess(
         denoised_ply,
         output_dir,
         progress_cb=_map_progress(progress_cb, start=0.0, end=24.0),
+        overrides=overrides,
     )
     raw_path = run_classical_main(
         str(preprocess_path),
         output_dir,
         progress_cb=_map_progress(progress_cb, start=24.0, end=72.0),
+        overrides=overrides,
     )
     post_path = run_classical_postprocess(
         str(raw_path),
         output_dir,
         progress_cb=_map_progress(progress_cb, start=72.0, end=92.0),
+        overrides=overrides,
     )
     final_path = run_classical_downsample(
         str(post_path),
         output_dir,
         progress_cb=_map_progress(progress_cb, start=92.0, end=100.0),
+        overrides=overrides,
     )
     _emit_progress(progress_cb, 100.0, "Classical mesh stage complete")
     return final_path

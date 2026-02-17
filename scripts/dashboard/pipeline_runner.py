@@ -440,6 +440,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     _stage_classical_mesh,
                     session.denoised_ply,
                     output_dir,
+                    cfg.classical_preprocess_enabled,
+                    cfg.classical_poisson_depth,
+                    cfg.classical_density_trim_q,
+                    cfg.classical_auto_smooth,
+                    cfg.classical_smooth_iterations,
+                    cfg.classical_downsample_enabled,
+                    cfg.classical_downsample_target_faces,
                     label=mesh_label,
                 )
 
@@ -1058,6 +1065,13 @@ def _stage_diffcd(
 def _stage_classical_mesh(
     denoised_ply: str,
     output_dir: str,
+    preprocess_enabled: bool = True,
+    poisson_depth: int = 9,
+    density_trim_q: float = 0.005,
+    auto_smooth: bool = False,
+    smooth_iterations: int = 2,
+    downsample_enabled: bool = True,
+    downsample_target_faces: int = 120_000,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -1066,7 +1080,18 @@ def _stage_classical_mesh(
     del cancel_cb, register_process, unregister_process
     from stage_classical_mesh import run_classical_mesh
 
-    run_classical_mesh(denoised_ply, output_dir, progress_cb=progress_cb)
+    run_classical_mesh(
+        denoised_ply,
+        output_dir,
+        progress_cb=progress_cb,
+        preprocess_enabled=preprocess_enabled,
+        poisson_depth=poisson_depth,
+        density_trim_q=density_trim_q,
+        auto_smooth=auto_smooth,
+        smooth_iterations=smooth_iterations,
+        downsample_enabled=downsample_enabled,
+        downsample_target_faces=downsample_target_faces,
+    )
 
 
 def _stage_mesh_wrap(
