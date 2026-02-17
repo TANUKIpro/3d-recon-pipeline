@@ -2,8 +2,6 @@
 
 Estimates camera intrinsics, generates UV atlas, selects best camera views
 per UV chart, and exports OBJ + MTL + PNG.
-
-Adapted from im2pc/host/extract_intrinsics.py and im2pc/host/texture_mesh.py.
 """
 
 import concurrent.futures

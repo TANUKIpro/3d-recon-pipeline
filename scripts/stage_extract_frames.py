@@ -1,7 +1,4 @@
-"""Stage 1: Extract frames from video as JPEGs.
-
-Adapted from im2pc/host/pi3x_sam2_cli.py::extract_frames().
-"""
+"""Stage 1: Extract frames from video as JPEGs."""
 
 import os
 import subprocess

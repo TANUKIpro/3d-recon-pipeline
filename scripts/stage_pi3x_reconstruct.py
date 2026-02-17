@@ -2,8 +2,6 @@
 
 Runs Pi3X on full (unmasked) images for optimal pose estimation,
 then applies confidence + depth-edge + SAM2 mask filtering.
-
-Adapted from im2pc/host/pi3x_sam2_cli.py.
 """
 
 import json

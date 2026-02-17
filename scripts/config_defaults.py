@@ -1,4 +1,4 @@
-"""Centralised default values for the im2pc pipeline.
+"""Centralised default values for the clip2mesh.
 
 Every tunable constant lives here as the single source of truth.
 Stage scripts and dashboard code import from this module instead

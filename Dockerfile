@@ -1,4 +1,4 @@
-# im2pc-pipeline: Docker-based 3D reconstruction pipeline
+# clip2mesh: Docker-based 3D reconstruction pipeline
 # PyTorch (SAM2/Pi3X) + JAX (DiffCD) in a single container
 
 FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04

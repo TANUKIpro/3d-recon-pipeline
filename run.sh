@@ -1,5 +1,5 @@
 #!/bin/bash
-# im2pc-pipeline: Run the full 3D reconstruction pipeline
+# clip2mesh: Run the full 3D reconstruction pipeline
 #
 # Usage:
 #   ./run.sh <video_file>
@@ -16,7 +16,7 @@ if [[ "$VIDEO" != /data/* ]]; then
     VIDEO="/data/input/$(basename "$VIDEO")"
 fi
 
-echo "=== im2pc-pipeline ==="
+echo "=== clip2mesh ==="
 echo "Input: $VIDEO"
 echo "Output: /data/output/"
 echo ""

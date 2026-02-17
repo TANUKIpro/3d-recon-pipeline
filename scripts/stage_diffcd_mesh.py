@@ -2,8 +2,6 @@
 
 Converts denoised PLY to NPY, runs DiffCD fit_implicit.py as a subprocess
 (to avoid PyTorch/JAX CUDA context conflicts), then post-processes the mesh.
-
-Based on im2pc/colab_diffcd.md and tmp/DiffCD.ipynb patterns.
 """
 
 import math

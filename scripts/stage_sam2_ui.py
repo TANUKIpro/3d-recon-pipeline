@@ -2,8 +2,6 @@
 
 Provides a minimal Gradio UI for click-based object selection,
 then propagates masks to all frames.
-
-Adapted from im2pc/host/pi3x_sam2_cli.py and im2pc/app/main.py.
 """
 
 import os

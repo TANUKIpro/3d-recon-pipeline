@@ -1,4 +1,4 @@
-# im2pc-pipeline
+# clip2mesh
 
 RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker 完結型パイプライン。
 
@@ -42,7 +42,7 @@ graph TD
 
 ```bash
 # 1. リポジトリクローン
-git clone <repo-url> && cd im2pc-pipeline
+git clone <repo-url> && cd clip2mesh
 
 # 2. Docker イメージビルド (初回 15〜30分)
 docker compose build

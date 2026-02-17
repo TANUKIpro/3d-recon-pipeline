@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""im2pc-pipeline: Full 3D reconstruction pipeline orchestrator.
+"""clip2mesh: Full 3D reconstruction pipeline orchestrator.
 
 RGB video → Textured 3D mesh (OBJ)
 
@@ -61,7 +61,7 @@ Examples:
     repair_selection_json = str(args.repair_selection_json or "").strip()
 
     print("=" * 60)
-    print("im2pc-pipeline: RGB Video → Textured 3D Mesh")
+    print("clip2mesh: RGB Video → Textured 3D Mesh")
     print("=" * 60)
     print(f"Input:  {args.video_path}")
     print(f"Output: {output_dir}")

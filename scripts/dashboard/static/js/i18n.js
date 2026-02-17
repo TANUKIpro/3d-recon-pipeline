@@ -3,12 +3,12 @@
  * Reads/writes language preference to localStorage.
  */
 
-const STORAGE_KEY = 'im2pc:lang';
+const STORAGE_KEY = 'clip2mesh:lang';
 const DEFAULT_LANG = 'en';
 
 const TRANSLATIONS = {
   // Header
-  'header.title': { en: 'im2pc-pipeline', ja: 'im2pc-pipeline' },
+  'header.title': { en: 'clip2mesh', ja: 'clip2mesh' },
   'header.subtitle': { en: 'RGB Video → Textured 3D Mesh', ja: 'RGB動画 → テクスチャ付き3Dメッシュ' },
 
   // Stage labels
@@ -37,6 +37,11 @@ const TRANSLATIONS = {
   'settings.log.autoscroll': { en: 'Auto-scroll', ja: '自動スクロール' },
   'settings.log.maxlines': { en: 'Max lines per stage', ja: 'ステージごとの最大行数' },
   'settings.close': { en: 'Close', ja: '閉じる' },
+  'settings.autoAccept': { en: 'Pipeline Mode', ja: 'パイプラインモード' },
+  'settings.autoAccept.desc': {
+    en: 'Auto-accept (skip confirmations except SAM2)',
+    ja: '自動承認（SAM2以外の確認をスキップ）',
+  },
 };
 
 export class I18n {

@@ -4,11 +4,11 @@
  */
 
 const KEYS = {
-  theme: 'im2pc:theme',
-  lang: 'im2pc:lang',
-  autoScroll: 'im2pc:log.autoScroll',
-  maxLines: 'im2pc:log.maxLines',
-  autoAccept: 'im2pc:autoAccept',
+  theme: 'clip2mesh:theme',
+  lang: 'clip2mesh:lang',
+  autoScroll: 'clip2mesh:log.autoScroll',
+  maxLines: 'clip2mesh:log.maxLines',
+  autoAccept: 'clip2mesh:autoAccept',
 };
 
 const DEFAULTS = {

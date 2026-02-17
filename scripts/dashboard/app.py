@@ -1,4 +1,4 @@
-"""FastAPI web dashboard for im2pc-pipeline.
+"""FastAPI web dashboard for clip2mesh.
 
 Entry point: uvicorn scripts.dashboard.app:app --host 0.0.0.0 --port 7860
 """
@@ -38,7 +38,7 @@ from vram_utils import estimate_pi3x_frame_plan
 
 # ── Globals ───────────────────────────────────────────────────────
 
-app = FastAPI(title="im2pc-pipeline Dashboard")
+app = FastAPI(title="clip2mesh Dashboard")
 session = PipelineSession()
 sam2_service = SAM2Service()
 log_broadcaster: LogBroadcaster | None = None
