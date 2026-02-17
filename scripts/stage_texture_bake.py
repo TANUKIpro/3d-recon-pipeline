@@ -6,10 +6,12 @@ per UV chart, and exports OBJ + MTL + PNG.
 Adapted from im2pc/host/extract_intrinsics.py and im2pc/host/texture_mesh.py.
 """
 
+import concurrent.futures
 import json
 import math
 import os
-from collections import defaultdict
+import threading
+from collections import OrderedDict, defaultdict
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -34,6 +36,75 @@ def _emit_progress(
     if progress_cb is None:
         return
     progress_cb(max(0.0, min(100.0, float(progress))), detail)
+
+
+def _get_available_memory_mb() -> float:
+    """Read available memory from /proc/meminfo (Linux only)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return float(line.split()[1]) / 1024.0  # kB -> MB
+    except (OSError, ValueError, IndexError):
+        pass
+    return 4096.0  # conservative fallback
+
+
+class _FrameCache:
+    """LRU cache for decoded frames and masks with memory-aware capacity."""
+
+    def __init__(self, img_w: int, img_h: int) -> None:
+        avail_mb = _get_available_memory_mb()
+        safety_mb = 1024.0
+        budget_mb = max(0.0, avail_mb - safety_mb)
+
+        frame_bytes = img_w * img_h * 3 * 8  # float64 RGB
+        mask_bytes = img_w * img_h  # bool
+
+        frame_budget_mb = budget_mb * 0.7
+        mask_budget_mb = budget_mb * 0.3
+
+        self._max_frames = max(1, int(frame_budget_mb * 1024 * 1024 / max(frame_bytes, 1)))
+        self._max_masks = max(1, int(mask_budget_mb * 1024 * 1024 / max(mask_bytes, 1)))
+
+        self._frames: OrderedDict[tuple[str, int], np.ndarray] = OrderedDict()
+        self._masks: OrderedDict[tuple[str, int], np.ndarray] = OrderedDict()
+        self._frame_lock = threading.Lock()
+        self._mask_lock = threading.Lock()
+
+    def load_frame(self, frames_dir: str, idx: int) -> np.ndarray:
+        key = (frames_dir, idx)
+        with self._frame_lock:
+            if key in self._frames:
+                self._frames.move_to_end(key)
+                return self._frames[key]
+        arr = _load_frame(frames_dir, idx)
+        with self._frame_lock:
+            if key not in self._frames:
+                self._frames[key] = arr
+                while len(self._frames) > self._max_frames:
+                    self._frames.popitem(last=False)
+            else:
+                self._frames.move_to_end(key)
+                arr = self._frames[key]
+        return arr
+
+    def load_mask(self, masks_dir: str, idx: int) -> np.ndarray:
+        key = (masks_dir, idx)
+        with self._mask_lock:
+            if key in self._masks:
+                self._masks.move_to_end(key)
+                return self._masks[key]
+        arr = _load_mask(masks_dir, idx)
+        with self._mask_lock:
+            if key not in self._masks:
+                self._masks[key] = arr
+                while len(self._masks) > self._max_masks:
+                    self._masks.popitem(last=False)
+            else:
+                self._masks.move_to_end(key)
+                arr = self._masks[key]
+        return arr
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +197,7 @@ def _estimate_intrinsics(
     points, colors, poses, pose_frame_indices, frames_dir, masks_dir, img_w, img_h,
     num_eval_frames=10, subsample_points=50000,
     progress_cb: ProgressCallback | None = None,
+    cache: '_FrameCache | None' = None,
 ) -> dict:
     """Estimate camera intrinsics via grid search + Nelder-Mead."""
     from scipy.optimize import minimize
@@ -144,25 +216,35 @@ def _estimate_intrinsics(
 
     cx_init, cy_init = img_w / 2.0, img_h / 2.0
 
+    # Thread pool for parallel frame evaluation (Optimization D)
+    n_workers = min(len(eval_pose_indices), max(1, os.cpu_count() or 4))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_workers)
+
     def color_score(K):
-        total_err, total_cnt = 0.0, 0
-        for pose_idx in eval_pose_indices:
+        def _eval_frame(pose_idx):
             src_idx = int(pose_frame_indices[pose_idx])
             try:
-                frame = _load_frame(frames_dir, src_idx)
-                mask = _load_mask(masks_dir, src_idx)
+                if cache is not None:
+                    frame = cache.load_frame(frames_dir, src_idx)
+                    mask = cache.load_mask(masks_dir, src_idx)
+                else:
+                    frame = _load_frame(frames_dir, src_idx)
+                    mask = _load_mask(masks_dir, src_idx)
             except FileNotFoundError:
-                continue
+                return 0.0, 0
             uv, valid, _ = _project_points(pts_sub, poses[pose_idx], K, img_w, img_h)
             if uv.shape[0] == 0:
-                continue
+                return 0.0, 0
             ui, vi = uv[:, 0].astype(np.int32), uv[:, 1].astype(np.int32)
             m = mask[vi, ui]
             if m.sum() == 0:
-                continue
+                return 0.0, 0
             diff = frame[vi[m], ui[m]] - col_sub[valid][m]
-            total_err += np.mean(diff**2) * m.sum()
-            total_cnt += m.sum()
+            return float(np.mean(diff**2) * m.sum()), int(m.sum())
+
+        results = list(pool.map(_eval_frame, eval_pose_indices))
+        total_err = sum(r[0] for r in results)
+        total_cnt = sum(r[1] for r in results)
         return -(total_err / total_cnt) if total_cnt > 0 else -1.0
 
     # Grid search
@@ -198,6 +280,7 @@ def _estimate_intrinsics(
     result = minimize(objective, [fx_init, fx_init, cx_init, cy_init],
                       method="Nelder-Mead",
                       options={"maxiter": 500, "xatol": 0.5, "fatol": 1e-7, "adaptive": True})
+    pool.shutdown(wait=False)
     _emit_progress(progress_cb, 100.0, "Intrinsics optimization complete")
 
     fx, fy, cx, cy = result.x
@@ -352,50 +435,103 @@ def _rasterize_view_depth(
     img_w: int,
     img_h: int,
 ) -> np.ndarray:
-    """Rasterize mesh depth into camera image space for a simple z-test."""
+    """Rasterize mesh depth into camera image space for a simple z-test.
+
+    Uses vectorized preprocessing to batch-filter faces before the per-face
+    rasterization loop (Optimization B).
+    """
     uv_all, depth_all = _project_simple(vertices, c2w, K)
     depth_buffer = np.full((img_h, img_w), np.inf, dtype=np.float32)
     inside_eps = 1e-5
 
-    for face in faces:
-        i0, i1, i2 = int(face[0]), int(face[1]), int(face[2])
-        z0, z1, z2 = float(depth_all[i0]), float(depth_all[i1]), float(depth_all[i2])
-        if z0 <= 0.01 and z1 <= 0.01 and z2 <= 0.01:
-            continue
+    n_faces = len(faces)
+    if n_faces == 0:
+        return depth_buffer
 
-        x0, y0 = uv_all[i0]
-        x1, y1 = uv_all[i1]
-        x2, y2 = uv_all[i2]
+    # --- Vectorized pre-processing ---
+    i0s = faces[:, 0]
+    i1s = faces[:, 1]
+    i2s = faces[:, 2]
 
-        min_x = int(max(0, math.floor(min(x0, x1, x2))))
-        max_x = int(min(img_w - 1, math.ceil(max(x0, x1, x2))))
-        min_y = int(max(0, math.floor(min(y0, y1, y2))))
-        max_y = int(min(img_h - 1, math.ceil(max(y0, y1, y2))))
-        if min_x > max_x or min_y > max_y:
-            continue
+    z0s = depth_all[i0s]
+    z1s = depth_all[i1s]
+    z2s = depth_all[i2s]
 
-        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
-        if abs(denom) < 1e-12:
-            continue
+    # Back-face culling: skip faces where all three depths <= 0.01
+    visible = ~((z0s <= 0.01) & (z1s <= 0.01) & (z2s <= 0.01))
 
-        xs = np.arange(min_x, max_x + 1, dtype=np.float64) + 0.5
-        ys = np.arange(min_y, max_y + 1, dtype=np.float64) + 0.5
+    x0s = uv_all[i0s, 0]
+    y0s = uv_all[i0s, 1]
+    x1s = uv_all[i1s, 0]
+    y1s = uv_all[i1s, 1]
+    x2s = uv_all[i2s, 0]
+    y2s = uv_all[i2s, 1]
+
+    # Bounding boxes (vectorized)
+    bb_min_x = np.floor(np.minimum(np.minimum(x0s, x1s), x2s)).astype(np.int32)
+    bb_max_x = np.ceil(np.maximum(np.maximum(x0s, x1s), x2s)).astype(np.int32)
+    bb_min_y = np.floor(np.minimum(np.minimum(y0s, y1s), y2s)).astype(np.int32)
+    bb_max_y = np.ceil(np.maximum(np.maximum(y0s, y1s), y2s)).astype(np.int32)
+
+    # Check overlap with image BEFORE clipping (matches original asymmetric clip logic)
+    bb_valid = (bb_max_x >= 0) & (bb_min_x <= img_w - 1) & (bb_max_y >= 0) & (bb_min_y <= img_h - 1)
+
+    np.clip(bb_min_x, 0, img_w - 1, out=bb_min_x)
+    np.clip(bb_max_x, 0, img_w - 1, out=bb_max_x)
+    np.clip(bb_min_y, 0, img_h - 1, out=bb_min_y)
+    np.clip(bb_max_y, 0, img_h - 1, out=bb_max_y)
+
+    # Barycentric denominator (vectorized)
+    denoms = (y1s - y2s) * (x0s - x2s) + (x2s - x1s) * (y0s - y2s)
+    non_degenerate = np.abs(denoms) >= 1e-12
+
+    # Combined filter
+    keep = visible & bb_valid & non_degenerate
+    keep_idx = np.where(keep)[0]
+
+    # Build contiguous arrays for the inner loop
+    _x0 = x0s[keep_idx]
+    _y0 = y0s[keep_idx]
+    _x1 = x1s[keep_idx]
+    _y1 = y1s[keep_idx]
+    _x2 = x2s[keep_idx]
+    _y2 = y2s[keep_idx]
+    _z0 = z0s[keep_idx]
+    _z1 = z1s[keep_idx]
+    _z2 = z2s[keep_idx]
+    _denom = denoms[keep_idx]
+    _bb_min_x = bb_min_x[keep_idx]
+    _bb_max_x = bb_max_x[keep_idx]
+    _bb_min_y = bb_min_y[keep_idx]
+    _bb_max_y = bb_max_y[keep_idx]
+
+    for i in range(len(keep_idx)):
+        mn_x = int(_bb_min_x[i])
+        mx_x = int(_bb_max_x[i])
+        mn_y = int(_bb_min_y[i])
+        mx_y = int(_bb_max_y[i])
+        d = _denom[i]
+
+        xs = np.arange(mn_x, mx_x + 1, dtype=np.float64) + 0.5
+        ys = np.arange(mn_y, mx_y + 1, dtype=np.float64) + 0.5
         grid_x, grid_y = np.meshgrid(xs, ys)
 
-        w0 = ((y1 - y2) * (grid_x - x2) + (x2 - x1) * (grid_y - y2)) / denom
-        w1 = ((y2 - y0) * (grid_x - x2) + (x0 - x2) * (grid_y - y2)) / denom
+        gx2 = grid_x - _x2[i]
+        gy2 = grid_y - _y2[i]
+        w0 = ((_y1[i] - _y2[i]) * gx2 + (_x2[i] - _x1[i]) * gy2) / d
+        w1 = ((_y2[i] - _y0[i]) * gx2 + (_x0[i] - _x2[i]) * gy2) / d
         w2 = 1.0 - w0 - w1
 
         inside = (w0 >= -inside_eps) & (w1 >= -inside_eps) & (w2 >= -inside_eps)
         if not np.any(inside):
             continue
 
-        depth = w0 * z0 + w1 * z1 + w2 * z2
+        depth = w0 * _z0[i] + w1 * _z1[i] + w2 * _z2[i]
         valid = inside & (depth > 0.01)
         if not np.any(valid):
             continue
 
-        tile = depth_buffer[min_y:max_y + 1, min_x:max_x + 1]
+        tile = depth_buffer[mn_y:mx_y + 1, mn_x:mx_x + 1]
         candidate = np.where(valid, depth, np.inf).astype(np.float32, copy=False)
         np.minimum(tile, candidate, out=tile)
 
@@ -566,6 +702,10 @@ def bake_texture(
     # Determine image size from first pose-linked frame.
     first_frame = _load_frame(frames_dir, int(pose_frame_indices[0]))
     img_h, img_w = first_frame.shape[:2]
+
+    # Create frame/mask cache with memory-aware capacity (Optimization A)
+    frame_cache = _FrameCache(img_w, img_h)
+
     tex_size, tex_is_auto = _resolve_texture_size(tex_size, img_w, img_h)
     tex_res = tex_size * oversample
     print(
@@ -603,6 +743,7 @@ def bake_texture(
     intrinsics = _estimate_intrinsics(
         pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
         progress_cb=_intrinsics_progress,
+        cache=frame_cache,
     )
     K = np.array(intrinsics["K"], dtype=np.float64)
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
@@ -646,15 +787,16 @@ def bake_texture(
     face_id_buf = np.full((tex_res, tex_res), -1, dtype=np.int32)
     uv_scaled = uvs * tex_res
 
+    # Pre-compute all triangle UV coords for fillConvexPoly (Optimization E)
+    tri_coords = np.stack([
+        uv_scaled[new_faces[:, 0]],
+        uv_scaled[new_faces[:, 1]],
+        uv_scaled[new_faces[:, 2]],
+    ], axis=1).astype(np.int32).reshape(-1, 3, 1, 2)
+
     emit_every_face = max(1, len(new_faces) // 40)
     for fi in range(len(new_faces)):
-        i0, i1, i2 = new_faces[fi]
-        pts = np.array([
-            [uv_scaled[i0, 0], uv_scaled[i0, 1]],
-            [uv_scaled[i1, 0], uv_scaled[i1, 1]],
-            [uv_scaled[i2, 0], uv_scaled[i2, 1]],
-        ], dtype=np.int32).reshape(3, 1, 2)
-        cv2.fillConvexPoly(face_id_buf, pts, int(fi))
+        cv2.fillConvexPoly(face_id_buf, tri_coords[fi], int(fi))
         if fi % emit_every_face == 0 or fi == len(new_faces) - 1:
             ratio = (fi + 1) / max(len(new_faces), 1)
             _emit_progress(
@@ -702,15 +844,28 @@ def bake_texture(
     emit_every_view = max(1, len(poses) // 40)
     chart_candidates: list[list[tuple[float, float, int]]] = [[] for _ in range(n_charts)]
 
+    # Depth buffer cache for reuse across passes (Optimization C)
+    depth_buf_bytes = img_w * img_h * 4  # float32
+    avail_mb = _get_available_memory_mb()
+    max_depth_cache = min(
+        len(poses),
+        max(0, int(avail_mb * 0.3 * 1024 * 1024 / max(depth_buf_bytes, 1))),
+    )
+    depth_cache: OrderedDict[int, np.ndarray] = OrderedDict()
+
     for vidx in range(len(poses)):
         src_idx = int(pose_frame_indices[vidx])
         c2w = poses[vidx]
         try:
-            mask_bool = _load_mask(mask_dir, src_idx)
+            mask_bool = frame_cache.load_mask(mask_dir, src_idx)
         except FileNotFoundError:
             continue
 
         depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+        if max_depth_cache > 0:
+            depth_cache[vidx] = depth_buffer
+            while len(depth_cache) > max_depth_cache:
+                depth_cache.popitem(last=False)
         valid, score, _px_proj, _py_proj = _evaluate_view_samples(
             pos3d=pos3d,
             normals=normals,
@@ -773,12 +928,15 @@ def bake_texture(
         src_idx = int(pose_frame_indices[vidx])
         c2w = poses[vidx]
         try:
-            frame = _load_frame(frames_dir, src_idx)
-            mask_bool = _load_mask(mask_dir, src_idx)
+            frame = frame_cache.load_frame(frames_dir, src_idx)
+            mask_bool = frame_cache.load_mask(mask_dir, src_idx)
         except FileNotFoundError:
             continue
 
-        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+        if vidx in depth_cache:
+            depth_buffer = depth_cache[vidx]
+        else:
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
         valid, _score, px_proj, py_proj = _evaluate_view_samples(
             pos3d=pos3d,
             normals=normals,
@@ -864,12 +1022,15 @@ def bake_texture(
                 src_idx = int(pose_frame_indices[vidx])
                 c2w = poses[vidx]
                 try:
-                    frame = _load_frame(frames_dir, src_idx)
-                    mask_bool = _load_mask(mask_dir, src_idx)
+                    frame = frame_cache.load_frame(frames_dir, src_idx)
+                    mask_bool = frame_cache.load_mask(mask_dir, src_idx)
                 except FileNotFoundError:
                     continue
 
-                depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+                if vidx in depth_cache:
+                    depth_buffer = depth_cache[vidx]
+                else:
+                    depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
                 valid, _score, px_proj, py_proj = _evaluate_view_samples(
                     pos3d=pos3d,
                     normals=normals,
@@ -912,6 +1073,10 @@ def bake_texture(
             90.0 + ((level_idx + 1) / max(len(secondary_levels), 1)) * 2.0,
             f"Secondary view search ({level_idx + 1}/{len(secondary_levels)})",
         )
+
+    # Release caches to free memory before seam padding
+    depth_cache.clear()
+    del frame_cache
 
     cov = int(has_color.sum())
     print(f"Texture coverage before seam padding: {cov}/{n_valid} ({100*cov/max(n_valid,1):.1f}%)")
@@ -972,16 +1137,17 @@ def bake_texture(
         )
     print(f"Saved: {mtl_path}")
 
-    # OBJ
+    # OBJ (buffered write — Optimization F)
     with open(obj_path, "w") as f_out:
-        f_out.write(f"mtllib {basename}.mtl\nusemtl material_0\n\n")
+        lines = [f"mtllib {basename}.mtl\nusemtl material_0\n\n"]
         for vert in new_vertices:
-            f_out.write(f"v {vert[0]:.6f} {vert[1]:.6f} {vert[2]:.6f}\n")
+            lines.append(f"v {vert[0]:.6f} {vert[1]:.6f} {vert[2]:.6f}\n")
         for uv in uvs:
-            f_out.write(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
+            lines.append(f"vt {uv[0]:.6f} {uv[1]:.6f}\n")
         for face in new_faces:
             a, b, c = face + 1
-            f_out.write(f"f {a}/{a} {b}/{b} {c}/{c}\n")
+            lines.append(f"f {a}/{a} {b}/{b} {c}/{c}\n")
+        f_out.write("".join(lines))
     print(f"Saved: {obj_path}")
     _emit_progress(progress_cb, 100.0, "Texture stage complete")
 
