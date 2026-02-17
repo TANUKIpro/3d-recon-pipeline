@@ -528,6 +528,9 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session.mask_dir,
                 output_dir,
                 cfg.texture_size,
+                cfg.texture_pc_knn_k,
+                cfg.texture_pc_max_distance,
+                cfg.texture_pc_idw_power,
             )
             session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
 
@@ -1201,6 +1204,7 @@ def _stage_mesh_repair_selected(
 def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
+    pc_knn_k: int = 8, pc_max_distance: float = 0.0, pc_idw_power: float = 2.0,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -1215,6 +1219,9 @@ def _stage_texture_bake(
         mask_dir,
         output_dir,
         tex_size=texture_size,
+        pc_knn_k=pc_knn_k,
+        pc_max_distance=pc_max_distance,
+        pc_idw_power=pc_idw_power,
         progress_cb=progress_cb,
     )
 

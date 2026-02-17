@@ -1,7 +1,8 @@
-"""Stage 7: Texture baking from camera-projected views.
+"""Stage 7: Texture baking — point-cloud KNN colour with frame-projection fallback.
 
-Estimates camera intrinsics, generates UV atlas, selects best camera views
-per UV chart, and exports OBJ + MTL + PNG.
+Primary colouring uses KNN inverse-distance-weighted interpolation from the
+denoised point cloud (Pi3X RGB).  Texels that remain uncovered in sparse regions
+fall back to the legacy intrinsics-estimation + camera-projected view pipeline.
 
 Adapted from im2pc/host/extract_intrinsics.py and im2pc/host/texture_mesh.py.
 """
@@ -234,6 +235,94 @@ def _project_simple(pts, c2w, K):
     u = K[0, 0] * cam[:, 0] / sz + K[0, 2]
     v = K[1, 1] * cam[:, 1] / sz + K[1, 2]
     return np.column_stack([u, v]), d
+
+
+# ---------------------------------------------------------------------------
+# Point-cloud KNN colour interpolation
+# ---------------------------------------------------------------------------
+
+def _kdtree_color_interpolation(
+    pos3d: np.ndarray,
+    pc_points: np.ndarray,
+    pc_colors: np.ndarray,
+    k: int = 8,
+    max_distance: float = 0.0,
+    idw_power: float = 2.0,
+    batch_size: int = 50_000,
+    progress_cb: ProgressCallback | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Colour texels via KNN inverse-distance-weighted interpolation from a point cloud.
+
+    Args:
+        pos3d: (M, 3) texel 3D positions.
+        pc_points: (N, 3) point cloud XYZ.
+        pc_colors: (N, 3) point cloud RGB in [0, 1].
+        k: number of nearest neighbours.
+        max_distance: discard neighbours farther than this.
+            If 0, auto-set to ``median(k-th NN distance over 10 K samples) * 3``.
+        idw_power: exponent for inverse-distance weighting.
+        batch_size: query batch size to limit peak memory.
+        progress_cb: optional ``(progress%, detail)`` callback.
+
+    Returns:
+        (colors (M, 3) float32, covered (M,) bool)
+    """
+    from scipy.spatial import cKDTree
+
+    M = len(pos3d)
+    k = min(k, len(pc_points))
+    tree = cKDTree(pc_points)
+
+    # Auto max_distance from sampled k-th NN distances.
+    if max_distance <= 0.0:
+        n_sample = min(10_000, len(pc_points))
+        rng = np.random.default_rng(42)
+        sample_idx = rng.choice(len(pc_points), size=n_sample, replace=False)
+        sample_dists, _ = tree.query(pc_points[sample_idx], k=k)
+        kth_dists = sample_dists[:, -1] if sample_dists.ndim == 2 else sample_dists
+        max_distance = float(np.median(kth_dists) * 3.0)
+        print(f"  KNN auto max_distance = {max_distance:.6f}")
+
+    colors = np.zeros((M, 3), dtype=np.float32)
+    covered = np.zeros(M, dtype=bool)
+    eps = 1e-12
+
+    n_batches = math.ceil(M / batch_size)
+    for bi in range(n_batches):
+        start = bi * batch_size
+        end = min(start + batch_size, M)
+        dists, idxs = tree.query(pos3d[start:end], k=k)
+
+        if dists.ndim == 1:
+            dists = dists[:, np.newaxis]
+            idxs = idxs[:, np.newaxis]
+
+        # Mask neighbours beyond max_distance.
+        within = dists <= max_distance
+        any_within = np.any(within, axis=1)
+
+        if np.any(any_within):
+            w = np.where(within, 1.0 / np.maximum(dists, eps) ** idw_power, 0.0)
+            w_sum = w.sum(axis=1, keepdims=True)
+            w_sum = np.maximum(w_sum, eps)
+            w_norm = w / w_sum  # (chunk, k)
+
+            nn_colors = pc_colors[idxs]  # (chunk, k, 3)
+            interp = np.einsum("ij,ijk->ik", w_norm, nn_colors)  # (chunk, 3)
+
+            chunk_covered = any_within
+            colors[start:end][chunk_covered] = interp[chunk_covered].astype(np.float32)
+            covered[start:end] |= chunk_covered
+
+        if progress_cb is not None and (bi % max(1, n_batches // 20) == 0 or bi == n_batches - 1):
+            ratio = (bi + 1) / n_batches
+            _emit_progress(
+                progress_cb,
+                60.0 + ratio * 22.0,
+                f"KNN colour interpolation ({bi + 1}/{n_batches} batches)",
+            )
+
+    return colors, covered
 
 
 def _resolve_texture_device(requested: str | None = None) -> str:
@@ -508,9 +597,16 @@ def bake_texture(
     mask_dir: str,
     output_dir: str,
     tex_size: int | None = None,
+    pc_knn_k: int = 8,
+    pc_max_distance: float = 0.0,
+    pc_idw_power: float = 2.0,
     progress_cb: ProgressCallback | None = None,
 ) -> Path:
-    """Full texture baking pipeline: intrinsics → UV atlas → bake → export.
+    """Full texture baking pipeline: point-cloud KNN colour + frame-projection fallback.
+
+    Primary colouring uses KNN inverse-distance-weighted interpolation from the
+    denoised point cloud.  Texels that remain uncovered (sparse regions) fall
+    back to the legacy camera-projected view approach.
 
     Args:
         mesh_ply: Path to mesh PLY file.
@@ -522,15 +618,20 @@ def bake_texture(
             If unset, reads TEXTURE_SIZE (default 0).
             TEXTURE_SIZE<=0 enables auto mode:
             sqrt(image_width * image_height), rounded to nearest int.
+        pc_knn_k: Number of nearest neighbours for KNN colour interpolation.
+        pc_max_distance: Max distance for KNN; 0 = auto-compute from point cloud.
+        pc_idw_power: Exponent for inverse-distance weighting.
 
     Environment toggles for quality:
         TEXTURE_DEVICE (str): 'cuda' (default), 'auto', or 'cpu' request hint.
-            Current chart-selection path runs on CPU for deterministic z-buffering.
         TEXTURE_OVERSAMPLE (int): Internal supersampling multiplier (1=off, 2=default).
         TEXTURE_MIN_COS (float): Minimum normal·view cosine to accept a sample (default 0.2).
         TEXTURE_ANGLE_EXP (float): Exponent on cosine score (default 2.0).
         TEXTURE_DIST_POW (float): Distance falloff power for score (default 1.0).
         TEXTURE_SHARPEN (float): Unsharp mask amount (0=off, 0.1–0.4 typical).
+        TEXTURE_PC_KNN_K (int): Override pc_knn_k (default 8).
+        TEXTURE_PC_MAX_DISTANCE (float): Override pc_max_distance (default 0.0).
+        TEXTURE_PC_IDW_POWER (float): Override pc_idw_power (default 2.0).
 
     Returns:
         Path to the output OBJ file.
@@ -543,6 +644,9 @@ def bake_texture(
     dist_pow = float(os.environ.get("TEXTURE_DIST_POW", "1.0"))
     sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", "0.15"))
     texture_device = _resolve_texture_device()
+    pc_knn_k = max(1, int(os.environ.get("TEXTURE_PC_KNN_K", str(pc_knn_k))))
+    pc_max_distance = max(0.0, float(os.environ.get("TEXTURE_PC_MAX_DISTANCE", str(pc_max_distance))))
+    pc_idw_power = max(0.1, float(os.environ.get("TEXTURE_PC_IDW_POWER", str(pc_idw_power))))
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -580,37 +684,15 @@ def bake_texture(
     else:
         print(f"  Texture size: manual -> {tex_size}x{tex_size}")
 
-    # --- Estimate intrinsics ---
-    # Load denoised PLY for intrinsics estimation (original colored point cloud)
+    # --- Load point cloud (used for KNN colour and intrinsics estimation) ---
     denoised_ply = output_path / "object_denoised.ply"
     if denoised_ply.exists():
         pc_points, pc_colors = _load_point_cloud(str(denoised_ply))
     else:
-        # Fallback: use object.ply
         object_ply = output_path / "object.ply"
         pc_points, pc_colors = _load_point_cloud(str(object_ply))
-
-    print("Estimating camera intrinsics...")
-    _emit_progress(progress_cb, 15.0, "Estimating camera intrinsics")
-    _intrinsics_progress_last = {"value": 15.0}
-
-    def _intrinsics_progress(local_progress: float, detail: str | None = None) -> None:
-        stage_progress = 15.0 + (max(0.0, min(100.0, local_progress)) * 0.35)
-        if stage_progress - _intrinsics_progress_last["value"] >= 0.5:
-            _emit_progress(progress_cb, stage_progress, detail)
-            _intrinsics_progress_last["value"] = stage_progress
-
-    intrinsics = _estimate_intrinsics(
-        pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
-        progress_cb=_intrinsics_progress,
-    )
-    K = np.array(intrinsics["K"], dtype=np.float64)
-    print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
-    _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
-
-    # Save intrinsics
-    with open(output_path / "intrinsics.json", "w") as f_out:
-        json.dump(intrinsics, f_out, indent=2)
+    print(f"  Point cloud: {len(pc_points)} points")
+    _emit_progress(progress_cb, 15.0, "Point cloud loaded")
 
     # --- UV Atlas ---
     print("Generating UV atlas...")
@@ -691,227 +773,279 @@ def bake_texture(
     if n_valid == 0:
         raise RuntimeError("No valid texels were generated from UV atlas.")
 
-    # --- UV chart grouping ---
-    face_chart_ids, n_charts = _build_face_charts(new_faces)
-    texel_chart_ids = face_chart_ids[fids]
-    chart_texel_indices, chart_texel_counts = _group_texels_by_chart(texel_chart_ids, n_charts)
-    print(f"  UV charts: {n_charts}")
-
-    # --- Pass 1: score view candidates per chart ---
-    _emit_progress(progress_cb, 72.0, "Scoring camera views per UV chart")
-    emit_every_view = max(1, len(poses) // 40)
-    chart_candidates: list[list[tuple[float, float, int]]] = [[] for _ in range(n_charts)]
-
-    for vidx in range(len(poses)):
-        src_idx = int(pose_frame_indices[vidx])
-        c2w = poses[vidx]
-        try:
-            mask_bool = _load_mask(mask_dir, src_idx)
-        except FileNotFoundError:
-            continue
-
-        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
-        valid, score, _px_proj, _py_proj = _evaluate_view_samples(
-            pos3d=pos3d,
-            normals=normals,
-            c2w=c2w,
-            K=K,
-            img_w=img_w,
-            img_h=img_h,
-            mask_bool=mask_bool,
-            depth_buffer=depth_buffer,
-            min_cos=min_cos,
-            angle_exp=angle_exp,
-            dist_pow=dist_pow,
-        )
-        valid_idx = np.where(valid)[0]
-        if valid_idx.size > 0:
-            chart_hits = texel_chart_ids[valid_idx]
-            counts = np.bincount(chart_hits, minlength=n_charts)
-            score_sums = np.bincount(chart_hits, weights=score[valid_idx], minlength=n_charts)
-            active = np.where(counts > 0)[0]
-            for cid in active:
-                total_chart = max(int(chart_texel_counts[cid]), 1)
-                coverage = float(counts[cid]) / float(total_chart)
-                mean_score = float(score_sums[cid] / counts[cid])
-                chart_candidates[int(cid)].append((coverage, mean_score, vidx))
-            n_chart_hits = int(len(active))
-        else:
-            n_chart_hits = 0
-
-        if vidx % 5 == 0 or vidx == len(poses) - 1:
-            print(
-                f"  Candidate scoring {vidx + 1}/{len(poses)}: "
-                f"texels={int(valid_idx.size)}, charts={n_chart_hits}"
-            )
-        if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
-            ratio = (vidx + 1) / max(len(poses), 1)
-            _emit_progress(
-                progress_cb,
-                72.0 + ratio * 12.0,
-                f"Scoring views ({vidx + 1}/{len(poses)} views)",
-            )
-
-    primary_chart_views, chart_view_orders = _rank_chart_view_candidates(chart_candidates, len(poses))
-    n_primary = int(np.count_nonzero(primary_chart_views >= 0))
-    print(f"Primary views assigned: {n_primary}/{n_charts} charts")
+    # --- Point-cloud KNN colour interpolation (primary) ---
+    print(
+        f"KNN colour interpolation: k={pc_knn_k}, max_dist={pc_max_distance}, "
+        f"idw_power={pc_idw_power}"
+    )
+    _emit_progress(progress_cb, 60.0, "KNN colour interpolation")
+    pc_colors_interp, pc_covered = _kdtree_color_interpolation(
+        pos3d, pc_points, pc_colors,
+        k=pc_knn_k,
+        max_distance=pc_max_distance,
+        idw_power=pc_idw_power,
+        progress_cb=progress_cb,
+    )
 
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float32)
     has_color = np.zeros(n_valid, dtype=bool)
+    texture[ys[pc_covered], xs[pc_covered]] = pc_colors_interp[pc_covered]
+    has_color[pc_covered] = True
 
-    # --- Pass 2: primary chart assignment ---
-    _emit_progress(progress_cb, 84.0, "Projecting primary chart textures")
-    charts_by_view: dict[int, list[int]] = defaultdict(list)
-    for cid, vidx in enumerate(primary_chart_views):
-        if int(chart_texel_counts[cid]) <= 0:
-            continue
-        if vidx >= 0:
-            charts_by_view[int(vidx)].append(cid)
+    pc_cov = int(pc_covered.sum())
+    print(
+        f"  KNN coverage: {pc_cov}/{n_valid} "
+        f"({100 * pc_cov / max(n_valid, 1):.1f}%)"
+    )
 
-    primary_items = sorted(charts_by_view.items())
-    for order_idx, (vidx, chart_ids_for_view) in enumerate(primary_items):
-        src_idx = int(pose_frame_indices[vidx])
-        c2w = poses[vidx]
-        try:
-            frame = _load_frame(frames_dir, src_idx)
-            mask_bool = _load_mask(mask_dir, src_idx)
-        except FileNotFoundError:
-            continue
+    # --- Frame-projection fallback for uncovered texels ---
+    if not np.all(has_color):
+        print("Falling back to frame projection for uncovered texels...")
 
-        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
-        valid, _score, px_proj, py_proj = _evaluate_view_samples(
-            pos3d=pos3d,
-            normals=normals,
-            c2w=c2w,
-            K=K,
-            img_w=img_w,
-            img_h=img_h,
-            mask_bool=mask_bool,
-            depth_buffer=depth_buffer,
-            min_cos=min_cos,
-            angle_exp=angle_exp,
-            dist_pow=dist_pow,
+        # Estimate intrinsics (needed for projection)
+        print("Estimating camera intrinsics...")
+        _emit_progress(progress_cb, 82.0, "Estimating camera intrinsics")
+        _intrinsics_progress_last = {"value": 82.0}
+
+        def _intrinsics_progress(local_progress: float, detail: str | None = None) -> None:
+            stage_progress = 82.0 + (max(0.0, min(100.0, local_progress)) * 0.02)
+            if stage_progress - _intrinsics_progress_last["value"] >= 0.5:
+                _emit_progress(progress_cb, stage_progress, detail)
+                _intrinsics_progress_last["value"] = stage_progress
+
+        intrinsics = _estimate_intrinsics(
+            pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
+            progress_cb=_intrinsics_progress,
         )
+        K = np.array(intrinsics["K"], dtype=np.float64)
+        print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
 
-        filled_view = 0
-        for cid in chart_ids_for_view:
-            texel_idx = chart_texel_indices[cid]
-            if texel_idx.size == 0:
+        # Save intrinsics
+        with open(output_path / "intrinsics.json", "w") as f_out:
+            json.dump(intrinsics, f_out, indent=2)
+
+        # UV chart grouping
+        face_chart_ids, n_charts = _build_face_charts(new_faces)
+        texel_chart_ids = face_chart_ids[fids]
+        chart_texel_indices, chart_texel_counts = _group_texels_by_chart(texel_chart_ids, n_charts)
+        print(f"  UV charts: {n_charts}")
+
+        # Pass 1: score view candidates per chart
+        _emit_progress(progress_cb, 84.0, "Scoring camera views per UV chart")
+        emit_every_view = max(1, len(poses) // 40)
+        chart_candidates: list[list[tuple[float, float, int]]] = [[] for _ in range(n_charts)]
+
+        for vidx in range(len(poses)):
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
+            try:
+                mask_bool = _load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
                 continue
-            ok = valid[texel_idx]
-            if not np.any(ok):
-                continue
-            fill_idx = texel_idx[ok]
-            colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(np.float32)
-            texture[ys[fill_idx], xs[fill_idx]] = colors
-            has_color[fill_idx] = True
-            filled_view += int(fill_idx.size)
 
-        print(
-            f"  Primary projection view {vidx + 1}/{len(poses)}: "
-            f"charts={len(chart_ids_for_view)}, filled={filled_view}"
-        )
-        ratio = (order_idx + 1) / max(len(primary_items), 1)
-        _emit_progress(
-            progress_cb,
-            84.0 + ratio * 6.0,
-            f"Applying primary views ({order_idx + 1}/{len(primary_items)})",
-        )
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+            valid, score, _px_proj, _py_proj = _evaluate_view_samples(
+                pos3d=pos3d,
+                normals=normals,
+                c2w=c2w,
+                K=K,
+                img_w=img_w,
+                img_h=img_h,
+                mask_bool=mask_bool,
+                depth_buffer=depth_buffer,
+                min_cos=min_cos,
+                angle_exp=angle_exp,
+                dist_pow=dist_pow,
+            )
+            valid_idx = np.where(valid)[0]
+            if valid_idx.size > 0:
+                chart_hits = texel_chart_ids[valid_idx]
+                counts = np.bincount(chart_hits, minlength=n_charts)
+                score_sums = np.bincount(chart_hits, weights=score[valid_idx], minlength=n_charts)
+                active = np.where(counts > 0)[0]
+                for cid in active:
+                    total_chart = max(int(chart_texel_counts[cid]), 1)
+                    coverage = float(counts[cid]) / float(total_chart)
+                    mean_score = float(score_sums[cid] / counts[cid])
+                    chart_candidates[int(cid)].append((coverage, mean_score, vidx))
+                n_chart_hits = int(len(active))
+            else:
+                n_chart_hits = 0
 
-    # --- Pass 3: secondary fallback with relaxed thresholds ---
-    secondary_levels = _secondary_min_cos_levels(min_cos)
-    chart_cursors = np.zeros(n_charts, dtype=np.int32)
-    for cid in range(n_charts):
-        primary_vidx = int(primary_chart_views[cid])
-        if primary_vidx < 0:
-            chart_cursors[cid] = 0
-            continue
-        order = chart_view_orders[cid]
-        try:
-            chart_cursors[cid] = int(order.index(primary_vidx)) + 1
-        except ValueError:
-            chart_cursors[cid] = 0
-
-    if secondary_levels:
-        _emit_progress(progress_cb, 90.0, "Secondary view search for uncovered texels")
-
-    for level_idx, relaxed_min_cos in enumerate(secondary_levels):
-        if not np.any(~has_color):
-            break
-        level_filled = 0
-
-        # Try two next-best rounds per relaxation level.
-        for _round in range(2):
-            missing_texels = np.where(~has_color)[0]
-            if missing_texels.size == 0:
-                break
-            missing_charts = np.unique(texel_chart_ids[missing_texels])
-            charts_for_view: dict[int, list[int]] = defaultdict(list)
-
-            for cid in missing_charts.tolist():
-                cursor = int(chart_cursors[cid])
-                order = chart_view_orders[cid]
-                if cursor >= len(order):
-                    continue
-                vidx = int(order[cursor])
-                chart_cursors[cid] = cursor + 1
-                charts_for_view[vidx].append(cid)
-
-            if not charts_for_view:
-                break
-
-            for vidx, chart_ids_for_view in sorted(charts_for_view.items()):
-                src_idx = int(pose_frame_indices[vidx])
-                c2w = poses[vidx]
-                try:
-                    frame = _load_frame(frames_dir, src_idx)
-                    mask_bool = _load_mask(mask_dir, src_idx)
-                except FileNotFoundError:
-                    continue
-
-                depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
-                valid, _score, px_proj, py_proj = _evaluate_view_samples(
-                    pos3d=pos3d,
-                    normals=normals,
-                    c2w=c2w,
-                    K=K,
-                    img_w=img_w,
-                    img_h=img_h,
-                    mask_bool=mask_bool,
-                    depth_buffer=depth_buffer,
-                    min_cos=relaxed_min_cos,
-                    angle_exp=angle_exp,
-                    dist_pow=dist_pow,
+            if vidx % 5 == 0 or vidx == len(poses) - 1:
+                print(
+                    f"  Candidate scoring {vidx + 1}/{len(poses)}: "
+                    f"texels={int(valid_idx.size)}, charts={n_chart_hits}"
+                )
+            if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
+                ratio = (vidx + 1) / max(len(poses), 1)
+                _emit_progress(
+                    progress_cb,
+                    84.0 + ratio * 4.0,
+                    f"Scoring views ({vidx + 1}/{len(poses)} views)",
                 )
 
-                for cid in chart_ids_for_view:
-                    texel_idx = chart_texel_indices[cid]
-                    if texel_idx.size == 0:
-                        continue
-                    pending = texel_idx[~has_color[texel_idx]]
-                    if pending.size == 0:
-                        continue
-                    ok = valid[pending]
-                    if not np.any(ok):
-                        continue
-                    fill_idx = pending[ok]
-                    colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(
-                        np.float32
-                    )
-                    texture[ys[fill_idx], xs[fill_idx]] = colors
-                    has_color[fill_idx] = True
-                    level_filled += int(fill_idx.size)
+        primary_chart_views, chart_view_orders = _rank_chart_view_candidates(chart_candidates, len(poses))
+        n_primary = int(np.count_nonzero(primary_chart_views >= 0))
+        print(f"Primary views assigned: {n_primary}/{n_charts} charts")
 
-        remaining = int((~has_color).sum())
-        print(
-            f"  Secondary pass {level_idx + 1}/{len(secondary_levels)}: "
-            f"min_cos={relaxed_min_cos:.3f}, filled={level_filled}, remaining={remaining}"
-        )
-        _emit_progress(
-            progress_cb,
-            90.0 + ((level_idx + 1) / max(len(secondary_levels), 1)) * 2.0,
-            f"Secondary view search ({level_idx + 1}/{len(secondary_levels)})",
-        )
+        # Pass 2: primary chart assignment (skip KNN-covered texels)
+        _emit_progress(progress_cb, 88.0, "Projecting primary chart textures")
+        charts_by_view: dict[int, list[int]] = defaultdict(list)
+        for cid, vidx in enumerate(primary_chart_views):
+            if int(chart_texel_counts[cid]) <= 0:
+                continue
+            if vidx >= 0:
+                charts_by_view[int(vidx)].append(cid)
+
+        primary_items = sorted(charts_by_view.items())
+        for order_idx, (vidx, chart_ids_for_view) in enumerate(primary_items):
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
+            try:
+                frame = _load_frame(frames_dir, src_idx)
+                mask_bool = _load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
+                continue
+
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+            valid, _score, px_proj, py_proj = _evaluate_view_samples(
+                pos3d=pos3d,
+                normals=normals,
+                c2w=c2w,
+                K=K,
+                img_w=img_w,
+                img_h=img_h,
+                mask_bool=mask_bool,
+                depth_buffer=depth_buffer,
+                min_cos=min_cos,
+                angle_exp=angle_exp,
+                dist_pow=dist_pow,
+            )
+
+            filled_view = 0
+            for cid in chart_ids_for_view:
+                texel_idx = chart_texel_indices[cid]
+                if texel_idx.size == 0:
+                    continue
+                pending = texel_idx[~has_color[texel_idx]]
+                if pending.size == 0:
+                    continue
+                ok = valid[pending]
+                if not np.any(ok):
+                    continue
+                fill_idx = pending[ok]
+                colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(np.float32)
+                texture[ys[fill_idx], xs[fill_idx]] = colors
+                has_color[fill_idx] = True
+                filled_view += int(fill_idx.size)
+
+            print(
+                f"  Primary projection view {vidx + 1}/{len(poses)}: "
+                f"charts={len(chart_ids_for_view)}, filled={filled_view}"
+            )
+            ratio = (order_idx + 1) / max(len(primary_items), 1)
+            _emit_progress(
+                progress_cb,
+                88.0 + ratio * 2.0,
+                f"Applying primary views ({order_idx + 1}/{len(primary_items)})",
+            )
+
+        # Pass 3: secondary fallback with relaxed thresholds
+        secondary_levels = _secondary_min_cos_levels(min_cos)
+        chart_cursors = np.zeros(n_charts, dtype=np.int32)
+        for cid in range(n_charts):
+            primary_vidx = int(primary_chart_views[cid])
+            if primary_vidx < 0:
+                chart_cursors[cid] = 0
+                continue
+            order = chart_view_orders[cid]
+            try:
+                chart_cursors[cid] = int(order.index(primary_vidx)) + 1
+            except ValueError:
+                chart_cursors[cid] = 0
+
+        if secondary_levels:
+            _emit_progress(progress_cb, 90.0, "Secondary view search for uncovered texels")
+
+        for level_idx, relaxed_min_cos in enumerate(secondary_levels):
+            if not np.any(~has_color):
+                break
+            level_filled = 0
+
+            for _round in range(2):
+                missing_texels = np.where(~has_color)[0]
+                if missing_texels.size == 0:
+                    break
+                missing_charts = np.unique(texel_chart_ids[missing_texels])
+                charts_for_view: dict[int, list[int]] = defaultdict(list)
+
+                for cid in missing_charts.tolist():
+                    cursor = int(chart_cursors[cid])
+                    order = chart_view_orders[cid]
+                    if cursor >= len(order):
+                        continue
+                    vidx = int(order[cursor])
+                    chart_cursors[cid] = cursor + 1
+                    charts_for_view[vidx].append(cid)
+
+                if not charts_for_view:
+                    break
+
+                for vidx, chart_ids_for_view in sorted(charts_for_view.items()):
+                    src_idx = int(pose_frame_indices[vidx])
+                    c2w = poses[vidx]
+                    try:
+                        frame = _load_frame(frames_dir, src_idx)
+                        mask_bool = _load_mask(mask_dir, src_idx)
+                    except FileNotFoundError:
+                        continue
+
+                    depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+                    valid, _score, px_proj, py_proj = _evaluate_view_samples(
+                        pos3d=pos3d,
+                        normals=normals,
+                        c2w=c2w,
+                        K=K,
+                        img_w=img_w,
+                        img_h=img_h,
+                        mask_bool=mask_bool,
+                        depth_buffer=depth_buffer,
+                        min_cos=relaxed_min_cos,
+                        angle_exp=angle_exp,
+                        dist_pow=dist_pow,
+                    )
+
+                    for cid in chart_ids_for_view:
+                        texel_idx = chart_texel_indices[cid]
+                        if texel_idx.size == 0:
+                            continue
+                        pending = texel_idx[~has_color[texel_idx]]
+                        if pending.size == 0:
+                            continue
+                        ok = valid[pending]
+                        if not np.any(ok):
+                            continue
+                        fill_idx = pending[ok]
+                        colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(
+                            np.float32
+                        )
+                        texture[ys[fill_idx], xs[fill_idx]] = colors
+                        has_color[fill_idx] = True
+                        level_filled += int(fill_idx.size)
+
+            remaining = int((~has_color).sum())
+            print(
+                f"  Secondary pass {level_idx + 1}/{len(secondary_levels)}: "
+                f"min_cos={relaxed_min_cos:.3f}, filled={level_filled}, remaining={remaining}"
+            )
+            _emit_progress(
+                progress_cb,
+                90.0 + ((level_idx + 1) / max(len(secondary_levels), 1)) * 2.0,
+                f"Secondary view search ({level_idx + 1}/{len(secondary_levels)})",
+            )
+    else:
+        print("Full coverage from point cloud -- skipping frame projection")
 
     cov = int(has_color.sum())
     print(f"Texture coverage before seam padding: {cov}/{n_valid} ({100*cov/max(n_valid,1):.1f}%)")
@@ -997,6 +1131,14 @@ if __name__ == "__main__":
     parser.add_argument("--frames-dir", required=True)
     parser.add_argument("--masks-dir", required=True)
     parser.add_argument("--output-dir", default="/data/output")
+    parser.add_argument("--pc-knn-k", type=int, default=8, help="KNN neighbours (default 8)")
+    parser.add_argument("--pc-max-distance", type=float, default=0.0, help="KNN max distance, 0=auto")
+    parser.add_argument("--pc-idw-power", type=float, default=2.0, help="IDW exponent (default 2.0)")
     args = parser.parse_args()
 
-    bake_texture(args.mesh_ply, args.poses, args.frames_dir, args.masks_dir, args.output_dir)
+    bake_texture(
+        args.mesh_ply, args.poses, args.frames_dir, args.masks_dir, args.output_dir,
+        pc_knn_k=args.pc_knn_k,
+        pc_max_distance=args.pc_max_distance,
+        pc_idw_power=args.pc_idw_power,
+    )

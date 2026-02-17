@@ -129,6 +129,9 @@ class PipelineConfig:
     mesh_repair_y_band_ratio: float = 0.06
     mesh_repair_smooth_iters: int = 3
     texture_size: int = 0
+    texture_pc_knn_k: int = 8
+    texture_pc_max_distance: float = 0.0
+    texture_pc_idw_power: float = 2.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PipelineConfig:

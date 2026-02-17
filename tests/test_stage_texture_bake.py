@@ -6,6 +6,7 @@ import numpy as np
 
 from scripts.stage_texture_bake import (
     _build_face_charts,
+    _kdtree_color_interpolation,
     _rank_chart_view_candidates,
     _resolve_texture_device,
     _resolve_texture_size,
@@ -147,3 +148,83 @@ class ResolveTextureSizeTests(unittest.TestCase):
             size, is_auto = _resolve_texture_size(None, 640, 360)
             self.assertEqual(size, 480)
             self.assertTrue(is_auto)
+
+
+class TestKDTreeColorInterpolation(unittest.TestCase):
+    """Tests for _kdtree_color_interpolation."""
+
+    def _make_cube_pc(self):
+        """4 points at cube corners with distinct colours."""
+        points = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        colors = np.array([
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 0.0],
+        ], dtype=np.float64)
+        return points, colors
+
+    def test_basic_interpolation(self) -> None:
+        """Texel near a known point should get a colour close to that point."""
+        pc_points, pc_colors = self._make_cube_pc()
+        texels = np.array([[0.01, 0.01, 0.01]], dtype=np.float64)
+
+        colors, covered = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=4, max_distance=5.0,
+        )
+        self.assertTrue(covered[0])
+        # Closest point is [0,0,0] with colour [1,0,0]; IDW should favour it.
+        self.assertGreater(colors[0, 0], 0.5)  # red channel dominant
+
+    def test_uncovered_texels(self) -> None:
+        """Texels beyond max_distance should be uncovered."""
+        pc_points, pc_colors = self._make_cube_pc()
+        texels = np.array([[100.0, 100.0, 100.0]], dtype=np.float64)
+
+        colors, covered = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=4, max_distance=1.0,
+        )
+        self.assertFalse(covered[0])
+        np.testing.assert_array_equal(colors[0], [0.0, 0.0, 0.0])
+
+    def test_auto_max_distance(self) -> None:
+        """max_distance=0 should auto-compute a positive value and cover nearby texels."""
+        pc_points, pc_colors = self._make_cube_pc()
+        texels = np.array([[0.5, 0.5, 0.0]], dtype=np.float64)
+
+        colors, covered = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=4, max_distance=0.0,
+        )
+        self.assertTrue(covered[0])
+        # Should be a blend, sum of channels roughly > 0
+        self.assertGreater(np.sum(colors[0]), 0.1)
+
+    def test_k_equals_one(self) -> None:
+        """k=1 should return the exact nearest neighbour colour."""
+        pc_points, pc_colors = self._make_cube_pc()
+        texels = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+
+        colors, covered = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=1, max_distance=5.0,
+        )
+        self.assertTrue(covered[0])
+        np.testing.assert_allclose(colors[0], [1.0, 0.0, 0.0], atol=1e-5)
+
+    def test_batch_boundary(self) -> None:
+        """Results should be consistent regardless of batch size."""
+        pc_points, pc_colors = self._make_cube_pc()
+        texels = np.tile([[0.5, 0.5, 0.0]], (120, 1)).astype(np.float64)
+
+        c1, cov1 = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=4, max_distance=5.0, batch_size=50,
+        )
+        c2, cov2 = _kdtree_color_interpolation(
+            texels, pc_points, pc_colors, k=4, max_distance=5.0, batch_size=200,
+        )
+        np.testing.assert_array_equal(cov1, cov2)
+        np.testing.assert_allclose(c1, c2, atol=1e-6)

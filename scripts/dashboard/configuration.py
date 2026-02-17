@@ -365,4 +365,22 @@ def build_pipeline_config(
             ),
         ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", 0, env_map)),
+        texture_pc_knn_k=max(
+            1,
+            parse_int(raw.get("texture_pc_knn_k"), env_int("TEXTURE_PC_KNN_K", 8, env_map)),
+        ),
+        texture_pc_max_distance=max(
+            0.0,
+            parse_float(
+                raw.get("texture_pc_max_distance"),
+                env_float("TEXTURE_PC_MAX_DISTANCE", 0.0, env_map),
+            ),
+        ),
+        texture_pc_idw_power=max(
+            0.1,
+            parse_float(
+                raw.get("texture_pc_idw_power"),
+                env_float("TEXTURE_PC_IDW_POWER", 2.0, env_map),
+            ),
+        ),
     )
