@@ -123,7 +123,7 @@ document.addEventListener('stage-activated', async (e) => {
   if (stage === 6) {
     const s5 = stageCtrl.getStageState(5);
     const s6 = stageCtrl.getStageState(6);
-    if (s5 === 'complete' && s6 !== 'complete') {
+    if (s5 === 'complete' && s6 !== 'complete' && s6 !== 'interactive') {
       await preview.showCropBbox(config.getCropScale(), { preferPreview: _meshMethod === 'poisson' });
     }
   }
@@ -304,11 +304,6 @@ ws.on('stage_start', (msg) => {
     setMeshPhaseStatus('Classical Mesh started.', 'live');
   } else if (Number(msg.stage) === 5 && _meshMethod !== 'poisson') {
     setMeshPhaseStatus('', '');
-  }
-  if (Number(msg.stage) === 6) {
-    preview.showCropBbox(config.getCropScale(), { preferPreview: _meshMethod === 'poisson' }).catch((e) => {
-      console.warn('Crop bbox preview failed:', e);
-    });
   }
 });
 
