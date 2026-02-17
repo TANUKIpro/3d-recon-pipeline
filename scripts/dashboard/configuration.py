@@ -319,4 +319,5 @@ def build_pipeline_config(
             ),
         ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", TEXTURE_SIZE, env_map)),
+        auto_accept=parse_bool(raw.get("auto_accept"), False),
     )

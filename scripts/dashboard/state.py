@@ -167,6 +167,7 @@ class PipelineConfig:
     mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO
     mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS
     texture_size: int = TEXTURE_SIZE
+    auto_accept: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PipelineConfig:
@@ -555,6 +556,7 @@ class PipelineSession:
                 }
                 for k, v in self.stages.items()
             },
+            "auto_accept": self.config.auto_accept,
             "overall_progress": self.overall_progress(),
         }
 

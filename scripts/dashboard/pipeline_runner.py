@@ -674,6 +674,7 @@ async def _wait_for_next_stage_confirmation(
         from_stage,
         detail="Waiting for next-stage confirmation",
     )
+    auto_accepted = session.config.auto_accept
     await broadcast(
         session,
         {
@@ -681,9 +682,12 @@ async def _wait_for_next_stage_confirmation(
             "from_stage": int(from_stage),
             "to_stage": int(to_stage),
             "message": message,
+            "auto_accepted": auto_accepted,
             "overall_progress": session.overall_progress(),
         },
     )
+    if auto_accepted:
+        session.next_stage_confirm_event.set()
     await session.next_stage_confirm_event.wait()
     session.clear_next_stage_confirmation()
     await broadcast(
@@ -794,16 +798,23 @@ async def _run_mesh_repair_interactive(
             progress=38.0,
             detail="Waiting for repair-loop selection",
         )
+        auto_accepted = session.config.auto_accept
         await broadcast(
             session,
             {
                 "type": "mesh_repair_ready",
                 "stage": int(stage),
                 "candidate_count": len(candidates),
+                "auto_accepted": auto_accepted,
                 "overall_progress": session.overall_progress(),
             },
         )
 
+        if auto_accepted:
+            session.mesh_repair_selected_loop_ids = [
+                int(c["loop_id"]) for c in candidates if "loop_id" in c
+            ]
+            session.mesh_repair_confirm_event.set()
         await session.mesh_repair_confirm_event.wait()
         _check_cancelled(session)
         selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]

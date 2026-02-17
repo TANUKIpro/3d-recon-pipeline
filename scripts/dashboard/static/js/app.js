@@ -214,6 +214,7 @@ config.onStart = async (cfg) => {
   try {
     // Ignore late responses from previous object-load requests while starting a new run.
     _objectLoadRequestId += 1;
+    cfg.auto_accept = settings.autoAccept;
     applyMeshMethod(cfg.mesh_method || _meshMethod, { announce: false });
     config.setRunning(true);
     pipelineUI.setMeshMethodEnabled(false);
@@ -429,6 +430,16 @@ ws.on('pi3x_preview_ready', () => {
 });
 
 ws.on('mesh_repair_ready', async (msg) => {
+  const autoAccepted = msg.auto_accepted === true;
+  if (autoAccepted) {
+    const loopCount = Number(msg.candidate_count) || 0;
+    appendLog(
+      'stdout',
+      `[Auto] Mesh Repair: auto-selected all ${loopCount} closed surfaces.\n`,
+      { stage: 7 },
+    );
+    return;
+  }
   checkpoints.onStageInteractive(7, 'Waiting for repair-loop selection');
   pipelineUI.stageInteractive(7);
   stageCtrl.setStageState(7, 'interactive');
@@ -451,6 +462,7 @@ ws.on('mesh_repair_ready', async (msg) => {
 ws.on('next_stage_confirmation_required', (msg) => {
   const fromStage = Number(msg.from_stage);
   const toStage = Number(msg.to_stage);
+  const autoAccepted = msg.auto_accepted === true;
   if (fromStage >= 1 && fromStage <= TRANSITION_STAGE_MAX) {
     // Keep checkpoint detail machine-readable for deterministic completion mapping.
     checkpoints.onStageInteractive(fromStage, 'Waiting for next-stage confirmation');
@@ -461,20 +473,27 @@ ws.on('next_stage_confirmation_required', (msg) => {
         defaultTaskConfirmConfirmedMessage(_waitingConfirmationStage, _waitingConfirmationToStage),
       );
     }
-    _waitingConfirmationStage = fromStage;
-    _waitingConfirmationToStage = Number.isFinite(toStage) ? toStage : null;
-    pipelineUI.stageInteractive(fromStage);
-    stageCtrl.setStageState(fromStage, 'interactive');
-    stageCtrl.activateStage(fromStage);
-    setTaskConfirmState(
-      fromStage,
-      'waiting',
-      String(msg.message || defaultTaskConfirmWaitingMessage(fromStage, _waitingConfirmationToStage)),
-    );
-    setTaskConfirmVisibleStage(fromStage);
+    if (autoAccepted) {
+      _waitingConfirmationStage = null;
+      _waitingConfirmationToStage = null;
+      setTaskConfirmState(fromStage, 'sending', 'Auto-accepted');
+    } else {
+      _waitingConfirmationStage = fromStage;
+      _waitingConfirmationToStage = Number.isFinite(toStage) ? toStage : null;
+      pipelineUI.stageInteractive(fromStage);
+      stageCtrl.setStageState(fromStage, 'interactive');
+      stageCtrl.activateStage(fromStage);
+      setTaskConfirmState(
+        fromStage,
+        'waiting',
+        String(msg.message || defaultTaskConfirmWaitingMessage(fromStage, _waitingConfirmationToStage)),
+      );
+      setTaskConfirmVisibleStage(fromStage);
+    }
   }
   if (msg.message) {
-    appendLog('stdout', `${msg.message}\n`, { stage: fromStage });
+    const prefix = autoAccepted ? '[Auto] ' : '';
+    appendLog('stdout', `${prefix}${msg.message}\n`, { stage: fromStage });
   }
 });
 
