@@ -8,13 +8,15 @@ const KEYS = {
   lang: 'im2pc:lang',
   autoScroll: 'im2pc:log.autoScroll',
   maxLines: 'im2pc:log.maxLines',
+  autoAccept: 'im2pc:autoAccept',
 };
 
 const DEFAULTS = {
-  theme: 'dark',
+  theme: 'light',
   lang: 'en',
   autoScroll: true,
   maxLines: 2000,
+  autoAccept: false,
 };
 
 export class SettingsPanel {
@@ -29,6 +31,7 @@ export class SettingsPanel {
     this._lang = localStorage.getItem(KEYS.lang) || i18n.lang || DEFAULTS.lang;
     this._autoScroll = this._readBool(KEYS.autoScroll, DEFAULTS.autoScroll);
     this._maxLines = this._readInt(KEYS.maxLines, DEFAULTS.maxLines, 100, 50000);
+    this._autoAccept = this._readBool(KEYS.autoAccept, DEFAULTS.autoAccept);
 
     // Callbacks
     this.onThemeChanged = null;   // (theme: string) => void
@@ -58,6 +61,7 @@ export class SettingsPanel {
   get lang() { return this._lang; }
   get autoScroll() { return this._autoScroll; }
   get maxLines() { return this._maxLines; }
+  get autoAccept() { return this._autoAccept; }
 
   open() {
     if (this._overlay) {
@@ -135,6 +139,9 @@ export class SettingsPanel {
 
     // Language
     body.appendChild(this._buildLangGroup(t));
+
+    // Auto-accept
+    body.appendChild(this._buildAutoAcceptGroup(t));
 
     // Log settings
     body.appendChild(this._buildLogGroup(t));
@@ -236,6 +243,39 @@ export class SettingsPanel {
     row.appendChild(enBtn);
     row.appendChild(jaBtn);
     group.appendChild(row);
+    return group;
+  }
+
+  _buildAutoAcceptGroup(t) {
+    const group = document.createElement('div');
+    group.className = 'settings-group';
+
+    const label = document.createElement('label');
+    label.className = 'settings-label';
+    label.textContent = t('settings.autoAccept');
+    label.setAttribute('data-i18n', 'settings.autoAccept');
+    group.appendChild(label);
+
+    const row = document.createElement('div');
+    row.className = 'settings-row';
+
+    const checkLabel = document.createElement('label');
+    checkLabel.className = 'settings-check-label';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = this._autoAccept;
+    check.addEventListener('change', () => {
+      this._autoAccept = check.checked;
+      localStorage.setItem(KEYS.autoAccept, String(this._autoAccept));
+    });
+    const descText = document.createElement('span');
+    descText.textContent = t('settings.autoAccept.desc');
+    descText.setAttribute('data-i18n', 'settings.autoAccept.desc');
+    checkLabel.appendChild(check);
+    checkLabel.appendChild(descText);
+    row.appendChild(checkLabel);
+    group.appendChild(row);
+
     return group;
   }
 
