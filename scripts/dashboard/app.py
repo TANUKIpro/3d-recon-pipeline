@@ -1091,6 +1091,27 @@ async def preview_file(path: str):
     return FileResponse(str(target), media_type=mt)
 
 
+@app.get("/api/preview/crop-obb")
+async def preview_crop_obb():
+    """Return OBB (center, extent, rotation) for the object mesh."""
+    out = _active_output_dir()
+    mesh_path = out / "object_mesh.ply"
+    if not mesh_path.is_file():
+        return JSONResponse({"error": "object_mesh.ply not found"}, status_code=404)
+    try:
+        import open3d as o3d
+        import numpy as np
+        mesh = o3d.io.read_triangle_mesh(str(mesh_path))
+        obb = mesh.get_oriented_bounding_box()
+        return JSONResponse({
+            "center": np.asarray(obb.center).tolist(),
+            "extent": np.asarray(obb.extent).tolist(),
+            "rotation": np.asarray(obb.R).tolist(),
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── VRAM endpoint ─────────────────────────────────────────────────
 
 @app.get("/api/vram")

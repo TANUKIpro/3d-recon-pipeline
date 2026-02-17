@@ -48,8 +48,8 @@ export class PreviewPanel {
       },
     };
     this._cropBbox = {
-      helper: null,        // THREE.Box3Helper
-      sourceBbox: null,    // THREE.Box3 (centered mesh AABB)
+      helper: null,        // THREE.LineSegments (OBB wireframe)
+      obbData: null,       // { center, extent, rotation, adjustedCenter } from API
     };
   }
 
@@ -466,7 +466,7 @@ export class PreviewPanel {
 
   /**
    * Show crop bounding box overlay on Stage 6 scene.
-   * Loads Stage 5 output mesh into Stage 6 and draws a scaled AABB wireframe.
+   * Loads Stage 5 output mesh into Stage 6 and draws an OBB wireframe.
    */
   async showCropBbox(cropScale) {
     const loaded = await this.loadStageResult(6, {
@@ -480,15 +480,20 @@ export class PreviewPanel {
     const stage = this._stages[6];
     if (!stage?.currentObject) return;
 
-    // Get geometry bounding box from the loaded mesh (already centered).
-    let geometry = null;
-    stage.currentObject.traverse((node) => {
-      if (!geometry && node.geometry) geometry = node.geometry;
-    });
-    if (!geometry) return;
+    // Fetch OBB data from backend
+    try {
+      const resp = await fetch('/api/preview/crop-obb');
+      if (!resp.ok) return;
+      const obb = await resp.json();
 
-    geometry.computeBoundingBox();
-    this._cropBbox.sourceBbox = geometry.boundingBox.clone();
+      // Adjust OBB center by the stage centering offset
+      const adjusted = this._applyStageCenterOffset(stage, obb.center);
+      obb.adjustedCenter = adjusted || [0, 0, 0];
+      this._cropBbox.obbData = obb;
+    } catch (_) {
+      return;
+    }
+
     this._createCropBboxHelper(cropScale);
 
     const empty = document.getElementById('stage-6-empty');
@@ -497,7 +502,8 @@ export class PreviewPanel {
 
   _createCropBboxHelper(cropScale) {
     const stage = this._stages[6];
-    if (!stage?.sceneRoot || !this._cropBbox.sourceBbox) return;
+    const obb = this._cropBbox.obbData;
+    if (!stage?.sceneRoot || !obb) return;
 
     // Remove stale helper if exists
     if (this._cropBbox.helper) {
@@ -507,20 +513,36 @@ export class PreviewPanel {
     }
 
     const scale = Math.max(0.01, Number(cropScale) || 1.0);
-    const scaledBox = new THREE.Box3(
-      this._cropBbox.sourceBbox.min.clone().multiplyScalar(scale),
-      this._cropBbox.sourceBbox.max.clone().multiplyScalar(scale),
-    );
+    const [ex, ey, ez] = obb.extent;
 
-    const helper = new THREE.Box3Helper(scaledBox, new THREE.Color(0x00ccff));
-    helper.material.transparent = true;
-    helper.material.opacity = 0.7;
+    // EdgesGeometry for clean wireframe box
+    const boxGeom = new THREE.BoxGeometry(ex * scale, ey * scale, ez * scale);
+    const edges = new THREE.EdgesGeometry(boxGeom);
+    boxGeom.dispose();  // no longer needed after EdgesGeometry is built
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x00ccff, transparent: true, opacity: 0.7,
+    });
+    const helper = new THREE.LineSegments(edges, mat);
+
+    // Apply OBB position (adjusted for stage centering)
+    helper.position.set(...obb.adjustedCenter);
+
+    // 3x3 rotation matrix -> THREE.Matrix4 -> quaternion
+    const R = obb.rotation;
+    const m4 = new THREE.Matrix4().set(
+      R[0][0], R[0][1], R[0][2], 0,
+      R[1][0], R[1][1], R[1][2], 0,
+      R[2][0], R[2][1], R[2][2], 0,
+      0,       0,       0,       1,
+    );
+    helper.quaternion.setFromRotationMatrix(m4);
+
     stage.sceneRoot.add(helper);
     this._cropBbox.helper = helper;
   }
 
   updateCropBbox(cropScale) {
-    if (!this._cropBbox.sourceBbox) return;
+    if (!this._cropBbox.obbData) return;
 
     const stage = this._stages[6];
     if (!stage?.sceneRoot) return;
@@ -544,7 +566,7 @@ export class PreviewPanel {
       this._disposeObject(this._cropBbox.helper);
       this._cropBbox.helper = null;
     }
-    this._cropBbox.sourceBbox = null;
+    this._cropBbox.obbData = null;
   }
 
   _applyStageCenterOffset(stage, point3) {
