@@ -5,7 +5,7 @@
 const STAGE_MIN = 1;
 const STAGE_MAX = 6;
 const DEFAULT_STAGE = 1;
-const MAX_LINES_PER_STAGE = 2000;
+const DEFAULT_MAX_LINES = 2000;
 const ANSI_ESCAPE_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
 const PROGRESS_HINT_RE = /(\bETA\b|\bit\/s\b|^\s*\d{1,3}(?:\.\d+)?%\s*$|\[[=>.\-#\s]+\])/i;
 const FRACTION_PROGRESS_RE = /\b\d+\s*\/\s*\d+\b/;
@@ -16,6 +16,7 @@ export class LogViewer {
     this._content = document.getElementById('log-content');
     this._clearBtn = document.getElementById('log-clear');
     this._autoScroll = true;
+    this._maxLines = DEFAULT_MAX_LINES;
     this._activeStage = DEFAULT_STAGE;
 
     this._entriesByStage = new Map();       // stage -> [{...}]
@@ -37,6 +38,20 @@ export class LogViewer {
     this._pendingByChannel.clear();
     this._progressByChannel.clear();
     this._content.innerHTML = '';
+  }
+
+  setAutoScroll(enabled) {
+    this._autoScroll = enabled !== false;
+  }
+
+  setMaxLines(count) {
+    const val = Number(count);
+    if (!Number.isFinite(val) || val < 100) return;
+    this._maxLines = Math.min(50000, val);
+    // Trim existing entries
+    for (const stage of this._entriesByStage.keys()) {
+      this._trimStageEntries(stage);
+    }
   }
 
   setActiveStage(stage) {
@@ -182,7 +197,7 @@ export class LogViewer {
 
   _trimStageEntries(stage) {
     const entries = this._stageEntries(stage);
-    while (entries.length > MAX_LINES_PER_STAGE) {
+    while (entries.length > this._maxLines) {
       const removed = entries.shift();
       if (removed?.channelKey && this._progressByChannel.get(removed.channelKey) === removed) {
         this._progressByChannel.delete(removed.channelKey);

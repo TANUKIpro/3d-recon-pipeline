@@ -3,6 +3,8 @@
  * config panel, log viewer, 3D preview, and stage-panel switching together.
  */
 
+import { I18n } from './i18n.js';
+import { SettingsPanel } from './settings-panel.js';
 import { WsManager } from './ws.js';
 import { PipelineUI } from './pipeline.js';
 import { SAM2Canvas } from './sam2-canvas.js';
@@ -24,6 +26,12 @@ const MESH_REPAIR_THRESHOLD_MIN = -1.0;
 const MESH_REPAIR_THRESHOLD_MAX = 0.0;
 const MESH_REPAIR_THRESHOLD_DEFAULT = -0.25;
 
+// ── Settings & i18n (before other modules so theme/lang apply early) ────
+
+const i18n = new I18n();
+const settings = new SettingsPanel(i18n);
+i18n.apply();
+
 // ── Init modules ─────────────────────────────────────────────
 
 const ws = new WsManager();
@@ -36,6 +44,16 @@ const stageCtrl = new StageController();
 const sam2Verify = new SAM2Verification();
 const cameraOverlay = new CameraOverlay();
 const checkpoints = new CheckpointPanel();
+
+// Wire settings callbacks
+settings.onLogSettingsChanged = ({ autoScroll, maxLines }) => {
+  log.setAutoScroll(autoScroll);
+  log.setMaxLines(maxLines);
+};
+
+// Apply stored log settings at startup
+log.setAutoScroll(settings.autoScroll);
+log.setMaxLines(settings.maxLines);
 
 function appendLog(stream, text, opts = {}) {
   const stage = Number(opts.stage);

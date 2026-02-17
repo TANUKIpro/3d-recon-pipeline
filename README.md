@@ -4,12 +4,6 @@ RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker
 
 Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物体セグメンテーション、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、チャート単位の最適視点テクスチャベイキングを1コンテナで実行する。
 
-## 現在の実装状態 (2026-02-09)
-
-- ステージ順序は **Stage 2 = Pi3X**, **Stage 3 = SAM2** (Dashboard/CLIとも共通)
-- Dashboard は `data/output/objects/<object_name>/` 単位で成果物を管理し、ステージ途中からの再開をサポート
-- `SAM2_MODEL` は現状コード上で `large` 固定ロード (`scripts/stage_sam2_ui.py`) で、選択UIは将来拡張用
-
 ## パイプライン概要
 
 ```mermaid
@@ -76,270 +70,59 @@ docker compose up
 ### Web ダッシュボード (推奨)
 
 ```bash
-# ダッシュボード起動
-docker compose up
-
-# バックグラウンド起動
-docker compose up -d
-
-# ログ確認 (バックグラウンド時)
-docker compose logs -f
-
-# 停止
-docker compose down
+docker compose up        # 起動
+docker compose up -d     # バックグラウンド起動
+docker compose down      # 停止
 ```
 
 ブラウザで http://localhost:7860 を開き、GUI から全操作を行う。
 
-**ダッシュボード機能:**
-
-- **動画選択**: `/data/input/` に配置した動画ファイルを自動検出
-- **オブジェクト切替**: `Target Object` で対象オブジェクトを切替、`Object Name` で新規作成
-- **生成物一覧**: 選択中オブジェクトの主要成果物をパネル表示
-- **パラメータ設定**: 全ステージのパラメータを GUI から変更可能
-- **SAM2 Canvas**: 左クリック = ポジティブポイント、右クリック = ネガティブポイント。Undo / Clear / Confirm & Propagate
-- **進捗バー**: 8ステージの状態をリアルタイム表示 (Stage 5 は Classical / DiffCD の分岐切替対応)
-- **再開操作**: 停止中は、現在選択中のステージタブから `Start Pipeline` で再開
-- **ログビューア**: WebSocket 経由でリアルタイムストリーミング
-- **3D プレビュー**: three.js による点群・メッシュのインタラクティブ表示 (回転・ズーム)
-- **フレームギャラリー**: 抽出フレーム・マスクのサムネイル一覧
-
-### CLI 実行 (後方互換)
-
-従来の CLI パイプラインも引き続き利用可能:
+### CLI 実行
 
 ```bash
-# ENTRYPOINT を上書きして CLI モードで実行
+# 基本実行
 docker compose run --rm --service-ports \
   --entrypoint python3 \
-  pipeline /app/scripts/pipeline.py /data/input/video.mp4
-
-# パラメータ指定
-docker compose run --rm --service-ports \
-  --entrypoint python3 \
-  -e MAX_FRAMES=20 \
-  -e PIXEL_LIMIT=150000 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4
 
 # 途中再開 (ステージ N から)
 docker compose run --rm --service-ports \
   --entrypoint python3 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4 --skip-to 4
-
-# Stage 7 実行時は補修対象ループ選択 JSON が必須
-docker compose run --rm --service-ports \
-  --entrypoint python3 \
-  pipeline /app/scripts/pipeline.py /data/input/video.mp4 \
-  --skip-to 7 \
-  --repair-selection-json /data/input/repair_selection.json
 ```
 
 > **注意**: CLI モードでは Stage 3 で Gradio UI が起動する。
-> **注意**: CLI で Stage 7 を実行する場合、`--repair-selection-json` が未指定だとエラー終了する。
-> JSON 形式: `{\"selected_loop_ids\": [0, 3, 5]}`
-
-### 個別ステージ実行
-
-```bash
-# フレーム抽出のみ
-docker compose run --rm --entrypoint python3 pipeline \
-  /app/scripts/stage_extract_frames.py /data/input/video.mp4 /data/output
-
-# デノイズのみ
-docker compose run --rm --entrypoint python3 pipeline \
-  /app/scripts/stage_denoise.py /data/output/object.ply /data/output
-```
+> CLI で Stage 7 を実行する場合、`--repair-selection-json` が必須 (JSON 形式: `{"selected_loop_ids": [0, 3, 5]}`)。
 
 ## 環境変数
 
-### フレーム抽出 (Stage 1)
+全パラメータの単一ソースは [`scripts/config_defaults.py`](scripts/config_defaults.py)。
+ダッシュボードの Advanced Settings または `docker-compose.yml` の environment セクションで上書きできる。
+
+よく使う変数:
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
-| `FRAME_INTERVAL` | `10` | N フレームごとに1枚抽出 |
-| `MAX_FRAMES` | `50` | 抽出フレーム数の上限 (Pi3X入力でも上限として使用) |
+| `MAX_FRAMES` | `50` | 抽出フレーム数の上限 |
+| `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 |
+| `MESH_METHOD` | `poisson` | メッシュ再構成手法 (`poisson` / `diffcd`) |
 
-### Pi3X 3D再構成 (Stage 2)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 (必要時のみリサイズ) |
-| `CONFIDENCE_THRESHOLD` | `0.2` | 信頼度フィルタ閾値 |
-| `EDGE_RTOL` | `0.03` | 深度エッジフィルタの相対許容値 |
-| `ALIGN_CAMERA_PLANE` | `1` | `1` でカメラ軌道平面を基準面(XZ)へ自動整列。カメラ向き(前/下)を使って上下反転も補正 (`0` で無効) |
-
-### SAM2 セグメンテーション (Stage 3)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `SAM2_MODEL` | `large` | SAM2 モデルタイプ設定 (現状実装では `large` 固定ロード) |
-
-### メッシュ再構成 (Stage 5)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `MESH_METHOD` | `poisson` | Stage 5 の既定手法 (`poisson` or `diffcd`) |
-
-#### Classical (Normals + Poisson)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `CLASSICAL_PREPROCESS_ENABLED` | `1` | Classical入力点群の前処理 (軽量フィルタ + リサンプリング) を有効化 |
-| `CLASSICAL_PREPROCESS_VOXEL_RATIO` | `0.003` | 前処理ボクセルサイズの bbox 対角比 |
-| `CLASSICAL_PREPROCESS_MAX_POINTS` | `700000` | この点数を超える場合に前処理でボクセル間引きを実行 |
-| `CLASSICAL_PREPROCESS_SOR_NEIGHBORS` | `20` | 前処理 SOR の近傍数 |
-| `CLASSICAL_PREPROCESS_SOR_STD_RATIO` | `2.8` | 前処理 SOR の標準偏差倍率 |
-| `POISSON_DEPTH` | `9` | Poisson 再構成の深さ |
-| `POISSON_NORMAL_RADIUS_RATIO` | `0.02` | 法線推定半径の bbox 対角比 |
-| `POISSON_DENSITY_TRIM_QUANTILE` | `0.02` | 低密度頂点を除去する分位点 |
-| `CLASSICAL_POST_MIN_COMPONENT_TRIANGLES` | `400` | 後処理で除去する小連結成分の最小三角形数閾値 |
-| `CLASSICAL_POST_MIN_COMPONENT_RATIO` | `0.01` | 後処理で除去する小連結成分の最大成分比閾値 |
-| `CLASSICAL_AUTO_SMOOTH` | `0` | 後処理スムージングを自動適用 (`1`で有効) |
-| `CLASSICAL_SMOOTH_ITERATIONS` | `2` | 後処理スムージングの反復回数 |
-| `CLASSICAL_DOWNSAMPLE_ENABLED` | `1` | 面数過多時のダウンサンプリングを有効化 |
-| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `100000` | ダウンサンプリング後の目標面数 |
-| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `140000` | この面数を超えた場合にダウンサンプリング実行 |
-
-> Dashboard実行時のClassical Meshは `Preprocess -> Main Poisson -> Postprocess -> Downsample` を順に実行し、
-> 各サブタスク完了ごとに承認（Continue）が必要です。
-
-#### DiffCD
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `DIFFCD_BATCH_SIZE` | `5000` | バッチサイズ |
-| `DIFFCD_N_BATCHES` | `30000` | 学習バッチ総数 |
-| `DIFFCD_RESOLUTION` | `512` | Marching Cubes 解像度 |
-| `DIFFCD_AUTO_TUNE` | `1` | GPU VRAM に応じて `BATCH_SIZE/N_BATCHES` を自動調整 |
-| `DIFFCD_AUTO_TUNE_RESPECT_MANUAL` | `1` | 手動値 (`BATCH_SIZE/N_BATCHES/RESOLUTION`) を指定した場合は自動調整を無効化 |
-| `DIFFCD_AUTO_KEEP_EFFECTIVE_SAMPLES` | `1` | `batch_size * n_batches` をなるべく維持して品質低下を防止 |
-| `DIFFCD_AUTO_MIN_N_BATCHES` | `10000` | 自動調整時の `n_batches` 下限 |
-| `DIFFCD_AUTO_SELECT_GPU` | `1` | 複数GPU時に空きVRAM最大のGPUを自動選択 (`CUDA_VISIBLE_DEVICES=all` の場合) |
-| `DIFFCD_GPU_INDEX` | unset | DiffCD を固定GPUで実行したい場合の GPU index |
-| `DIFFCD_XLA_MEM_FRACTION` | auto | JAX メモリ確保率を手動指定 (未指定時は VRAM 余裕から自動設定) |
-| `JAX_COMPILATION_CACHE_DIR` | `/root/.cache/jax_compilation_cache` | JAX コンパイルキャッシュ保存先 (2回目以降の起動高速化) |
-
-### メッシュラップ (Stage 6)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `MESH_WRAP_ENABLED` | `1` | Stage 6 の有効/無効 |
-| `MESH_WRAP_METHOD` | `poisson_iterative` | Wrap 手法 (`ipsr` 指定時は現状フォールバック) |
-| `MESH_WRAP_ITERATIONS` | `1` | Wrap 反復回数 |
-| `MESH_WRAP_SAMPLE_POINTS` | `400000` | 各反復の点サンプル数 |
-| `MESH_WRAP_POISSON_DEPTH` | `6` | Wrap Poisson 深さ |
-
-### メッシュ補修 (Stage 7)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `MESH_REPAIR_ENABLED` | `1` | Stage 7 の有効/無効 |
-| `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
-| `MESH_REPAIR_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域幅 (下端からbbox対角比) |
-| `MESH_REPAIR_SMOOTH_ITERS` | `3` | 補修後の局所平滑化反復数 |
-
-### テクスチャベイキング (Stage 8)
-
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下なら `round(sqrt(video_width * video_height))` の正方形を自動適用 |
-| `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行チャート選定処理は CPU で実行 |
-| `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
-| `TEXTURE_ANGLE_EXP` | `2.0` | 角度スコア指数 |
-| `TEXTURE_DIST_POW` | `1.0` | 距離減衰指数 |
-
-## docs タスク別ドキュメント
-
-詳細は `docs/<task_name>.md` 形式で整理:
-
-- `docs/extract_frames.md`
-- `docs/pi3x_reconstruct.md`
-- `docs/sam2_segment.md`
-- `docs/denoise_point_cloud.md`
-- `docs/mesh_classical.md`
-- `docs/mesh_diffcd.md`
-- `docs/mesh_wrap.md`
-- `docs/contact_hole_repair.md`
-- `docs/texture_bake.md`
+全変数の一覧は各ステージのドキュメント (下記) を参照。
 
 ## 出力ファイル
 
-パイプライン完了後、`data/output/objects/<object_name>/` に以下が生成される:
+パイプライン完了後、`data/output/objects/<object_name>/` に生成される主要ファイル:
 
-```
-data/output/
-└── objects/
-    └── <object_name>/
-        ├── object_full.ply        # Stage 2出力 (信頼度 + 深度エッジ適用済み点群)
-        ├── pi3x_cache.npz         # Stage 2/3間キャッシュ (点群・色・マスク)
-        ├── textured_mesh.obj      # 最終成果物: テクスチャ付き3Dメッシュ
-        ├── textured_mesh.mtl      # マテリアル定義
-        ├── texture.png            # テクスチャアトラス (既定は入力動画と同等画素数の正方形)
-        ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
-        ├── object_mesh_preview.ply # Stage 5表示用の軽量メッシュ (UIプレビュー優先)
-        ├── object_mesh_wrapped.ply # Stage 6出力メッシュ (Wrap結果)
-        ├── object_mesh_repaired.ply # Stage 7出力メッシュ (Repair結果, Texture入力)
-        ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ
-        ├── object_mesh_postprocessed.ply  # Stage 5後処理後メッシュ
-        ├── object_mesh_input.ply  # Stage 5前処理後点群
-        ├── object_denoised.ply    # デノイズ済み点群
-        ├── object.ply             # Pi3Xトリプルフィルタ済み点群
-        ├── camera_poses.json      # カメラ外部パラメータ + 使用フレームindex + 整列メタ情報
-        ├── intrinsics.json        # 推定カメラ内部パラメータ
-        ├── frames/                # 抽出フレーム画像 (JPEG)
-        ├── masks/                 # SAM2セグメンテーションマスク (PNG)
-        ├── classical_mesh/        # Classical( Poisson ) 作業ディレクトリ
-        └── diffcd/                # DiffCD作業ディレクトリ
-```
+| ファイル | 説明 |
+|---------|------|
+| `textured_mesh.obj` / `.mtl` / `texture.png` | 最終成果物: テクスチャ付き3Dメッシュ |
+| `object.ply` | フィルタ済み点群 |
+| `object_denoised.ply` | デノイズ済み点群 |
+| `object_mesh.ply` | Stage 5 出力メッシュ |
+| `camera_poses.json` | カメラ外部パラメータ |
+| `frames/` / `masks/` | 抽出フレーム / SAM2 マスク |
 
-## アーキテクチャ
-
-### Web ダッシュボード
-
-```
-┌─ Browser (localhost:7860) ─────────────────────────────┐
-│  Vanilla HTML/CSS/JS (ビルドツール不要)                   │
-│  WebSocket ←→ ログ・進捗リアルタイム配信                   │
-│  REST API  ←→ パイプライン制御 / SAM2 / プレビュー        │
-│  HTML5 Canvas ← SAM2 クリック操作                        │
-│  three.js (CDN) ← 3D プレビュー                          │
-└────────────────────────────────────────────────────────┘
-         ↕ HTTP / WebSocket (port 7860)
-┌─ Docker Container ─────────────────────────────────────┐
-│  FastAPI + Uvicorn                                      │
-│  ├─ /api/pipeline/*  パイプライン制御                     │
-│  ├─ /api/sam2/*      SAM2 操作 (click → mask PNG)       │
-│  ├─ /api/preview/*   出力ファイルサービング                │
-│  ├─ /ws              WebSocket (ログ + 進捗)             │
-│  └─ /                静的ファイル (index.html)            │
-│                                                          │
-│  Pipeline Runner (asyncio.to_thread で各ステージ実行)     │
-│  └─ 既存 stage_*.py をそのまま import して呼び出し         │
-└────────────────────────────────────────────────────────┘
-```
-
-### トリプルフィルタ (Stage 2 + Stage 3)
-
-Pi3X は全画像に対して推論し、3段階のフィルタで対象物体の点群を抽出する:
-
-1. **信頼度フィルタ** — Pi3X の出力信頼度が閾値未満の点を除去
-2. **深度エッジフィルタ** — 深度の不連続箇所 (物体境界のアーティファクト) を除去
-3. **SAM2 マスクフィルタ** — セグメンテーションマスク外の点を除去
-
-### PyTorch / JAX 共存
-
-DiffCD (JAX) と SAM2/Pi3X (PyTorch) は GPU コンテキストが競合するため、DiffCD はサブプロセスとして実行される。`XLA_PYTHON_CLIENT_PREALLOCATE=false` により JAX の事前メモリ確保を無効化し、PyTorch との共存を実現している。
-
-### VRAM 管理
-
-RTX 4090 (16GB) で全ステージを動作させるため、各 GPU ステージ終了時にモデルを明示的に解放し `torch.cuda.empty_cache()` でメモリを回収する。
-
-Pi3X は開始前に `VRAM 使用率 95%` を目標として入力フレーム数を自動調整し、推定値をダッシュボードで事前表示する。  
-その上で OOM が発生した場合は以下の順でフォールバックする:
-
-1. まず Pi3X 入力フレーム数を削減 (解像度は維持)
-2. 次に `PIXEL_LIMIT` を縮小
-3. 最後にチャンク推論へフォールバック
+全中間ファイルの詳細は各ステージのドキュメントを参照。
 
 ## VRAM とパフォーマンス
 
@@ -352,72 +135,36 @@ RTX 4090 Laptop (16GB) での実測値:
 | DiffCD (res=384, 25Kバッチ) | ~10 GB | ~10分 |
 | デノイズ / テクスチャ | CPU / CUDA (Texture) | シーン依存 |
 
-> **注意**: 16GB GPU で品質を優先する場合、まず `MAX_FRAMES` を下げて `PIXEL_LIMIT` は高めに維持する。  
-> 例: `MAX_FRAMES=20~28, PIXEL_LIMIT=220000~255000`。  
-> さらに不足する場合のみ `PIXEL_LIMIT` を段階的に下げる。
+**VRAM 管理**: 各 GPU ステージ終了時にモデルを明示的に解放し VRAM を回収する。Pi3X は VRAM 使用率 95% を目標にフレーム数を自動調整し、OOM 時はフレーム削減 → 解像度縮小 → チャンク推論の順でフォールバックする。
 
-## Docker イメージ構成
+> **ヒント**: 16GB GPU で品質を優先する場合、まず `MAX_FRAMES` を下げて `PIXEL_LIMIT` は高めに維持する。
+> 例: `MAX_FRAMES=20~28, PIXEL_LIMIT=220000~255000`
 
-```
-nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
-├── Python 3.11 + system deps (ffmpeg, OpenGL)
-├── PyTorch 2.5+ (CUDA 12.1 wheels)
-├── Python deps (numpy<2.0, opencv, fastapi, uvicorn, scipy, trimesh, xatlas, ...)
-├── wandb + scikit-image (DiffCD 依存)
-├── SAM2 (editable install, SAM2_BUILD_CUDA=0)
-├── Pi3X (PYTHONPATH 経由)
-├── DiffCD (パッチ適用済み: tyro float fix + jax.tree.map)
-├── JAX CUDA プラグイン修正 (CuDNN ≥9.8.0)
-└── Pipeline スクリプト (/app/scripts/)
-```
+## ドキュメント
 
-イメージサイズ: 約 21 GB
+各ステージの詳細 (環境変数一覧・アルゴリズム・出力ファイル) は `docs/` を参照:
+
+| Stage | ドキュメント |
+|-------|------------|
+| 1. フレーム抽出 | [`docs/extract_frames.md`](docs/extract_frames.md) |
+| 2. Pi3X 3D再構成 | [`docs/pi3x_reconstruct.md`](docs/pi3x_reconstruct.md) |
+| 3. SAM2 セグメンテーション | [`docs/sam2_segment.md`](docs/sam2_segment.md) |
+| 4. 点群デノイズ | [`docs/denoise_point_cloud.md`](docs/denoise_point_cloud.md) |
+| 5a. Classical メッシュ | [`docs/mesh_classical.md`](docs/mesh_classical.md) |
+| 5b. DiffCD メッシュ | [`docs/mesh_diffcd.md`](docs/mesh_diffcd.md) |
+| 6. メッシュラップ | [`docs/mesh_wrap.md`](docs/mesh_wrap.md) |
+| 7. メッシュ補修 | [`docs/contact_hole_repair.md`](docs/contact_hole_repair.md) |
+| 8. テクスチャベイキング | [`docs/texture_bake.md`](docs/texture_bake.md) |
 
 ## トラブルシューティング
 
-### Pi3X で OOM が発生する
+**Pi3X で OOM が発生する** — ダッシュボードの Advanced Settings で `MAX_FRAMES` を下げる (`PIXEL_LIMIT` はできるだけ維持)。
 
-まず `MAX_FRAMES` を下げ、`PIXEL_LIMIT` はできるだけ維持する。ダッシュボードの Advanced Settings で変更するか、CLI の場合:
+**ダッシュボードに接続できない** — `docker compose logs --tail 20` で `Uvicorn running on http://0.0.0.0:7860` が表示されているか確認。ポート競合は `lsof -i :7860` で調査。
 
-```bash
-docker compose run --rm --service-ports \
-  --entrypoint python3 \
-  -e MAX_FRAMES=20 -e PIXEL_LIMIT=240000 \
-  pipeline /app/scripts/pipeline.py /data/input/video.mp4
-```
+**DiffCD が遅い / 解像度を上げたい** — `DIFFCD_RESOLUTION=512` は A100 40GB 以上が必要。16GB GPU では `384` が上限。デフォルトで自動チューニング (`DIFFCD_AUTO_TUNE=1`) が有効。
 
-### ダッシュボードに接続できない
-
-`docker compose up` でコンテナが正常起動しているか確認:
-
-```bash
-docker compose logs --tail 20
-# "Uvicorn running on http://0.0.0.0:7860" が表示されていれば OK
-```
-
-ポート 7860 が他のプロセスで使用されていないか確認:
-
-```bash
-lsof -i :7860
-```
-
-### DiffCD が遅い / 解像度を上げたい
-
-`DIFFCD_RESOLUTION=512` は A100 40GB 以上が必要。16GB GPU では `384` が上限。
-
-DiffCD はデフォルトでハードウェア自動チューニング (`DIFFCD_AUTO_TUNE=1`) が有効。まずは自動設定のまま実行し、比較のために固定値へ戻す場合は次を指定:
-
-```bash
-DIFFCD_AUTO_TUNE=0
-```
-
-### ビルドが失敗する
-
-NVIDIA Container Toolkit が正しくインストールされているか確認:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 nvidia-smi
-```
+**ビルドが失敗する** — NVIDIA Container Toolkit の動作を確認: `docker run --rm --gpus all nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 nvidia-smi`
 
 ## ライセンス
 

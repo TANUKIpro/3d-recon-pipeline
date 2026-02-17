@@ -10,13 +10,14 @@
   <!-- Header -->
   <header id="header">
     <div class="header-left">
-      <h1>im2pc-pipeline</h1>
-      <span class="header-subtitle">RGB Video → Textured 3D Mesh</span>
+      <h1 data-i18n="header.title">im2pc-pipeline</h1>
+      <span class="header-subtitle" data-i18n="header.subtitle">RGB Video &rarr; Textured 3D Mesh</span>
     </div>
     <div class="header-right">
       <span id="vram-badge" class="badge" title="GPU VRAM">VRAM: --</span>
       <span id="overall-progress-badge" class="badge" title="Pipeline progress">Overall: 0%</span>
       <span id="status-badge" class="badge badge-idle">Idle</span>
+      <button id="settings-btn" class="settings-gear-btn" title="Settings">&#9881;</button>
     </div>
   </header>
 
@@ -24,28 +25,28 @@
   <nav id="stage-bar">
     <div class="stage-pill" data-stage="1">
       <span class="stage-dot"></span>
-      <span class="stage-label">Extract Frames</span>
+      <span class="stage-label" data-i18n="stage.extract_frames">Extract Frames</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="2">
       <span class="stage-dot"></span>
-      <span class="stage-label">Pi3X</span>
+      <span class="stage-label" data-i18n="stage.pi3x">Pi3X</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="3">
       <span class="stage-dot"></span>
-      <span class="stage-label">SAM2</span>
+      <span class="stage-label" data-i18n="stage.sam2">SAM2</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="4">
       <span class="stage-dot"></span>
-      <span class="stage-label">Denoise</span>
+      <span class="stage-label" data-i18n="stage.denoise">Denoise</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
@@ -53,7 +54,7 @@
     <div id="mesh-branch-slot">
       <div id="mesh-pill-diffcd" class="stage-pill mesh-stage-pill mesh-method-pill" data-stage="5" data-mesh-method="diffcd">
         <span class="stage-dot"></span>
-        <span class="stage-label">Learning Mesh</span>
+        <span class="stage-label" data-i18n="stage.learning_mesh">Learning Mesh</span>
         <span class="stage-progress">0%</span>
         <span class="stage-time"></span>
       </div>
@@ -66,7 +67,7 @@
         aria-label="Select classical mesh reconstruction"
       >
         <span class="stage-dot"></span>
-        <span class="stage-label">Classical Mesh</span>
+        <span class="stage-label" data-i18n="stage.classical_mesh">Classical Mesh</span>
         <span class="stage-progress">0%</span>
         <span class="stage-time"></span>
       </div>
@@ -78,21 +79,21 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="6">
       <span class="stage-dot"></span>
-      <span class="stage-label">Wrap</span>
+      <span class="stage-label" data-i18n="stage.wrap">Wrap</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="7">
       <span class="stage-dot"></span>
-      <span class="stage-label">Repair</span>
+      <span class="stage-label" data-i18n="stage.repair">Repair</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="8">
       <span class="stage-dot"></span>
-      <span class="stage-label">Texture</span>
+      <span class="stage-label" data-i18n="stage.texture">Texture</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
@@ -277,7 +278,7 @@
     <aside id="right-panel">
       <!-- Config Panel -->
       <div id="config-panel">
-        <h2 id="config-title">Configuration</h2>
+        <h2 id="config-title" data-i18n="config.title">Configuration</h2>
 
         <!-- Stage 1: input + easy controls -->
         <div class="config-section" data-stages="1">
@@ -646,7 +647,7 @@
       <!-- Checkpoint Viewer -->
       <div id="checkpoint-panel">
         <div id="checkpoint-header">
-          <h2>Checkpoint</h2>
+          <h2 data-i18n="checkpoint.title">Checkpoint</h2>
           <span id="checkpoint-stage-label">Stage 1 | Extract Frames</span>
         </div>
         <ul id="checkpoint-list" class="checkpoint-list" aria-live="polite"></ul>
@@ -655,7 +656,7 @@
       <!-- Log Viewer -->
       <div id="log-panel">
         <div id="log-header">
-          <h2>Log</h2>
+          <h2 data-i18n="log.title">Log</h2>
           <button id="log-clear" class="btn-small">Clear</button>
         </div>
         <div id="log-container">
