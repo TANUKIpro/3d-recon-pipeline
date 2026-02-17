@@ -143,6 +143,7 @@ export class ConfigPanel {
     this._pi3xFrameTargetValue = document.getElementById('cfg-pi3x-frame-target-value');
     this._pi3xFrameTargetNote = document.getElementById('cfg-pi3x-frame-target-note');
     this._pi3xPlanNote = document.getElementById('cfg-pi3x-plan-note');
+    this._pi3xFrameTargetMarker = document.getElementById('cfg-pi3x-frame-target-marker');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
@@ -1297,7 +1298,7 @@ export class ConfigPanel {
     const fallback = this._pi3xFrameTargetRecommended;
     let selectedFrames = this._resolvePi3xFrameTarget(maxFrames);
     if (this._pi3xFrameTargetAuto || !(this._inputs.pi3x_frame_target.value || '').trim()) {
-      selectedFrames = fallback;
+      selectedFrames = maxFrames;
       this._inputs.pi3x_frame_target.value = String(selectedFrames);
     } else {
       this._inputs.pi3x_frame_target.value = String(selectedFrames);
@@ -1311,11 +1312,28 @@ export class ConfigPanel {
         `AutoTarget recommendation: ${fallback} frames (max ${maxFrames})`;
     }
 
+    this._updatePi3xFrameTargetMarker();
+
     return {
       requestedFrames: maxFrames,
       selectedFrames,
       recommendedFrames: fallback,
     };
+  }
+
+  _updatePi3xFrameTargetMarker() {
+    if (!this._pi3xFrameTargetMarker) return;
+    const recommended = this._pi3xFrameTargetRecommended;
+    const input = this._inputs.pi3x_frame_target;
+    const min = parseFloat(input.min) || 2;
+    const max = parseFloat(input.max) || 50;
+    if (recommended == null || max <= min || recommended >= max) {
+      this._pi3xFrameTargetMarker.style.display = 'none';
+      return;
+    }
+    const pct = ((recommended - min) / (max - min)) * 100;
+    this._pi3xFrameTargetMarker.style.display = '';
+    this._pi3xFrameTargetMarker.style.left = `${pct}%`;
   }
 
   _resolveRequestedPi3xFrames() {

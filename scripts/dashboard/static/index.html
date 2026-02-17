@@ -328,7 +328,13 @@
               <label for="cfg-pi3x-frame-target">Frame Target</label>
               <span id="cfg-pi3x-frame-target-value" class="range-value">50</span>
             </div>
-            <input type="range" id="cfg-pi3x-frame-target" value="50" min="2" max="50" step="1">
+            <div class="range-marker-wrap">
+              <input type="range" id="cfg-pi3x-frame-target" value="50" min="2" max="50" step="1">
+              <div id="cfg-pi3x-frame-target-marker" class="range-marker" style="display:none;">
+                <div class="range-marker-line"></div>
+                <span class="range-marker-label">Recommended</span>
+              </div>
+            </div>
             <div id="cfg-pi3x-frame-target-note" class="config-note"></div>
             <div id="cfg-pi3x-plan-note" class="config-note"></div>
           </div>
