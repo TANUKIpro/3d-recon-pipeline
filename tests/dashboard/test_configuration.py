@@ -74,6 +74,25 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_size, 0)
 
+    def test_mesh_wrap_and_repair_defaults_match_contact_friendly_profile(self) -> None:
+        cfg = build_pipeline_config(
+            {},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.meshwrap_poisson_depth, 6)
+        self.assertEqual(cfg.meshwrap_poisson_scale, 1.18)
+        self.assertEqual(cfg.meshwrap_density_trim_q, 0.01)
+        self.assertEqual(cfg.meshwrap_target_face_ratio, 2.2)
+        self.assertEqual(cfg.meshwrap_iterations, 1)
+        self.assertEqual(cfg.meshwrap_crop_scale, 1.03)
+        self.assertEqual(cfg.meshwrap_sample_points, 400000)
+        self.assertEqual(cfg.meshwrap_normal_radius_ratio, 0.02)
+        self.assertEqual(cfg.mesh_repair_smooth_iters, 3)
+
     def test_mesh_repair_fields_are_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
             {

@@ -89,12 +89,18 @@ const DENOISE_PRESETS = {
 const MESHWRAP_DEFAULTS = {
   meshwrap_poisson_depth: 6,
   meshwrap_poisson_scale: 1.18,
-  meshwrap_iterations: 2,
-  meshwrap_sample_points: 300000,
-  meshwrap_density_trim_q: 0.06,
-  meshwrap_crop_scale: 2.0,
-  meshwrap_target_face_ratio: 1.50,
-  meshwrap_normal_radius_ratio: 0.035,
+  meshwrap_iterations: 1,
+  meshwrap_sample_points: 400000,
+  meshwrap_density_trim_q: 0.01,
+  meshwrap_crop_scale: 1.03,
+  meshwrap_target_face_ratio: 2.20,
+  meshwrap_normal_radius_ratio: 0.02,
+};
+
+const MESH_REPAIR_DEFAULTS = {
+  mesh_repair_max_diameter_ratio: 0.08,
+  mesh_repair_y_band_ratio: 0.06,
+  mesh_repair_smooth_iters: 3,
 };
 
 const CLASSICAL_DEFAULTS = {
@@ -363,14 +369,38 @@ export class ConfigPanel {
       diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
       diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
       diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
-      meshwrap_poisson_depth: this._parsePositiveInt(this._inputs.meshwrap_poisson_depth?.value, 6),
-      meshwrap_poisson_scale: this._parsePositiveFloat(this._inputs.meshwrap_poisson_scale?.value, 1.18),
-      meshwrap_density_trim_q: this._parseNonNegativeFloat(this._inputs.meshwrap_density_trim_q?.value, 0.06),
-      meshwrap_target_face_ratio: this._parsePositiveFloat(this._inputs.meshwrap_target_face_ratio?.value, 1.50),
-      meshwrap_iterations: this._parsePositiveInt(this._inputs.meshwrap_iterations?.value, 2),
-      meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
-      meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 300000),
-      meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
+      meshwrap_poisson_depth: this._parsePositiveInt(
+        this._inputs.meshwrap_poisson_depth?.value,
+        MESHWRAP_DEFAULTS.meshwrap_poisson_depth,
+      ),
+      meshwrap_poisson_scale: this._parsePositiveFloat(
+        this._inputs.meshwrap_poisson_scale?.value,
+        MESHWRAP_DEFAULTS.meshwrap_poisson_scale,
+      ),
+      meshwrap_density_trim_q: this._parseNonNegativeFloat(
+        this._inputs.meshwrap_density_trim_q?.value,
+        MESHWRAP_DEFAULTS.meshwrap_density_trim_q,
+      ),
+      meshwrap_target_face_ratio: this._parsePositiveFloat(
+        this._inputs.meshwrap_target_face_ratio?.value,
+        MESHWRAP_DEFAULTS.meshwrap_target_face_ratio,
+      ),
+      meshwrap_iterations: this._parsePositiveInt(
+        this._inputs.meshwrap_iterations?.value,
+        MESHWRAP_DEFAULTS.meshwrap_iterations,
+      ),
+      meshwrap_crop_scale: this._parsePositiveFloat(
+        this._inputs.meshwrap_crop_scale?.value,
+        MESHWRAP_DEFAULTS.meshwrap_crop_scale,
+      ),
+      meshwrap_sample_points: this._parsePositiveInt(
+        this._inputs.meshwrap_sample_points?.value,
+        MESHWRAP_DEFAULTS.meshwrap_sample_points,
+      ),
+      meshwrap_normal_radius_ratio: this._parsePositiveFloat(
+        this._inputs.meshwrap_normal_radius_ratio?.value,
+        MESHWRAP_DEFAULTS.meshwrap_normal_radius_ratio,
+      ),
       classical_preset: this._inputs.classical_preset?.value || 'default',
       classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
       classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
@@ -380,9 +410,18 @@ export class ConfigPanel {
       classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
       classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 120000),
       mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
-      mesh_repair_max_diameter_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_max_diameter_ratio?.value, 0.08),
-      mesh_repair_y_band_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_y_band_ratio?.value, 0.06),
-      mesh_repair_smooth_iters: this._parseNonNegativeInt(this._inputs.mesh_repair_smooth_iters?.value, 2),
+      mesh_repair_max_diameter_ratio: this._parsePositiveFloat(
+        this._inputs.mesh_repair_max_diameter_ratio?.value,
+        MESH_REPAIR_DEFAULTS.mesh_repair_max_diameter_ratio,
+      ),
+      mesh_repair_y_band_ratio: this._parsePositiveFloat(
+        this._inputs.mesh_repair_y_band_ratio?.value,
+        MESH_REPAIR_DEFAULTS.mesh_repair_y_band_ratio,
+      ),
+      mesh_repair_smooth_iters: this._parseNonNegativeInt(
+        this._inputs.mesh_repair_smooth_iters?.value,
+        MESH_REPAIR_DEFAULTS.mesh_repair_smooth_iters,
+      ),
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
     };
   }
@@ -1119,10 +1158,10 @@ export class ConfigPanel {
 
   _updateMeshWrapSummary() {
     if (!this._meshwrapSummary) return;
-    const depth = this._inputs.meshwrap_poisson_depth?.value || '6';
-    const scale = this._inputs.meshwrap_poisson_scale?.value || '1.18';
-    const iters = this._inputs.meshwrap_iterations?.value || '2';
-    const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.50';
+    const depth = this._inputs.meshwrap_poisson_depth?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_depth);
+    const scale = this._inputs.meshwrap_poisson_scale?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_scale);
+    const iters = this._inputs.meshwrap_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_iterations);
+    const ratio = this._inputs.meshwrap_target_face_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_target_face_ratio);
     this._meshwrapSummary.textContent =
       `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
   }

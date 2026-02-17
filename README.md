@@ -226,8 +226,8 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `MESH_WRAP_ENABLED` | `1` | Stage 6 の有効/無効 |
 | `MESH_WRAP_METHOD` | `poisson_iterative` | Wrap 手法 (`ipsr` 指定時は現状フォールバック) |
 | `MESH_WRAP_ITERATIONS` | `1` | Wrap 反復回数 |
-| `MESH_WRAP_SAMPLE_POINTS` | `180000` | 各反復の点サンプル数 |
-| `MESH_WRAP_POISSON_DEPTH` | `8` | Wrap Poisson 深さ |
+| `MESH_WRAP_SAMPLE_POINTS` | `400000` | 各反復の点サンプル数 |
+| `MESH_WRAP_POISSON_DEPTH` | `6` | Wrap Poisson 深さ |
 
 ### メッシュ補修 (Stage 7)
 
@@ -236,7 +236,7 @@ docker compose run --rm --entrypoint python3 pipeline \
 | `MESH_REPAIR_ENABLED` | `1` | Stage 7 の有効/無効 |
 | `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
 | `MESH_REPAIR_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域幅 (下端からbbox対角比) |
-| `MESH_REPAIR_SMOOTH_ITERS` | `2` | 補修後の局所平滑化反復数 |
+| `MESH_REPAIR_SMOOTH_ITERS` | `3` | 補修後の局所平滑化反復数 |
 
 ### テクスチャベイキング (Stage 8)
 

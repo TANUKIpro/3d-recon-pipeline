@@ -43,19 +43,19 @@ Stage 5 のメッシュを入力に、Poisson 再構成ベースで外皮メッ�
 | `MESH_WRAP_ENABLED` | `1` | Wrap ステージ有効化 |
 | `MESH_WRAP_METHOD` | `poisson_iterative` | `poisson_iterative` / `ipsr` (`ipsr` は現状フォールバック) |
 | `MESH_WRAP_ITERATIONS` | `1` | Poisson wrap 反復回数 |
-| `MESH_WRAP_SAMPLE_POINTS` | `180000` | 各反復のサンプル点数 |
+| `MESH_WRAP_SAMPLE_POINTS` | `400000` | 各反復のサンプル点数 |
 | `MESH_WRAP_NORMAL_RADIUS_RATIO` | `0.02` | 法線推定半径比率 (bbox 対角比) |
 | `MESH_WRAP_NORMAL_MAX_NN` | `32` | 法線推定近傍上限 |
 | `MESH_WRAP_NORMAL_ORIENT_K` | `24` | 法線向き整合近傍数 |
-| `MESH_WRAP_POISSON_DEPTH` | `8` | Poisson 深さ |
-| `MESH_WRAP_POISSON_SCALE` | `1.05` | Poisson scale |
+| `MESH_WRAP_POISSON_DEPTH` | `6` | Poisson 深さ |
+| `MESH_WRAP_POISSON_SCALE` | `1.18` | Poisson scale |
 | `MESH_WRAP_POISSON_LINEAR_FIT` | `0` | Poisson linear fit |
-| `MESH_WRAP_DENSITY_TRIM_Q` | `0.02` | 低密度頂点除去分位点 |
+| `MESH_WRAP_DENSITY_TRIM_Q` | `0.01` | 低密度頂点除去分位点 |
 | `MESH_WRAP_CROP_SCALE` | `1.03` | bbox crop 拡大倍率 |
 | `MESH_WRAP_KEEP_LARGEST_COMPONENT` | `1` | 最大連結成分のみ保持 |
-| `MESH_WRAP_TARGET_FACE_RATIO` | `1.10` | 入力面数に対する目標比率 |
+| `MESH_WRAP_TARGET_FACE_RATIO` | `2.20` | 入力面数に対する目標比率 |
 | `MESH_WRAP_MIN_FACES` | `25000` | 目標面数の下限 |
-| `MESH_WRAP_MAX_FACES` | `120000` | 目標面数の上限 |
+| `MESH_WRAP_MAX_FACES` | `200000` | 目標面数の上限 |
 | `MESH_WRAP_PRESERVE_INPUT_ON_FAILURE` | `1` | 失敗時に入力メッシュを保存して続行 |
 
 ## 補足

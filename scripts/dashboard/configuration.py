@@ -272,27 +272,27 @@ def build_pipeline_config(
         ),
         meshwrap_density_trim_q=min(
             0.49,
-            max(0.0, parse_float(raw.get("meshwrap_density_trim_q"), 0.06)),
+            max(0.0, parse_float(raw.get("meshwrap_density_trim_q"), 0.01)),
         ),
         meshwrap_target_face_ratio=min(
             3.0,
-            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), 1.50)),
+            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), 2.20)),
         ),
         meshwrap_iterations=max(
             1,
-            parse_int(raw.get("meshwrap_iterations"), 2),
+            parse_int(raw.get("meshwrap_iterations"), 1),
         ),
         meshwrap_crop_scale=max(
             1.0,
-            parse_float(raw.get("meshwrap_crop_scale"), 2.0),
+            parse_float(raw.get("meshwrap_crop_scale"), 1.03),
         ),
         meshwrap_sample_points=max(
             50_000,
-            parse_int(raw.get("meshwrap_sample_points"), 300_000),
+            parse_int(raw.get("meshwrap_sample_points"), 400_000),
         ),
         meshwrap_normal_radius_ratio=max(
             0.001,
-            parse_float(raw.get("meshwrap_normal_radius_ratio"), 0.035),
+            parse_float(raw.get("meshwrap_normal_radius_ratio"), 0.02),
         ),
         classical_preset=classical_preset,
         classical_preprocess_enabled=parse_bool(
@@ -353,7 +353,7 @@ def build_pipeline_config(
                 12,
                 parse_int(
                     raw.get("mesh_repair_smooth_iters"),
-                    env_int("MESH_REPAIR_SMOOTH_ITERS", 2, env_map),
+                    env_int("MESH_REPAIR_SMOOTH_ITERS", 3, env_map),
                 ),
             ),
         ),
