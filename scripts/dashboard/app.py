@@ -767,8 +767,8 @@ async def mesh_repair_confirm(body: dict | None = None):
 
     raw = body or {}
     selected_raw = raw.get("selected_loop_ids")
-    if not isinstance(selected_raw, list) or len(selected_raw) == 0:
-        return JSONResponse({"error": "selected_loop_ids must be a non-empty list"}, status_code=400)
+    if not isinstance(selected_raw, list):
+        return JSONResponse({"error": "selected_loop_ids must be a list"}, status_code=400)
 
     selected: list[int] = []
     seen: set[int] = set()
@@ -796,6 +796,7 @@ async def mesh_repair_confirm(body: dict | None = None):
     return JSONResponse(
         {
             "status": "confirmed",
+            "mode": "skip" if len(selected) == 0 else "repair",
             "selected_loop_ids": selected,
             "selected_count": len(selected),
         }

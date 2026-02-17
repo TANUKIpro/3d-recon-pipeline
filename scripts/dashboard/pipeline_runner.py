@@ -801,7 +801,12 @@ async def _run_mesh_repair_interactive(
         _check_cancelled(session)
         selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]
         if not selected_loop_ids:
-            raise ValueError("No selected loops provided for mesh repair")
+            await _broadcast_stage_progress(
+                session,
+                stage,
+                progress=40.0,
+                detail="No loops selected. Skipping repair",
+            )
 
         await asyncio.to_thread(
             _stage_mesh_repair_selected,

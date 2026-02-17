@@ -401,7 +401,11 @@ ws.on('mesh_repair_ready', async (msg) => {
     await activateMeshRepairSelectionFromApi();
     stageCtrl.activateStage(7);
     const loopCount = Number(msg.candidate_count) || _meshRepairCandidateCount;
-    appendLog('stdout', `Mesh Repair ready: ${loopCount} selectable loops. Click loops, then apply.\n`, { stage: 7 });
+    appendLog(
+      'stdout',
+      `Mesh Repair ready: ${loopCount} selectable loops. Click closed surfaces, then confirm selection (0 selected = skip).\n`,
+      { stage: 7 },
+    );
   } catch (e) {
     setMeshRepairToolbarVisible(false);
     setMeshRepairStatus(`Mesh Repair UI failed: ${e.message}`, 'error');
@@ -709,14 +713,18 @@ function setMeshRepairStatus(message, tone = '') {
   }
 }
 
+function meshRepairCountLabel(selectedCount, candidateCount = _meshRepairCandidateCount) {
+  const selected = Math.max(0, Number(selectedCount) || 0);
+  const candidates = Math.max(0, Number(candidateCount) || 0);
+  return `Closed surfaces: ${selected}/${candidates} selected.`;
+}
+
 function updateMeshRepairStatus(selectedIds = null) {
   if (!meshRepairToolbar || meshRepairToolbar.style.display === 'none') return;
   const selected = Array.isArray(selectedIds)
     ? selectedIds.length
     : preview.getMeshRepairSelectedLoopIds().length;
-  setMeshRepairStatus(
-    `Mesh Repair: ${_meshRepairCandidateCount} candidates, ${selected} selected.`,
-  );
+  setMeshRepairStatus(meshRepairCountLabel(selected, _meshRepairCandidateCount));
 }
 
 async function activateMeshRepairSelectionFromApi() {
@@ -736,27 +744,42 @@ async function activateMeshRepairSelectionFromApi() {
 async function applyMeshRepairSelection() {
   if (_meshRepairInFlight) return;
   const selectedLoopIds = preview.getMeshRepairSelectedLoopIds();
-  if (!Array.isArray(selectedLoopIds) || selectedLoopIds.length === 0) {
-    setMeshRepairStatus('Select at least one loop before applying.', 'error');
-    return;
-  }
+  const selectedCount = Array.isArray(selectedLoopIds) ? selectedLoopIds.length : 0;
+  const candidateCount = _meshRepairCandidateCount;
 
   _meshRepairInFlight = true;
   setMeshRepairEnabled(false);
-  setMeshRepairStatus('Applying mesh repair selection...');
+  setMeshRepairStatus(
+    selectedCount > 0
+      ? `${meshRepairCountLabel(selectedCount, candidateCount)} Confirming repair selection...`
+      : `${meshRepairCountLabel(0, candidateCount)} No surface selected. Confirming skip...`,
+  );
   try {
     const res = await fetch('/api/mesh-repair/confirm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ selected_loop_ids: selectedLoopIds }),
+      body: JSON.stringify({ selected_loop_ids: selectedLoopIds || [] }),
     });
     const data = await res.json();
     if (!res.ok || data.error) {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
+    const confirmedCountRaw = Number(data.selected_count);
+    const confirmedCount = Number.isFinite(confirmedCountRaw) ? confirmedCountRaw : selectedCount;
     preview.setMeshRepairConfirmed();
-    setMeshRepairStatus(`Selection confirmed (${selectedLoopIds.length} loops). Repairing mesh...`, 'success');
-    appendLog('stdout', `Mesh Repair confirmed with ${selectedLoopIds.length} selected loops.\n`, { stage: 7 });
+    if (confirmedCount > 0) {
+      setMeshRepairStatus(
+        `${meshRepairCountLabel(confirmedCount, candidateCount)} Repairing mesh...`,
+        'success',
+      );
+      appendLog('stdout', `Mesh Repair confirmed with ${confirmedCount} selected loops.\n`, { stage: 7 });
+    } else {
+      setMeshRepairStatus(
+        `${meshRepairCountLabel(0, candidateCount)} Skipping repair and continuing...`,
+        'success',
+      );
+      appendLog('stdout', 'Mesh Repair confirmed with 0 selected loops. Skipping repair.\n', { stage: 7 });
+    }
   } catch (e) {
     _meshRepairInFlight = false;
     setMeshRepairEnabled(true);
@@ -816,7 +839,7 @@ function syncMeshRepairToolbarFromStatus(statusMsg) {
   const selected = Number(statusMsg?.mesh_repair?.selected_loop_count) || 0;
   const candidateCount = Number(statusMsg?.mesh_repair?.candidate_count) || _meshRepairCandidateCount;
   _meshRepairCandidateCount = candidateCount;
-  setMeshRepairStatus(`Mesh Repair: ${candidateCount} candidates, ${selected} selected.`);
+  setMeshRepairStatus(meshRepairCountLabel(selected, candidateCount));
 }
 
 async function applyMeshPostprocess({ resetToRaw = false } = {}) {
