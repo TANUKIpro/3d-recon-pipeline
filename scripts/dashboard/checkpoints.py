@@ -171,7 +171,7 @@ _CHECKPOINTS: dict[int, Any] = {
             ),
             _checkpoint(
                 "s5.poisson.downsample",
-                label="Downsample mesh",
+                label="Simplify mesh",
                 patterns=_patterns(r"classical\/downsample|classical mesh stage complete"),
                 cleanup_files=("object_mesh.ply", "classical_mesh/object_mesh_final.ply"),
             ),

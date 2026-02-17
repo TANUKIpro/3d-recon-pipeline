@@ -49,7 +49,7 @@ const CHECKPOINT_TEMPLATES = {
       'Preprocess point cloud',
       'Reconstruct mesh (Poisson)',
       'Postprocess mesh',
-      'Downsample mesh',
+      'Simplify mesh',
     ],
     diffcd: [
       'Prepare point cloud for DiffCD',
