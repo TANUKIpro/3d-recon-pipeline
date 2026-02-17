@@ -116,6 +116,14 @@ class PipelineConfig:
     meshwrap_crop_scale: float = 2.0
     meshwrap_sample_points: int = 300_000
     meshwrap_normal_radius_ratio: float = 0.035
+    classical_preset: str = "default"
+    classical_preprocess_enabled: bool = True
+    classical_poisson_depth: int = 9
+    classical_density_trim_q: float = 0.005
+    classical_auto_smooth: bool = False
+    classical_smooth_iterations: int = 2
+    classical_downsample_enabled: bool = True
+    classical_downsample_target_faces: int = 120_000
     mesh_repair_enabled: bool = True
     mesh_repair_max_diameter_ratio: float = 0.08
     mesh_repair_y_band_ratio: float = 0.06

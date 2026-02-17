@@ -97,6 +97,29 @@ const MESHWRAP_DEFAULTS = {
   meshwrap_normal_radius_ratio: 0.035,
 };
 
+const CLASSICAL_DEFAULTS = {
+  classical_preprocess_enabled: true,
+  classical_poisson_depth: 9,
+  classical_density_trim_q: 0.005,
+  classical_auto_smooth: false,
+  classical_smooth_iterations: 2,
+  classical_downsample_enabled: true,
+  classical_downsample_target_faces: 120000,
+};
+
+const CLASSICAL_PRESETS = {
+  default: { ...CLASSICAL_DEFAULTS },
+  trust_point_cloud: {
+    classical_preprocess_enabled: false,
+    classical_poisson_depth: 11,
+    classical_density_trim_q: 0.001,
+    classical_auto_smooth: false,
+    classical_smooth_iterations: 0,
+    classical_downsample_enabled: false,
+    classical_downsample_target_faces: 500000,
+  },
+};
+
 export class ConfigPanel {
   constructor() {
     this._panel = document.getElementById('config-panel');
@@ -149,6 +172,14 @@ export class ConfigPanel {
       meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
       meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
       meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
+      classical_preset: document.getElementById('cfg-classical-preset'),
+      classical_preprocess_enabled: document.getElementById('cfg-classical-preprocess'),
+      classical_poisson_depth: document.getElementById('cfg-classical-poisson-depth'),
+      classical_density_trim_q: document.getElementById('cfg-classical-density-trim-q'),
+      classical_auto_smooth: document.getElementById('cfg-classical-auto-smooth'),
+      classical_smooth_iterations: document.getElementById('cfg-classical-smooth-iters'),
+      classical_downsample_enabled: document.getElementById('cfg-classical-downsample'),
+      classical_downsample_target_faces: document.getElementById('cfg-classical-target-faces'),
       mesh_repair_enabled: document.getElementById('cfg-mesh-repair-enabled'),
       mesh_repair_max_diameter_ratio: document.getElementById('cfg-mesh-repair-max-diameter-ratio'),
       mesh_repair_y_band_ratio: document.getElementById('cfg-mesh-repair-y-band-ratio'),
@@ -156,6 +187,9 @@ export class ConfigPanel {
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._meshwrapResetBtn = document.getElementById('btn-meshwrap-reset');
+    this._classicalSummary = document.getElementById('cfg-classical-summary');
+    this._classicalResetBtn = document.getElementById('btn-classical-reset');
+    this._classicalControls = document.getElementById('cfg-classical-controls');
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
     this._denoiseGroups = {
       dbscan: document.getElementById('cfg-denoise-dbscan'),
@@ -186,6 +220,7 @@ export class ConfigPanel {
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this._updateMeshWrapSummary();
+    this._updateClassicalSummary();
     this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
     this._updateTextureAutoOption(null);
     this._bindEvents();
@@ -207,6 +242,7 @@ export class ConfigPanel {
       inp.disabled = running;
     }
     if (this._meshwrapResetBtn) this._meshwrapResetBtn.disabled = running;
+    if (this._classicalResetBtn) this._classicalResetBtn.disabled = running;
   }
 
   setActiveStage(stage) {
@@ -273,6 +309,9 @@ export class ConfigPanel {
     if (this._diffcdControls) {
       this._diffcdControls.style.display = isDiffcd ? '' : 'none';
     }
+    if (this._classicalControls) {
+      this._classicalControls.style.display = isDiffcd ? 'none' : '';
+    }
   }
 
   getMeshMethod() {
@@ -323,6 +362,14 @@ export class ConfigPanel {
       meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
       meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 300000),
       meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
+      classical_preset: this._inputs.classical_preset?.value || 'default',
+      classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
+      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
+      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.005),
+      classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
+      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 2),
+      classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
+      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 120000),
       mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
       mesh_repair_max_diameter_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_max_diameter_ratio?.value, 0.08),
       mesh_repair_y_band_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_y_band_ratio?.value, 0.06),
@@ -468,6 +515,43 @@ export class ConfigPanel {
         e.preventDefault();
         e.stopPropagation();
         this._resetMeshWrapParams();
+      });
+    }
+
+    if (this._inputs.classical_preset) {
+      this._inputs.classical_preset.addEventListener('change', () => {
+        const preset = this._inputs.classical_preset.value;
+        if (preset === 'custom') {
+          this._updateClassicalSummary();
+          return;
+        }
+        this._applyClassicalPreset(preset);
+      });
+    }
+    for (const key of [
+      'classical_poisson_depth',
+      'classical_density_trim_q',
+      'classical_smooth_iterations',
+      'classical_downsample_target_faces',
+    ]) {
+      if (this._inputs[key]) {
+        this._inputs[key].addEventListener('input', () => this._onClassicalInputChanged());
+      }
+    }
+    for (const key of [
+      'classical_preprocess_enabled',
+      'classical_auto_smooth',
+      'classical_downsample_enabled',
+    ]) {
+      if (this._inputs[key]) {
+        this._inputs[key].addEventListener('change', () => this._onClassicalInputChanged());
+      }
+    }
+    if (this._classicalResetBtn) {
+      this._classicalResetBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._applyClassicalPreset('default');
       });
     }
 
@@ -801,6 +885,36 @@ export class ConfigPanel {
       this._inputs.mesh_repair_enabled.checked = Boolean(cfg.mesh_repair_enabled);
     }
 
+    // Classical mesh parameters
+    const classicalPreset = String(cfg.classical_preset || '');
+    if (classicalPreset && classicalPreset !== 'custom' && CLASSICAL_PRESETS[classicalPreset]) {
+      this._applyClassicalPreset(classicalPreset);
+    } else {
+      if (cfg.classical_preprocess_enabled != null && this._inputs.classical_preprocess_enabled) {
+        this._inputs.classical_preprocess_enabled.checked = Boolean(cfg.classical_preprocess_enabled);
+      }
+      for (const key of [
+        'classical_poisson_depth',
+        'classical_density_trim_q',
+        'classical_smooth_iterations',
+        'classical_downsample_target_faces',
+      ]) {
+        if (cfg[key] != null && this._inputs[key]) {
+          this._inputs[key].value = String(cfg[key]);
+        }
+      }
+      if (cfg.classical_auto_smooth != null && this._inputs.classical_auto_smooth) {
+        this._inputs.classical_auto_smooth.checked = Boolean(cfg.classical_auto_smooth);
+      }
+      if (cfg.classical_downsample_enabled != null && this._inputs.classical_downsample_enabled) {
+        this._inputs.classical_downsample_enabled.checked = Boolean(cfg.classical_downsample_enabled);
+      }
+      if (this._inputs.classical_preset) {
+        this._inputs.classical_preset.value = 'custom';
+      }
+      this._onClassicalInputChanged();
+    }
+
     this._maxFramesAuto = false;
     this._pi3xFrameTargetAuto = cfg.pi3x_frame_target == null;
     this._pi3xFrameTargetRecommended = null;
@@ -915,6 +1029,71 @@ export class ConfigPanel {
       if (this._inputs[key]) this._inputs[key].value = String(val);
     }
     this._updateMeshWrapSummary();
+  }
+
+  _applyClassicalPreset(name) {
+    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.default;
+    const resolvedName = CLASSICAL_PRESETS[name] ? name : 'default';
+    if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;
+    if (this._inputs.classical_preprocess_enabled) this._inputs.classical_preprocess_enabled.checked = preset.classical_preprocess_enabled;
+    if (this._inputs.classical_poisson_depth) this._inputs.classical_poisson_depth.value = String(preset.classical_poisson_depth);
+    if (this._inputs.classical_density_trim_q) this._inputs.classical_density_trim_q.value = String(preset.classical_density_trim_q);
+    if (this._inputs.classical_auto_smooth) this._inputs.classical_auto_smooth.checked = preset.classical_auto_smooth;
+    if (this._inputs.classical_smooth_iterations) this._inputs.classical_smooth_iterations.value = String(preset.classical_smooth_iterations);
+    if (this._inputs.classical_downsample_enabled) this._inputs.classical_downsample_enabled.checked = preset.classical_downsample_enabled;
+    if (this._inputs.classical_downsample_target_faces) this._inputs.classical_downsample_target_faces.value = String(preset.classical_downsample_target_faces);
+    this._updateClassicalSummary();
+  }
+
+  _onClassicalInputChanged() {
+    const matched = this._findMatchingClassicalPreset();
+    if (this._inputs.classical_preset) {
+      this._inputs.classical_preset.value = matched || 'custom';
+    }
+    this._updateClassicalSummary();
+  }
+
+  _readClassicalConfig() {
+    return {
+      classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
+      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
+      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.005),
+      classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
+      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 2),
+      classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
+      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 120000),
+    };
+  }
+
+  _updateClassicalSummary() {
+    if (!this._classicalSummary) return;
+    const cfg = this._readClassicalConfig();
+    const parts = [];
+    parts.push(cfg.classical_preprocess_enabled ? 'preprocess=on' : 'preprocess=off');
+    parts.push(`depth=${cfg.classical_poisson_depth}`);
+    parts.push(`trim_q=${cfg.classical_density_trim_q}`);
+    if (cfg.classical_downsample_enabled) {
+      parts.push(`downsample=${(cfg.classical_downsample_target_faces / 1000).toFixed(0)}k`);
+    } else {
+      parts.push('downsample=off');
+    }
+    this._classicalSummary.textContent = parts.join(', ');
+  }
+
+  _findMatchingClassicalPreset() {
+    const current = this._readClassicalConfig();
+    for (const [name, preset] of Object.entries(CLASSICAL_PRESETS)) {
+      let same = true;
+      for (const key of Object.keys(preset)) {
+        if (typeof preset[key] === 'boolean') {
+          if (current[key] !== preset[key]) { same = false; break; }
+        } else if (!this._valuesAlmostEqual(current[key], preset[key])) {
+          same = false; break;
+        }
+      }
+      if (same) return name;
+    }
+    return null;
   }
 
   _updateMeshWrapSummary() {
