@@ -110,12 +110,12 @@ class PipelineConfig:
     diffcd_resolution: int = 512
     meshwrap_poisson_depth: int = 6
     meshwrap_poisson_scale: float = 1.18
-    meshwrap_density_trim_q: float = 0.06
-    meshwrap_target_face_ratio: float = 1.50
-    meshwrap_iterations: int = 2
-    meshwrap_crop_scale: float = 2.0
-    meshwrap_sample_points: int = 300_000
-    meshwrap_normal_radius_ratio: float = 0.035
+    meshwrap_density_trim_q: float = 0.01
+    meshwrap_target_face_ratio: float = 2.20
+    meshwrap_iterations: int = 1
+    meshwrap_crop_scale: float = 1.03
+    meshwrap_sample_points: int = 400_000
+    meshwrap_normal_radius_ratio: float = 0.02
     classical_preset: str = "default"
     classical_preprocess_enabled: bool = True
     classical_poisson_depth: int = 9
@@ -127,7 +127,7 @@ class PipelineConfig:
     mesh_repair_enabled: bool = True
     mesh_repair_max_diameter_ratio: float = 0.08
     mesh_repair_y_band_ratio: float = 0.06
-    mesh_repair_smooth_iters: int = 2
+    mesh_repair_smooth_iters: int = 3
     texture_size: int = 0
 
     @classmethod

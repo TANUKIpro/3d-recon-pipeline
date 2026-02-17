@@ -44,7 +44,7 @@ Dashboard 追加 API:
 | `MESH_REPAIR_ENABLED` | `1` | 補修有効化 |
 | `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
 | `MESH_REPAIR_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域 (下端からbbox対角比) |
-| `MESH_REPAIR_SMOOTH_ITERS` | `2` | 局所平滑化反復数 |
+| `MESH_REPAIR_SMOOTH_ITERS` | `3` | 局所平滑化反復数 |
 
 ## 失敗時の挙動
 

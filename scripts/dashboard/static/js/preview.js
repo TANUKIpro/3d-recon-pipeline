@@ -246,6 +246,7 @@ export class PreviewPanel {
     this._stages[stageNum] = {
       scene, sceneRoot, camera, controls, container,
       currentObject: null,
+      _loadGeneration: 0,
       ambientLight: ambient,
       keyLight: dirLight,
       shadowFloor,
@@ -351,6 +352,14 @@ export class PreviewPanel {
       }
       if (typeof node.material.dispose === 'function') node.material.dispose();
     });
+  }
+
+  _cleanupCurrentObject(stage) {
+    if (stage.currentObject) {
+      this._disposeObject(stage.currentObject);
+      stage.sceneRoot.remove(stage.currentObject);
+      stage.currentObject = null;
+    }
   }
 
   _setMeshRepairClickEnabled(enabled) {
@@ -1072,6 +1081,7 @@ export class PreviewPanel {
   async _loadPLYIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
     if (!stage) return false;
+    const gen = ++stage._loadGeneration;
     if (stageNum === 6) {
       this.clearCropBbox();
     }
@@ -1080,11 +1090,7 @@ export class PreviewPanel {
     }
 
     // Remove previous object
-    if (stage.currentObject) {
-      this._disposeObject(stage.currentObject);
-      stage.sceneRoot.remove(stage.currentObject);
-      stage.currentObject = null;
-    }
+    this._cleanupCurrentObject(stage);
 
     const url = this._buildPreviewFileUrl(relativePath, opts.cacheToken);
     const loader = new PLYLoader();
@@ -1093,6 +1099,12 @@ export class PreviewPanel {
       const geometry = await new Promise((resolve, reject) => {
         loader.load(url, resolve, undefined, reject);
       });
+
+      // Stale load — a newer call has superseded this one
+      if (stage._loadGeneration !== gen) {
+        geometry.dispose();
+        return false;
+      }
 
       geometry.computeBoundingBox();
       const center = new THREE.Vector3();
@@ -1163,6 +1175,7 @@ export class PreviewPanel {
         obj = new THREE.Points(geometry, material);
       }
 
+      this._cleanupCurrentObject(stage);
       stage.currentObject = obj;
       stage.sceneRoot.add(obj);
       // clearFromStage() can hide initialized containers; show it again on successful load.
@@ -1170,6 +1183,7 @@ export class PreviewPanel {
       this._fitCamera(stage, geometry.boundingBox);
       return true;
     } catch (e) {
+      if (stage._loadGeneration !== gen) return false;
       console.error(`Failed to load PLY (stage ${stageNum}):`, e);
       stage.centerOffset = null;
       this._setMeshShadowProfile(stage, null, false);
@@ -1183,12 +1197,9 @@ export class PreviewPanel {
   async _loadOBJIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
     if (!stage) return false;
+    const gen = ++stage._loadGeneration;
 
-    if (stage.currentObject) {
-      this._disposeObject(stage.currentObject);
-      stage.sceneRoot.remove(stage.currentObject);
-      stage.currentObject = null;
-    }
+    this._cleanupCurrentObject(stage);
 
     const cacheToken = opts.cacheToken;
     const url = this._buildPreviewFileUrl(relativePath, cacheToken);
@@ -1204,8 +1215,10 @@ export class PreviewPanel {
       materials = await new Promise((resolve, reject) => {
         mtlLoader.load(mtlPathWithRevision, resolve, undefined, reject);
       });
+      if (stage._loadGeneration !== gen) return false;
       materials.preload();
     } catch (e) {
+      if (stage._loadGeneration !== gen) return false;
       // No MTL file — okay
     }
 
@@ -1217,10 +1230,23 @@ export class PreviewPanel {
         objLoader.load(url, resolve, undefined, reject);
       });
 
+      if (stage._loadGeneration !== gen) {
+        // Dispose the loaded object to avoid memory leaks
+        object.traverse((node) => {
+          if (node.geometry) node.geometry.dispose();
+          if (node.material) {
+            if (Array.isArray(node.material)) node.material.forEach(m => m?.dispose());
+            else node.material.dispose();
+          }
+        });
+        return false;
+      }
+
       const box = new THREE.Box3().setFromObject(object);
       const center = box.getCenter(new THREE.Vector3());
       object.position.sub(center);
 
+      this._cleanupCurrentObject(stage);
       stage.currentObject = object;
       stage.sceneRoot.add(object);
       // clearFromStage() can hide initialized containers; show it again on successful load.
@@ -1228,6 +1254,7 @@ export class PreviewPanel {
       this._fitCamera(stage, box);
       return true;
     } catch (e) {
+      if (stage._loadGeneration !== gen) return false;
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
       return false;
     }

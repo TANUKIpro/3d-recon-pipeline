@@ -22,7 +22,7 @@ CancelCallback = Callable[[], None]
 _DEFAULT_ENABLED = True
 _DEFAULT_MAX_DIAMETER_RATIO = 0.08
 _DEFAULT_Y_BAND_RATIO = 0.06
-_DEFAULT_SMOOTH_ITERS = 2
+_DEFAULT_SMOOTH_ITERS = 3
 _DEFAULT_SMOOTH_LAMBDA = 0.18
 
 # Keep this conservative to reduce accidental top-side hole filling.
