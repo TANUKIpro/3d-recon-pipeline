@@ -113,6 +113,64 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.mesh_repair_y_band_ratio, 0.5)
         self.assertEqual(cfg.mesh_repair_smooth_iters, 12)
 
+    def test_classical_defaults_use_trust_point_cloud(self) -> None:
+        cfg = build_pipeline_config(
+            {},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.classical_preset, "trust_point_cloud")
+        self.assertFalse(cfg.classical_preprocess_enabled)
+        self.assertEqual(cfg.classical_poisson_depth, 11)
+        self.assertEqual(cfg.classical_density_trim_q, 0.001)
+        self.assertFalse(cfg.classical_auto_smooth)
+        self.assertEqual(cfg.classical_smooth_iterations, 0)
+        self.assertFalse(cfg.classical_downsample_enabled)
+        self.assertEqual(cfg.classical_downsample_target_faces, 500000)
+
+    def test_classical_balanced_legacy_preset_keeps_previous_default_values(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "classical_preset": "balanced_legacy",
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.classical_preset, "balanced_legacy")
+        self.assertTrue(cfg.classical_preprocess_enabled)
+        self.assertEqual(cfg.classical_poisson_depth, 9)
+        self.assertEqual(cfg.classical_density_trim_q, 0.005)
+        self.assertFalse(cfg.classical_auto_smooth)
+        self.assertEqual(cfg.classical_smooth_iterations, 2)
+        self.assertTrue(cfg.classical_downsample_enabled)
+        self.assertEqual(cfg.classical_downsample_target_faces, 120000)
+
+    def test_classical_legacy_default_preset_maps_to_trust_point_cloud(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "classical_preset": "default",
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.classical_preset, "trust_point_cloud")
+        self.assertFalse(cfg.classical_preprocess_enabled)
+        self.assertEqual(cfg.classical_poisson_depth, 11)
+        self.assertEqual(cfg.classical_density_trim_q, 0.001)
+        self.assertFalse(cfg.classical_auto_smooth)
+        self.assertEqual(cfg.classical_smooth_iterations, 0)
+        self.assertFalse(cfg.classical_downsample_enabled)
+        self.assertEqual(cfg.classical_downsample_target_faces, 500000)
+
 
 class DetectStageOutputsTests(unittest.TestCase):
     def test_stage5_reset_plan_includes_preview_mesh(self) -> None:

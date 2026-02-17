@@ -113,9 +113,12 @@ const CLASSICAL_DEFAULTS = {
   classical_downsample_target_faces: 120000,
 };
 
+const CLASSICAL_PRESET_TRUST_POINT_CLOUD = 'trust_point_cloud';
+const CLASSICAL_PRESET_BALANCED_LEGACY = 'balanced_legacy';
+
 const CLASSICAL_PRESETS = {
-  default: { ...CLASSICAL_DEFAULTS },
-  trust_point_cloud: {
+  [CLASSICAL_PRESET_BALANCED_LEGACY]: { ...CLASSICAL_DEFAULTS },
+  [CLASSICAL_PRESET_TRUST_POINT_CLOUD]: {
     classical_preprocess_enabled: false,
     classical_poisson_depth: 11,
     classical_density_trim_q: 0.001,
@@ -227,8 +230,10 @@ export class ConfigPanel {
     this._pi3xPlanDebounce = null;
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
+    this._applyClassicalPreset(
+      this._inputs.classical_preset?.value || CLASSICAL_PRESET_TRUST_POINT_CLOUD
+    );
     this._updateMeshWrapSummary();
-    this._updateClassicalSummary();
     this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
     this._updateTextureAutoOption(null);
     this._bindEvents();
@@ -401,7 +406,7 @@ export class ConfigPanel {
         this._inputs.meshwrap_normal_radius_ratio?.value,
         MESHWRAP_DEFAULTS.meshwrap_normal_radius_ratio,
       ),
-      classical_preset: this._inputs.classical_preset?.value || 'default',
+      classical_preset: this._inputs.classical_preset?.value || CLASSICAL_PRESET_TRUST_POINT_CLOUD,
       classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
       classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
       classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.005),
@@ -599,7 +604,7 @@ export class ConfigPanel {
       this._classicalResetBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this._applyClassicalPreset('default');
+        this._applyClassicalPreset(CLASSICAL_PRESET_TRUST_POINT_CLOUD);
       });
     }
 
@@ -934,7 +939,12 @@ export class ConfigPanel {
     }
 
     // Classical mesh parameters
-    const classicalPreset = String(cfg.classical_preset || '');
+    const classicalPresetRaw = String(cfg.classical_preset || '');
+    const classicalPreset = (
+      classicalPresetRaw === 'default'
+        ? CLASSICAL_PRESET_TRUST_POINT_CLOUD
+        : classicalPresetRaw
+    );
     if (classicalPreset && classicalPreset !== 'custom' && CLASSICAL_PRESETS[classicalPreset]) {
       this._applyClassicalPreset(classicalPreset);
     } else {
@@ -1086,8 +1096,8 @@ export class ConfigPanel {
   }
 
   _applyClassicalPreset(name) {
-    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.default;
-    const resolvedName = CLASSICAL_PRESETS[name] ? name : 'default';
+    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS[CLASSICAL_PRESET_TRUST_POINT_CLOUD];
+    const resolvedName = CLASSICAL_PRESETS[name] ? name : CLASSICAL_PRESET_TRUST_POINT_CLOUD;
     this._updatingClassicalPreset = true;
     try {
       if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;

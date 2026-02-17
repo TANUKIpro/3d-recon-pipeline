@@ -116,7 +116,7 @@ class PipelineConfig:
     meshwrap_crop_scale: float = 1.03
     meshwrap_sample_points: int = 400_000
     meshwrap_normal_radius_ratio: float = 0.02
-    classical_preset: str = "default"
+    classical_preset: str = "trust_point_cloud"
     classical_preprocess_enabled: bool = True
     classical_poisson_depth: int = 9
     classical_density_trim_q: float = 0.005

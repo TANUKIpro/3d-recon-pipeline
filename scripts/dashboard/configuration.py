@@ -75,7 +75,7 @@ DENOISE_ALGORITHMS = {
 }
 
 CLASSICAL_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
-    "default": {
+    "balanced_legacy": {
         "classical_preprocess_enabled": True,
         "classical_poisson_depth": 9,
         "classical_density_trim_q": 0.005,
@@ -175,9 +175,16 @@ def build_pipeline_config(
     raw_classical = str(raw.get("classical_preset") or "").strip()
     if raw_classical == "custom":
         classical_preset = "custom"
-        classical_defaults = CLASSICAL_PRESET_DEFAULTS["default"]
+        classical_defaults = CLASSICAL_PRESET_DEFAULTS["trust_point_cloud"]
     else:
-        classical_preset = parse_choice(raw_classical, set(CLASSICAL_PRESET_DEFAULTS), "default")
+        # Legacy compatibility: historical "default" preset is now mapped to trust_point_cloud.
+        if raw_classical == "default":
+            raw_classical = "trust_point_cloud"
+        classical_preset = parse_choice(
+            raw_classical,
+            set(CLASSICAL_PRESET_DEFAULTS),
+            "trust_point_cloud",
+        )
         classical_defaults = CLASSICAL_PRESET_DEFAULTS[classical_preset]
 
     max_frames = max(2, parse_int(raw.get("max_frames"), env_int("MAX_FRAMES", 50, env_map)))
