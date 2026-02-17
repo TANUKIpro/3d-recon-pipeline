@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import io
+import json
 import sys
 import threading
 from contextlib import contextmanager
@@ -121,13 +122,11 @@ class LogBroadcaster:
         """
         while True:
             msg = await self._queue.get()
-            await _broadcast(ws_clients, msg)
+            await broadcast_to_clients(ws_clients, msg)
 
 
-async def _broadcast(ws_clients: list, msg: dict) -> None:
+async def broadcast_to_clients(ws_clients: list, msg: dict) -> None:
     """Send a JSON message to all connected WebSocket clients."""
-    import json
-
     payload = json.dumps(msg)
     stale: list[int] = []
     for i, ws in enumerate(ws_clients):

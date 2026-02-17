@@ -18,7 +18,7 @@ from scripts.dashboard.log_capture import (
     _CURRENT_LOG_STAGE,
     LogBroadcaster,
     StreamCapture,
-    _broadcast,
+    broadcast_to_clients,
     stage_log_scope,
 )
 

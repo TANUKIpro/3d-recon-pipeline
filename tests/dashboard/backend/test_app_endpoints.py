@@ -9,11 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from scripts.dashboard.app import (
+from scripts.dashboard.object_store import (
     _safe_json_load,
     _sanitize_object_name,
     _suggest_object_name,
     _validate_object_name,
+)
+from scripts.dashboard.app import (
     mesh_repair_candidates,
     pipeline_cancel,
     pipeline_confirm_next,

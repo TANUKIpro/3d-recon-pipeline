@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from scripts.dashboard.app import STAGE_RESET_PATHS
+from scripts.dashboard.object_store import STAGE_RESET_PATHS
 from scripts.dashboard.configuration import build_pipeline_config
 from scripts.dashboard.state import detect_stage_outputs
 
