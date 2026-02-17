@@ -74,60 +74,6 @@ DENOISE_ALGORITHMS = {
     "dbscan_radius",
 }
 
-MESHWRAP_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
-    "balanced": {
-        "meshwrap_poisson_depth": 9,
-        "meshwrap_poisson_scale": 1.18,
-        "meshwrap_density_trim_q": 0.06,
-        "meshwrap_target_face_ratio": 1.80,
-        "meshwrap_iterations": 2,
-        "meshwrap_crop_scale": 1.08,
-        "meshwrap_sample_points": 180_000,
-        "meshwrap_normal_radius_ratio": 0.035,
-    },
-    "quality": {
-        "meshwrap_poisson_depth": 10,
-        "meshwrap_poisson_scale": 1.22,
-        "meshwrap_density_trim_q": 0.08,
-        "meshwrap_target_face_ratio": 2.50,
-        "meshwrap_iterations": 3,
-        "meshwrap_crop_scale": 1.10,
-        "meshwrap_sample_points": 250_000,
-        "meshwrap_normal_radius_ratio": 0.04,
-    },
-    "fast": {
-        "meshwrap_poisson_depth": 8,
-        "meshwrap_poisson_scale": 1.15,
-        "meshwrap_density_trim_q": 0.05,
-        "meshwrap_target_face_ratio": 1.50,
-        "meshwrap_iterations": 1,
-        "meshwrap_crop_scale": 1.06,
-        "meshwrap_sample_points": 120_000,
-        "meshwrap_normal_radius_ratio": 0.03,
-    },
-    "minimal": {
-        "meshwrap_poisson_depth": 8,
-        "meshwrap_poisson_scale": 1.10,
-        "meshwrap_density_trim_q": 0.03,
-        "meshwrap_target_face_ratio": 1.20,
-        "meshwrap_iterations": 1,
-        "meshwrap_crop_scale": 1.04,
-        "meshwrap_sample_points": 100_000,
-        "meshwrap_normal_radius_ratio": 0.025,
-    },
-}
-
-MESHWRAP_CUSTOM_DEFAULTS: dict[str, Any] = {
-    "meshwrap_poisson_depth": 6,
-    "meshwrap_poisson_scale": 1.18,
-    "meshwrap_density_trim_q": 0.06,
-    "meshwrap_target_face_ratio": 1.80,
-    "meshwrap_iterations": 2,
-    "meshwrap_crop_scale": 2.0,
-    "meshwrap_sample_points": 180_000,
-    "meshwrap_normal_radius_ratio": 0.035,
-}
-
 MESH_METHODS = {"poisson", "diffcd"}
 
 
@@ -203,14 +149,6 @@ def build_pipeline_config(
         DENOISE_ALGORITHMS,
         str(denoise_defaults["denoise_algorithm"]),
     )
-
-    raw_meshwrap_preset = str(raw.get("meshwrap_preset") or "").strip()
-    if raw_meshwrap_preset == "custom" or not raw_meshwrap_preset:
-        meshwrap_preset = "custom"
-        meshwrap_defaults = MESHWRAP_CUSTOM_DEFAULTS
-    else:
-        meshwrap_preset = parse_choice(raw_meshwrap_preset, set(MESHWRAP_PRESET_DEFAULTS), "balanced")
-        meshwrap_defaults = MESHWRAP_PRESET_DEFAULTS[meshwrap_preset]
 
     max_frames = max(2, parse_int(raw.get("max_frames"), env_int("MAX_FRAMES", 50, env_map)))
     pi3x_frame_target = max(
@@ -294,38 +232,37 @@ def build_pipeline_config(
         diffcd_batch_size=parse_int(raw.get("diffcd_batch_size"), env_int("DIFFCD_BATCH_SIZE", 5000, env_map)),
         diffcd_n_batches=parse_int(raw.get("diffcd_n_batches"), env_int("DIFFCD_N_BATCHES", 30000, env_map)),
         diffcd_resolution=parse_int(raw.get("diffcd_resolution"), env_int("DIFFCD_RESOLUTION", 512, env_map)),
-        meshwrap_preset=meshwrap_preset,
         meshwrap_poisson_depth=max(
             6,
-            parse_int(raw.get("meshwrap_poisson_depth"), int(meshwrap_defaults["meshwrap_poisson_depth"])),
+            parse_int(raw.get("meshwrap_poisson_depth"), 6),
         ),
         meshwrap_poisson_scale=max(
             1.0,
-            parse_float(raw.get("meshwrap_poisson_scale"), float(meshwrap_defaults["meshwrap_poisson_scale"])),
+            parse_float(raw.get("meshwrap_poisson_scale"), 1.18),
         ),
         meshwrap_density_trim_q=min(
             0.49,
-            max(0.0, parse_float(raw.get("meshwrap_density_trim_q"), float(meshwrap_defaults["meshwrap_density_trim_q"]))),
+            max(0.0, parse_float(raw.get("meshwrap_density_trim_q"), 0.06)),
         ),
         meshwrap_target_face_ratio=min(
             3.0,
-            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), float(meshwrap_defaults["meshwrap_target_face_ratio"]))),
+            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), 1.80)),
         ),
         meshwrap_iterations=max(
             1,
-            parse_int(raw.get("meshwrap_iterations"), int(meshwrap_defaults["meshwrap_iterations"])),
+            parse_int(raw.get("meshwrap_iterations"), 2),
         ),
         meshwrap_crop_scale=max(
             1.0,
-            parse_float(raw.get("meshwrap_crop_scale"), float(meshwrap_defaults["meshwrap_crop_scale"])),
+            parse_float(raw.get("meshwrap_crop_scale"), 2.0),
         ),
         meshwrap_sample_points=max(
             50_000,
-            parse_int(raw.get("meshwrap_sample_points"), int(meshwrap_defaults["meshwrap_sample_points"])),
+            parse_int(raw.get("meshwrap_sample_points"), 180_000),
         ),
         meshwrap_normal_radius_ratio=max(
             0.001,
-            parse_float(raw.get("meshwrap_normal_radius_ratio"), float(meshwrap_defaults["meshwrap_normal_radius_ratio"])),
+            parse_float(raw.get("meshwrap_normal_radius_ratio"), 0.035),
         ),
         mesh_repair_enabled=parse_bool(
             raw.get("mesh_repair_enabled"),
