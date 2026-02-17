@@ -5,6 +5,7 @@ FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV CUDA_HOME=/usr/local/cuda
 
 # --- Layer 1: System dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,10 +47,10 @@ RUN pip install --no-cache-dir \
 # Must come after numpy is installed (scikit-image build needs it)
 RUN pip install --no-cache-dir wandb scikit-image
 
-# --- Layer 4: SAM2 (editable install, no CUDA build needed) ---
+# --- Layer 4: SAM2 (editable install with CUDA extension for post-processing) ---
 RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
-    && SAM2_BUILD_CUDA=0 pip install --no-build-isolation -e .
+    && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
 # --- Layer 5: Pi3 (sys.path usage, pinned for API compat with stage offloading) ---
 ARG PI3_COMMIT=08d7288aaf4b0c08c8498bea7bafedc4672bb006
