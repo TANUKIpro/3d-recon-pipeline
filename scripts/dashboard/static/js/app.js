@@ -828,15 +828,15 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
   const lambRaw = Number.parseFloat(meshPostLambdaInput?.value || '0.5');
   const lamb = Math.max(0.01, Math.min(1.5, Number.isFinite(lambRaw) ? lambRaw : 0.5));
   const downsampleEnabled = meshPostDownsampleEnabledInput?.checked ?? true;
-  const targetRaw = Number.parseInt(meshPostTargetFacesInput?.value || '100000', 10);
+  const targetRaw = Number.parseInt(meshPostTargetFacesInput?.value || '120000', 10);
   const downsampleTargetFaces = Math.max(
     1000,
-    Math.min(5_000_000, Number.isFinite(targetRaw) ? targetRaw : 100000),
+    Math.min(5_000_000, Number.isFinite(targetRaw) ? targetRaw : 120000),
   );
-  const triggerRaw = Number.parseInt(meshPostTriggerFacesInput?.value || '140000', 10);
+  const triggerRaw = Number.parseInt(meshPostTriggerFacesInput?.value || '170000', 10);
   const downsampleTriggerFaces = Math.max(
     downsampleTargetFaces,
-    Math.min(5_000_000, Number.isFinite(triggerRaw) ? triggerRaw : 140000),
+    Math.min(5_000_000, Number.isFinite(triggerRaw) ? triggerRaw : 170000),
   );
 
   if (meshPostTargetFacesInput) meshPostTargetFacesInput.value = String(downsampleTargetFaces);

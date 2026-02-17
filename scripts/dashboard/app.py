@@ -835,13 +835,13 @@ async def mesh_postprocess(body: dict | None = None):
         1000,
         parse_int(
             raw.get("downsample_target_faces"),
-            env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 100000),
+            env_int("CLASSICAL_DOWNSAMPLE_TARGET_FACES", 120000),
         ),
     )
     downsample_trigger_faces = max(
         parse_int(
             raw.get("downsample_trigger_faces"),
-            env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 140000),
+            env_int("CLASSICAL_DOWNSAMPLE_TRIGGER_FACES", 170000),
         ),
         downsample_target_faces,
     )
