@@ -111,13 +111,13 @@ const MESH_REPAIR_DEFAULTS = {
 };
 
 const CLASSICAL_DEFAULTS = {
-  classical_preprocess_enabled: true,
-  classical_poisson_depth: 9,
-  classical_density_trim_q: 0.005,
+  classical_preprocess_enabled: false,
+  classical_poisson_depth: 11,
+  classical_density_trim_q: 0.001,
   classical_auto_smooth: false,
-  classical_smooth_iterations: 2,
-  classical_downsample_enabled: true,
-  classical_downsample_target_faces: 120000,
+  classical_smooth_iterations: 0,
+  classical_downsample_enabled: false,
+  classical_downsample_target_faces: 500000,
 };
 
 const CLASSICAL_PRESETS = {
@@ -409,14 +409,14 @@ export class ConfigPanel {
         this._inputs.meshwrap_normal_radius_ratio?.value,
         MESHWRAP_DEFAULTS.meshwrap_normal_radius_ratio,
       ),
-      classical_preset: this._inputs.classical_preset?.value || 'default',
+      classical_preset: this._inputs.classical_preset?.value || 'trust_point_cloud',
       classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
-      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
-      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.005),
+      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 11),
+      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.001),
       classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
-      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 2),
+      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 0),
       classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
-      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 120000),
+      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 500000),
       mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
       mesh_repair_max_diameter_ratio: this._parsePositiveFloat(
         this._inputs.mesh_repair_max_diameter_ratio?.value,
@@ -607,7 +607,7 @@ export class ConfigPanel {
       this._classicalResetBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this._applyClassicalPreset('default');
+        this._applyClassicalPreset('trust_point_cloud');
       });
     }
 
@@ -1094,8 +1094,8 @@ export class ConfigPanel {
   }
 
   _applyClassicalPreset(name) {
-    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.default;
-    const resolvedName = CLASSICAL_PRESETS[name] ? name : 'default';
+    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.trust_point_cloud;
+    const resolvedName = CLASSICAL_PRESETS[name] ? name : 'trust_point_cloud';
     this._updatingClassicalPreset = true;
     try {
       if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;
@@ -1124,12 +1124,12 @@ export class ConfigPanel {
   _readClassicalConfig() {
     return {
       classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
-      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 9),
-      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.005),
+      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 11),
+      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.001),
       classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
-      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 2),
+      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 0),
       classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
-      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 120000),
+      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 500000),
     };
   }
 
