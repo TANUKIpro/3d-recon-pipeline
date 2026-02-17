@@ -246,7 +246,7 @@ def build_pipeline_config(
         ),
         meshwrap_target_face_ratio=min(
             3.0,
-            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), 1.80)),
+            max(0.2, parse_float(raw.get("meshwrap_target_face_ratio"), 1.50)),
         ),
         meshwrap_iterations=max(
             1,
@@ -258,7 +258,7 @@ def build_pipeline_config(
         ),
         meshwrap_sample_points=max(
             50_000,
-            parse_int(raw.get("meshwrap_sample_points"), 180_000),
+            parse_int(raw.get("meshwrap_sample_points"), 300_000),
         ),
         meshwrap_normal_radius_ratio=max(
             0.001,

@@ -85,6 +85,18 @@ const DENOISE_PRESETS = {
     denoise_radius_radius_ratio: 0.02,
   },
 };
+
+const MESHWRAP_DEFAULTS = {
+  meshwrap_poisson_depth: 6,
+  meshwrap_poisson_scale: 1.18,
+  meshwrap_iterations: 2,
+  meshwrap_sample_points: 300000,
+  meshwrap_density_trim_q: 0.06,
+  meshwrap_crop_scale: 2.0,
+  meshwrap_target_face_ratio: 1.50,
+  meshwrap_normal_radius_ratio: 0.035,
+};
+
 export class ConfigPanel {
   constructor() {
     this._panel = document.getElementById('config-panel');
@@ -143,6 +155,7 @@ export class ConfigPanel {
       mesh_repair_smooth_iters: document.getElementById('cfg-mesh-repair-smooth-iters'),
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
+    this._meshwrapResetBtn = document.getElementById('btn-meshwrap-reset');
     this._denoiseSummary = document.getElementById('cfg-denoise-summary');
     this._denoiseGroups = {
       dbscan: document.getElementById('cfg-denoise-dbscan'),
@@ -193,6 +206,7 @@ export class ConfigPanel {
     for (const inp of Object.values(this._inputs)) {
       inp.disabled = running;
     }
+    if (this._meshwrapResetBtn) this._meshwrapResetBtn.disabled = running;
   }
 
   setActiveStage(stage) {
@@ -304,10 +318,10 @@ export class ConfigPanel {
       meshwrap_poisson_depth: this._parsePositiveInt(this._inputs.meshwrap_poisson_depth?.value, 6),
       meshwrap_poisson_scale: this._parsePositiveFloat(this._inputs.meshwrap_poisson_scale?.value, 1.18),
       meshwrap_density_trim_q: this._parseNonNegativeFloat(this._inputs.meshwrap_density_trim_q?.value, 0.06),
-      meshwrap_target_face_ratio: this._parsePositiveFloat(this._inputs.meshwrap_target_face_ratio?.value, 1.80),
+      meshwrap_target_face_ratio: this._parsePositiveFloat(this._inputs.meshwrap_target_face_ratio?.value, 1.50),
       meshwrap_iterations: this._parsePositiveInt(this._inputs.meshwrap_iterations?.value, 2),
       meshwrap_crop_scale: this._parsePositiveFloat(this._inputs.meshwrap_crop_scale?.value, 1.08),
-      meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 180000),
+      meshwrap_sample_points: this._parsePositiveInt(this._inputs.meshwrap_sample_points?.value, 300000),
       meshwrap_normal_radius_ratio: this._parsePositiveFloat(this._inputs.meshwrap_normal_radius_ratio?.value, 0.035),
       mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
       mesh_repair_max_diameter_ratio: this._parsePositiveFloat(this._inputs.mesh_repair_max_diameter_ratio?.value, 0.08),
@@ -448,6 +462,13 @@ export class ConfigPanel {
     }
     if (this._inputs.mesh_repair_enabled) {
       this._inputs.mesh_repair_enabled.addEventListener('change', () => this._updateMeshWrapSummary());
+    }
+    if (this._meshwrapResetBtn) {
+      this._meshwrapResetBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this._resetMeshWrapParams();
+      });
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -889,12 +910,19 @@ export class ConfigPanel {
     this._updateMeshWrapSummary();
   }
 
+  _resetMeshWrapParams() {
+    for (const [key, val] of Object.entries(MESHWRAP_DEFAULTS)) {
+      if (this._inputs[key]) this._inputs[key].value = String(val);
+    }
+    this._updateMeshWrapSummary();
+  }
+
   _updateMeshWrapSummary() {
     if (!this._meshwrapSummary) return;
     const depth = this._inputs.meshwrap_poisson_depth?.value || '6';
     const scale = this._inputs.meshwrap_poisson_scale?.value || '1.18';
     const iters = this._inputs.meshwrap_iterations?.value || '2';
-    const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.80';
+    const ratio = this._inputs.meshwrap_target_face_ratio?.value || '1.50';
     this._meshwrapSummary.textContent =
       `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
   }
