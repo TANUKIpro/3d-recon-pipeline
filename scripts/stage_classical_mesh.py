@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -395,14 +396,25 @@ def _build_preview_mesh(
     if before_faces <= effective_target:
         return mesh, False, before_faces, before_faces
 
-    simplified = mesh.simplify_quadric_decimation(effective_target)
+    # Use vertex clustering for preview (much faster than quadric decimation).
+    # Estimate voxel size to approximate target face count.
+    bbox = mesh.get_axis_aligned_bounding_box()
+    diag = float(np.linalg.norm(
+        np.asarray(bbox.max_bound) - np.asarray(bbox.min_bound)
+    ))
+    ratio = (before_faces / max(effective_target, 1)) ** 0.5
+    voxel_size = max(diag * ratio / 400.0, 1e-8)
+
+    simplified = mesh.simplify_vertex_clustering(
+        voxel_size=voxel_size,
+        contraction=o3d.geometry.SimplificationContraction.Average,
+    )
     if len(simplified.vertices) == 0 or len(simplified.triangles) == 0:
         return mesh, False, before_faces, before_faces
 
     simplified.remove_degenerate_triangles()
     simplified.remove_duplicated_triangles()
     simplified.remove_duplicated_vertices()
-    simplified.remove_non_manifold_edges()
     simplified.remove_unreferenced_vertices()
     simplified.compute_vertex_normals()
 
@@ -517,6 +529,7 @@ def run_classical_main(
     )
 
     _emit_progress(progress_cb, 10.0, "Classical/Main: estimating normals")
+    t_norm_start = time.perf_counter()
     pcd.estimate_normals(
         search_param=o3d.geometry.KDTreeSearchParamHybrid(
             radius=normal_radius,
@@ -524,7 +537,10 @@ def run_classical_main(
         )
     )
     pcd.normalize_normals()
+    t_norm_end = time.perf_counter()
+    print(f"Normal estimation time: {t_norm_end - t_norm_start:.1f}s")
 
+    t_orient_start = time.perf_counter()
     if pre_points.shape[0] >= 16:
         orient_k = min(max(8, params.normal_orient_k), int(pre_points.shape[0]) - 1)
         try:
@@ -533,6 +549,8 @@ def run_classical_main(
             print(f"Normal orientation fallback (consistent tangent plane failed): {e}")
             look_at = np.mean(pre_points, axis=0) + np.array([0.0, 0.0, pre_bbox_diag * 2.0])
             pcd.orient_normals_towards_camera_location(look_at)
+    t_orient_end = time.perf_counter()
+    print(f"Normal orientation time: {t_orient_end - t_orient_start:.1f}s")
 
     normals_path = output_path / "object_points_with_normals.ply"
     _write_point_cloud_safe(normals_path, pcd)
@@ -544,6 +562,7 @@ def run_classical_main(
         f"depth={params.poisson_depth}, scale={params.poisson_scale:.3f}, linear_fit={params.poisson_linear_fit}"
     )
     _emit_progress(progress_cb, 58.0, "Classical/Main: running Screened Poisson reconstruction")
+    t_poisson_start = time.perf_counter()
     try:
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
             pcd,
@@ -561,6 +580,8 @@ def run_classical_main(
             scale=params.poisson_scale,
             linear_fit=params.poisson_linear_fit,
         )
+    t_poisson_end = time.perf_counter()
+    print(f"Poisson reconstruction time: {t_poisson_end - t_poisson_start:.1f}s")
 
     if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
         raise RuntimeError("Poisson reconstruction produced an empty mesh.")
@@ -608,6 +629,7 @@ def run_classical_postprocess(
     params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Postprocess mesh ===")
+    t_post_start = time.perf_counter()
     mesh = o3d.io.read_triangle_mesh(str(raw_mesh_ply))
     if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
         raise ValueError(f"Mesh is empty: {raw_mesh_ply}")
@@ -652,8 +674,10 @@ def run_classical_postprocess(
         print("Smoothing skipped (optional).")
 
     post_vertices, post_faces = mesh_vertex_face_count(post_path)
+    t_post_end = time.perf_counter()
     print(f"Saved postprocessed mesh: {post_path}")
     print(f"  Postprocessed vertices: {post_vertices:,}, Faces: {post_faces:,}")
+    print(f"Postprocess time: {t_post_end - t_post_start:.1f}s")
     _emit_progress(progress_cb, 100.0, "Classical/Postprocess: complete")
     return post_path
 
@@ -667,6 +691,7 @@ def run_classical_downsample(
     params = _resolve_params(overrides)
     output_path, classical_dir = _prepare_output_dirs(output_dir)
     print("=== Classical Mesh: Downsample mesh ===")
+    t_ds_start = time.perf_counter()
     downsample_mesh = o3d.io.read_triangle_mesh(str(post_mesh_ply))
     if len(downsample_mesh.vertices) == 0 or len(downsample_mesh.triangles) == 0:
         raise ValueError(f"Mesh is empty: {post_mesh_ply}")
@@ -700,6 +725,7 @@ def run_classical_downsample(
 
     preview_path = output_path / "object_mesh_preview.ply"
     preview_copy_path = classical_dir / "object_mesh_preview.ply"
+    t_preview_start = time.perf_counter()
     try:
         preview_mesh, preview_downsampled, preview_before_faces, preview_after_faces = _build_preview_mesh(
             downsample_mesh,
@@ -720,7 +746,11 @@ def run_classical_downsample(
             )
     except Exception as e:
         print(f"Preview mesh generation skipped (non-fatal): {e}")
+    t_preview_end = time.perf_counter()
+    print(f"Preview generation time: {t_preview_end - t_preview_start:.1f}s")
 
+    t_ds_end = time.perf_counter()
+    print(f"Downsample stage time: {t_ds_end - t_ds_start:.1f}s")
     _emit_progress(progress_cb, 100.0, "Classical/Downsample: complete")
     return final_path
 
