@@ -674,12 +674,30 @@ html, body {
 }
 
 #mesh-repair-status {
-  margin-right: auto;
   min-width: 0;
-  flex: 1 1 240px;
+  flex: 1 1 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#mesh-repair-threshold-control {
+  flex: 1 1 300px;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+#mesh-repair-threshold-control .range-label-row {
+  margin-bottom: 2px;
+}
+
+#mesh-repair-threshold-control .range-value {
+  min-width: 44px;
+  text-align: right;
+}
+
+#mesh-repair-threshold {
+  margin: 0;
 }
 
 #mesh-repair-clear,
@@ -1183,10 +1201,15 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
     flex: 1 1 100%;
     order: 1;
   }
-  #mesh-repair-clear {
+  #mesh-repair-threshold-control {
+    flex: 1 1 100%;
+    max-width: none;
     order: 2;
   }
-  #mesh-repair-apply {
+  #mesh-repair-clear {
     order: 3;
+  }
+  #mesh-repair-apply {
+    order: 4;
   }
 }

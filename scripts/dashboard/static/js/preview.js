@@ -19,6 +19,16 @@ const FIRST_MESH_PREVIEW_FILES = new Set([
   'object_mesh_repaired.ply',
 ]);
 
+const MESH_REPAIR_THRESHOLD_MIN = -1.0;
+const MESH_REPAIR_THRESHOLD_MAX = 0.0;
+const MESH_REPAIR_THRESHOLD_DEFAULT = -0.25;
+
+function clampMeshRepairThreshold(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return MESH_REPAIR_THRESHOLD_DEFAULT;
+  return Math.max(MESH_REPAIR_THRESHOLD_MIN, Math.min(MESH_REPAIR_THRESHOLD_MAX, parsed));
+}
+
 export class PreviewPanel {
   constructor() {
     this._galleryGrid = document.getElementById('gallery-grid');
@@ -37,7 +47,9 @@ export class PreviewPanel {
       confirmed: false,
       group: null,
       loopObjects: new Map(),
+      loopMeta: new Map(),
       selected: new Set(),
+      threshold: MESH_REPAIR_THRESHOLD_DEFAULT,
       clickHandler: (event) => this._handleMeshRepairClick(event),
       clickBound: false,
       raycaster: null,
@@ -386,7 +398,8 @@ export class PreviewPanel {
 
     const stage = this._stages[7];
     if (!stage || !this._meshRepair.raycaster || !this._meshRepair.pointer) return;
-    const objects = Array.from(this._meshRepair.loopObjects.values());
+    const objects = Array.from(this._meshRepair.loopObjects.values())
+      .filter((obj) => obj?.visible !== false);
     if (objects.length === 0) return;
 
     const rect = stage.container.getBoundingClientRect();
@@ -408,8 +421,28 @@ export class PreviewPanel {
     } else {
       this._meshRepair.selected.add(loopId);
     }
+    this._applyMeshRepairVisibility();
     this._updateMeshRepairColors();
     this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
+  }
+
+  _isMeshRepairLoopVisible(loopId) {
+    if (this._meshRepair.selected.has(loopId)) return true;
+    const meta = this._meshRepair.loopMeta.get(loopId);
+    const normalY = Number(meta?.normalY);
+    if (!Number.isFinite(normalY)) return true;
+    return normalY <= this._meshRepair.threshold;
+  }
+
+  _applyMeshRepairVisibility() {
+    let visible = 0;
+    for (const [loopId, obj] of this._meshRepair.loopObjects.entries()) {
+      if (!obj) continue;
+      const isVisible = this._isMeshRepairLoopVisible(loopId);
+      obj.visible = isVisible;
+      if (isVisible) visible += 1;
+    }
+    return visible;
   }
 
   _updateMeshRepairColors() {
@@ -448,6 +481,7 @@ export class PreviewPanel {
 
     this._meshRepair.group = null;
     this._meshRepair.loopObjects = new Map();
+    this._meshRepair.loopMeta = new Map();
     this._meshRepair.selected = new Set();
     this._meshRepair.active = false;
     this._meshRepair.confirmed = false;
@@ -458,6 +492,7 @@ export class PreviewPanel {
     if (!this._meshRepair.active) return;
     this._meshRepair.confirmed = false;
     this._meshRepair.selected.clear();
+    this._applyMeshRepairVisibility();
     this._updateMeshRepairColors();
     this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
   }
@@ -472,6 +507,30 @@ export class PreviewPanel {
 
   getMeshRepairSelectedLoopIds() {
     return Array.from(this._meshRepair.selected).sort((a, b) => a - b);
+  }
+
+  getMeshRepairVisibleLoopCount() {
+    let visible = 0;
+    for (const obj of this._meshRepair.loopObjects.values()) {
+      if (obj?.visible !== false) visible += 1;
+    }
+    return visible;
+  }
+
+  getMeshRepairTotalLoopCount() {
+    return this._meshRepair.loopObjects.size;
+  }
+
+  getMeshRepairThreshold() {
+    return this._meshRepair.threshold;
+  }
+
+  setMeshRepairThreshold(value) {
+    this._meshRepair.threshold = clampMeshRepairThreshold(value);
+    if (!this._meshRepair.active) return;
+    this._applyMeshRepairVisibility();
+    this._updateMeshRepairColors();
+    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
   }
 
   /**
@@ -636,6 +695,7 @@ export class PreviewPanel {
     let valid = 0;
     for (const loop of loops) {
       const loopId = Number(loop?.loop_id);
+      const normalY = Number(loop?.normal_y);
       const points = Array.isArray(loop?.points) ? loop.points : [];
       if (!Number.isFinite(loopId) || points.length < 3) continue;
 
@@ -662,6 +722,9 @@ export class PreviewPanel {
       line.userData.loopId = loopId;
       group.add(line);
       this._meshRepair.loopObjects.set(loopId, line);
+      this._meshRepair.loopMeta.set(loopId, {
+        normalY: Number.isFinite(normalY) ? normalY : null,
+      });
       valid += 1;
     }
 
@@ -675,6 +738,7 @@ export class PreviewPanel {
     this._meshRepair.active = true;
     this._meshRepair.confirmed = false;
     this._meshRepair.selected.clear();
+    this._applyMeshRepairVisibility();
     this._updateMeshRepairColors();
     this._setMeshRepairClickEnabled(true);
     this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());

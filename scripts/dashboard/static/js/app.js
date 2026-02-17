@@ -20,6 +20,9 @@ const DEFAULT_TAUBIN_NU = -0.53;
 const MESH_METHOD_DEFAULT = 'poisson';
 const MESH_METHOD_SET = new Set(['diffcd', 'poisson']);
 const CLASSICAL_PREVIEW_TITLE = 'Classical Mesh result';
+const MESH_REPAIR_THRESHOLD_MIN = -1.0;
+const MESH_REPAIR_THRESHOLD_MAX = 0.0;
+const MESH_REPAIR_THRESHOLD_DEFAULT = -0.25;
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -59,6 +62,8 @@ const meshPhaseStatusBar = document.getElementById('mesh-phase-status');
 const meshPhaseStatusText = document.getElementById('mesh-phase-status-text');
 const meshRepairToolbar = document.getElementById('mesh-repair-toolbar');
 const meshRepairStatus = document.getElementById('mesh-repair-status');
+const meshRepairThresholdInput = document.getElementById('mesh-repair-threshold');
+const meshRepairThresholdValue = document.getElementById('mesh-repair-threshold-value');
 const meshRepairClearBtn = document.getElementById('mesh-repair-clear');
 const meshRepairApplyBtn = document.getElementById('mesh-repair-apply');
 const meshMethodPills = {
@@ -80,6 +85,7 @@ let _meshPostInFlight = false;
 let _meshMethod = MESH_METHOD_DEFAULT;
 let _meshRepairCandidateCount = 0;
 let _meshRepairInFlight = false;
+let _meshRepairThreshold = MESH_REPAIR_THRESHOLD_DEFAULT;
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -151,8 +157,7 @@ config.onObjectSelected = async (objectName) => {
     setMeshPostStatus('');
     setMeshRepairToolbarVisible(false);
     setMeshRepairStatus('');
-    _meshRepairCandidateCount = 0;
-    _meshRepairInFlight = false;
+    resetMeshRepairState({ resetThreshold: true });
     setMeshPhaseStatus('', '');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
@@ -226,8 +231,7 @@ config.onStart = async (cfg) => {
     setMeshPostStatus('');
     setMeshRepairToolbarVisible(false);
     setMeshRepairStatus('');
-    _meshRepairCandidateCount = 0;
-    _meshRepairInFlight = false;
+    resetMeshRepairState({ resetThreshold: true });
     setMeshPhaseStatus('', '');
     setOverallProgress(pipelineUI.getOverallProgress());
 
@@ -290,15 +294,14 @@ ws.on('stage_start', (msg) => {
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
   }
+  if (Number(msg.stage) === 7) {
+    resetMeshRepairState({ resetThreshold: true });
+  }
   if (Number(msg.stage) !== 7 || !_meshRepairInFlight) {
     setMeshRepairToolbarVisible(false);
     if (!_meshRepairInFlight) {
       setMeshRepairStatus('');
     }
-  }
-  if (Number(msg.stage) === 7) {
-    _meshRepairCandidateCount = 0;
-    _meshRepairInFlight = false;
   }
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
     setMeshPhaseStatus('Classical Mesh started.', 'live');
@@ -324,7 +327,7 @@ ws.on('stage_complete', async (msg) => {
     if (Number(msg.stage) === 7) {
       setMeshRepairToolbarVisible(false);
       setMeshRepairStatus(`Stage 7 failed: ${msg.error}`, 'error');
-      _meshRepairInFlight = false;
+      resetMeshRepairState({ resetThreshold: true });
     }
     return;
   }
@@ -360,11 +363,9 @@ ws.on('stage_complete', async (msg) => {
     }
   }
   if (msg.stage === 7) {
-    _meshRepairInFlight = false;
+    resetMeshRepairState({ resetThreshold: true });
     setMeshRepairToolbarVisible(false);
-    if (!_meshRepairInFlight) {
-      setMeshRepairStatus('');
-    }
+    setMeshRepairStatus('');
   }
 });
 
@@ -491,8 +492,7 @@ ws.on('pipeline_complete', (msg) => {
   setMeshPostEnabled(true);
   setMeshRepairToolbarVisible(false);
   setMeshRepairStatus('');
-  _meshRepairCandidateCount = 0;
-  _meshRepairInFlight = false;
+  resetMeshRepairState({ resetThreshold: true });
   if (_meshMethod === 'poisson') {
     setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
   } else {
@@ -533,8 +533,7 @@ ws.on('pipeline_error', (msg) => {
   if (!_meshRepairInFlight) {
     setMeshRepairStatus('');
   }
-  _meshRepairCandidateCount = 0;
-  _meshRepairInFlight = false;
+  resetMeshRepairState({ resetThreshold: true });
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
     setMeshPhaseStatus(`Stage 5 error: ${msg.error}`, 'error');
   }
@@ -695,11 +694,73 @@ function setMeshPostStatus(message, tone = '') {
   }
 }
 
+function clampMeshRepairThreshold(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return MESH_REPAIR_THRESHOLD_DEFAULT;
+  return Math.max(MESH_REPAIR_THRESHOLD_MIN, Math.min(MESH_REPAIR_THRESHOLD_MAX, parsed));
+}
+
+function formatMeshRepairThreshold(value) {
+  return clampMeshRepairThreshold(value).toFixed(2);
+}
+
+function setMeshRepairThresholdValue(value, { applyPreview = true } = {}) {
+  const next = clampMeshRepairThreshold(value);
+  _meshRepairThreshold = next;
+  const text = formatMeshRepairThreshold(next);
+  if (meshRepairThresholdInput) {
+    meshRepairThresholdInput.value = text;
+  }
+  if (meshRepairThresholdValue) {
+    meshRepairThresholdValue.textContent = text;
+  }
+  if (applyPreview) {
+    preview.setMeshRepairThreshold(next);
+  }
+  return next;
+}
+
+function resetMeshRepairThreshold(opts = {}) {
+  return setMeshRepairThresholdValue(MESH_REPAIR_THRESHOLD_DEFAULT, opts);
+}
+
+function resetMeshRepairState({ resetThreshold = true } = {}) {
+  _meshRepairCandidateCount = 0;
+  _meshRepairInFlight = false;
+  if (resetThreshold) {
+    resetMeshRepairThreshold({ applyPreview: true });
+  }
+}
+
+function getMeshRepairVisibleCount(candidateCount = _meshRepairCandidateCount) {
+  const candidates = Math.max(0, Number(candidateCount) || 0);
+  const previewTotalRaw = Number(preview.getMeshRepairTotalLoopCount?.());
+  const previewVisibleRaw = Number(preview.getMeshRepairVisibleLoopCount?.());
+  const previewTotal = Number.isFinite(previewTotalRaw) ? previewTotalRaw : 0;
+  const previewVisible = Number.isFinite(previewVisibleRaw) ? previewVisibleRaw : NaN;
+
+  if (!Number.isFinite(previewVisible) || previewVisible < 0) {
+    return candidates;
+  }
+  if (previewTotal <= 0) {
+    return candidates;
+  }
+  if (candidates > 0) {
+    return Math.max(0, Math.min(candidates, Math.round(previewVisible)));
+  }
+  return Math.max(0, Math.round(previewVisible));
+}
+
 function initMeshRepairToolbar() {
   if (!meshRepairToolbar) return;
   setMeshRepairToolbarVisible(false);
   setMeshRepairEnabled(false);
+  resetMeshRepairThreshold({ applyPreview: false });
   setMeshRepairStatus('');
+  meshRepairThresholdInput?.addEventListener('input', (event) => {
+    setMeshRepairThresholdValue(event?.target?.value, { applyPreview: true });
+    updateMeshRepairStatus();
+  });
   meshRepairClearBtn?.addEventListener('click', () => {
     preview.clearMeshRepairSelection();
     updateMeshRepairStatus();
@@ -716,6 +777,7 @@ function setMeshRepairToolbarVisible(visible) {
 
 function setMeshRepairEnabled(enabled) {
   const disabled = !enabled;
+  if (meshRepairThresholdInput) meshRepairThresholdInput.disabled = disabled;
   if (meshRepairClearBtn) meshRepairClearBtn.disabled = disabled;
   if (meshRepairApplyBtn) meshRepairApplyBtn.disabled = disabled;
 }
@@ -729,10 +791,17 @@ function setMeshRepairStatus(message, tone = '') {
   }
 }
 
-function meshRepairCountLabel(selectedCount, candidateCount = _meshRepairCandidateCount) {
+function meshRepairCountLabel(
+  selectedCount,
+  candidateCount = _meshRepairCandidateCount,
+  visibleCount = getMeshRepairVisibleCount(candidateCount),
+  threshold = _meshRepairThreshold,
+) {
   const selected = Math.max(0, Number(selectedCount) || 0);
   const candidates = Math.max(0, Number(candidateCount) || 0);
-  return `Closed surfaces: ${selected}/${candidates} selected.`;
+  const visible = Math.max(0, Number(visibleCount) || 0);
+  const th = formatMeshRepairThreshold(threshold);
+  return `Closed surfaces: ${selected}/${candidates} selected (visible ${visible}/${candidates}, threshold <= ${th}).`;
 }
 
 function updateMeshRepairStatus(selectedIds = null) {
@@ -740,7 +809,8 @@ function updateMeshRepairStatus(selectedIds = null) {
   const selected = Array.isArray(selectedIds)
     ? selectedIds.length
     : preview.getMeshRepairSelectedLoopIds().length;
-  setMeshRepairStatus(meshRepairCountLabel(selected, _meshRepairCandidateCount));
+  const visible = getMeshRepairVisibleCount(_meshRepairCandidateCount);
+  setMeshRepairStatus(meshRepairCountLabel(selected, _meshRepairCandidateCount, visible, _meshRepairThreshold));
 }
 
 async function activateMeshRepairSelectionFromApi() {
@@ -749,9 +819,11 @@ async function activateMeshRepairSelectionFromApi() {
   if (!res.ok || data.error) {
     throw new Error(data.error || `HTTP ${res.status}`);
   }
+  resetMeshRepairThreshold({ applyPreview: false });
   await preview.beginMeshRepairSelection(data);
   _meshRepairCandidateCount = Number(data.loop_count) || 0;
   _meshRepairInFlight = false;
+  setMeshRepairThresholdValue(_meshRepairThreshold, { applyPreview: true });
   setMeshRepairToolbarVisible(true);
   setMeshRepairEnabled(true);
   updateMeshRepairStatus([]);
@@ -855,7 +927,8 @@ function syncMeshRepairToolbarFromStatus(statusMsg) {
   const selected = Number(statusMsg?.mesh_repair?.selected_loop_count) || 0;
   const candidateCount = Number(statusMsg?.mesh_repair?.candidate_count) || _meshRepairCandidateCount;
   _meshRepairCandidateCount = candidateCount;
-  setMeshRepairStatus(meshRepairCountLabel(selected, candidateCount));
+  const visible = getMeshRepairVisibleCount(candidateCount);
+  setMeshRepairStatus(meshRepairCountLabel(selected, candidateCount, visible, _meshRepairThreshold));
 }
 
 async function applyMeshPostprocess({ resetToRaw = false } = {}) {
@@ -1369,7 +1442,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
 
   config.setRunning(false);
   config.setActiveStage(null);
-  _meshRepairInFlight = false;
+  resetMeshRepairState({ resetThreshold: true });
   setMeshRepairToolbarVisible(false);
   setMeshRepairStatus('');
 
