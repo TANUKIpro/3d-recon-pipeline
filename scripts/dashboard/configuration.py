@@ -74,6 +74,27 @@ DENOISE_ALGORITHMS = {
     "dbscan_radius",
 }
 
+CLASSICAL_PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
+    "default": {
+        "classical_preprocess_enabled": True,
+        "classical_poisson_depth": 9,
+        "classical_density_trim_q": 0.005,
+        "classical_auto_smooth": False,
+        "classical_smooth_iterations": 2,
+        "classical_downsample_enabled": True,
+        "classical_downsample_target_faces": 120_000,
+    },
+    "trust_point_cloud": {
+        "classical_preprocess_enabled": False,
+        "classical_poisson_depth": 11,
+        "classical_density_trim_q": 0.001,
+        "classical_auto_smooth": False,
+        "classical_smooth_iterations": 0,
+        "classical_downsample_enabled": False,
+        "classical_downsample_target_faces": 500_000,
+    },
+}
+
 MESH_METHODS = {"poisson", "diffcd"}
 
 
@@ -149,6 +170,15 @@ def build_pipeline_config(
         DENOISE_ALGORITHMS,
         str(denoise_defaults["denoise_algorithm"]),
     )
+
+    # Classical mesh preset handling (similar to denoise)
+    raw_classical = str(raw.get("classical_preset") or "").strip()
+    if raw_classical == "custom":
+        classical_preset = "custom"
+        classical_defaults = CLASSICAL_PRESET_DEFAULTS["default"]
+    else:
+        classical_preset = parse_choice(raw_classical, set(CLASSICAL_PRESET_DEFAULTS), "default")
+        classical_defaults = CLASSICAL_PRESET_DEFAULTS[classical_preset]
 
     max_frames = max(2, parse_int(raw.get("max_frames"), env_int("MAX_FRAMES", 50, env_map)))
     pi3x_frame_target = max(
@@ -263,6 +293,35 @@ def build_pipeline_config(
         meshwrap_normal_radius_ratio=max(
             0.001,
             parse_float(raw.get("meshwrap_normal_radius_ratio"), 0.035),
+        ),
+        classical_preset=classical_preset,
+        classical_preprocess_enabled=parse_bool(
+            raw.get("classical_preprocess_enabled"),
+            bool(classical_defaults["classical_preprocess_enabled"]),
+        ),
+        classical_poisson_depth=max(
+            4,
+            parse_int(raw.get("classical_poisson_depth"), int(classical_defaults["classical_poisson_depth"])),
+        ),
+        classical_density_trim_q=max(
+            0.0,
+            parse_float(raw.get("classical_density_trim_q"), float(classical_defaults["classical_density_trim_q"])),
+        ),
+        classical_auto_smooth=parse_bool(
+            raw.get("classical_auto_smooth"),
+            bool(classical_defaults["classical_auto_smooth"]),
+        ),
+        classical_smooth_iterations=max(
+            0,
+            parse_int(raw.get("classical_smooth_iterations"), int(classical_defaults["classical_smooth_iterations"])),
+        ),
+        classical_downsample_enabled=parse_bool(
+            raw.get("classical_downsample_enabled"),
+            bool(classical_defaults["classical_downsample_enabled"]),
+        ),
+        classical_downsample_target_faces=max(
+            10_000,
+            parse_int(raw.get("classical_downsample_target_faces"), int(classical_defaults["classical_downsample_target_faces"])),
         ),
         mesh_repair_enabled=parse_bool(
             raw.get("mesh_repair_enabled"),

@@ -213,6 +213,7 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this._updatingDenoisePreset = false;
+    this._updatingClassicalPreset = false;
     this._pi3xFrameTargetAuto = true;
     this._pi3xFrameTargetRecommended = null;
     this._pi3xPlanRequestId = 0;
@@ -1034,18 +1035,24 @@ export class ConfigPanel {
   _applyClassicalPreset(name) {
     const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.default;
     const resolvedName = CLASSICAL_PRESETS[name] ? name : 'default';
-    if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;
-    if (this._inputs.classical_preprocess_enabled) this._inputs.classical_preprocess_enabled.checked = preset.classical_preprocess_enabled;
-    if (this._inputs.classical_poisson_depth) this._inputs.classical_poisson_depth.value = String(preset.classical_poisson_depth);
-    if (this._inputs.classical_density_trim_q) this._inputs.classical_density_trim_q.value = String(preset.classical_density_trim_q);
-    if (this._inputs.classical_auto_smooth) this._inputs.classical_auto_smooth.checked = preset.classical_auto_smooth;
-    if (this._inputs.classical_smooth_iterations) this._inputs.classical_smooth_iterations.value = String(preset.classical_smooth_iterations);
-    if (this._inputs.classical_downsample_enabled) this._inputs.classical_downsample_enabled.checked = preset.classical_downsample_enabled;
-    if (this._inputs.classical_downsample_target_faces) this._inputs.classical_downsample_target_faces.value = String(preset.classical_downsample_target_faces);
+    this._updatingClassicalPreset = true;
+    try {
+      if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;
+      if (this._inputs.classical_preprocess_enabled) this._inputs.classical_preprocess_enabled.checked = preset.classical_preprocess_enabled;
+      if (this._inputs.classical_poisson_depth) this._inputs.classical_poisson_depth.value = String(preset.classical_poisson_depth);
+      if (this._inputs.classical_density_trim_q) this._inputs.classical_density_trim_q.value = String(preset.classical_density_trim_q);
+      if (this._inputs.classical_auto_smooth) this._inputs.classical_auto_smooth.checked = preset.classical_auto_smooth;
+      if (this._inputs.classical_smooth_iterations) this._inputs.classical_smooth_iterations.value = String(preset.classical_smooth_iterations);
+      if (this._inputs.classical_downsample_enabled) this._inputs.classical_downsample_enabled.checked = preset.classical_downsample_enabled;
+      if (this._inputs.classical_downsample_target_faces) this._inputs.classical_downsample_target_faces.value = String(preset.classical_downsample_target_faces);
+    } finally {
+      this._updatingClassicalPreset = false;
+    }
     this._updateClassicalSummary();
   }
 
   _onClassicalInputChanged() {
+    if (this._updatingClassicalPreset) return;
     const matched = this._findMatchingClassicalPreset();
     if (this._inputs.classical_preset) {
       this._inputs.classical_preset.value = matched || 'custom';
