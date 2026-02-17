@@ -193,6 +193,14 @@ export class ConfigPanel {
       mesh_repair_max_diameter_ratio: document.getElementById('cfg-mesh-repair-max-diameter-ratio'),
       mesh_repair_y_band_ratio: document.getElementById('cfg-mesh-repair-y-band-ratio'),
       mesh_repair_smooth_iters: document.getElementById('cfg-mesh-repair-smooth-iters'),
+      texture_pc_knn_k: document.getElementById('cfg-texture-pc-knn-k'),
+      texture_pc_idw_power: document.getElementById('cfg-texture-pc-idw-power'),
+      texture_pc_max_distance: document.getElementById('cfg-texture-pc-max-distance'),
+      texture_pc_weighting: document.getElementById('cfg-texture-pc-weighting'),
+      texture_pc_gaussian_sigma: document.getElementById('cfg-texture-pc-gaussian-sigma'),
+      texture_pc_normal_aware: document.getElementById('cfg-texture-pc-normal-aware'),
+      texture_pc_normal_threshold_deg: document.getElementById('cfg-texture-pc-normal-threshold-deg'),
+      texture_pc_adaptive_k: document.getElementById('cfg-texture-pc-adaptive-k'),
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._meshwrapResetBtn = document.getElementById('btn-meshwrap-reset');
@@ -428,6 +436,14 @@ export class ConfigPanel {
         MESH_REPAIR_DEFAULTS.mesh_repair_smooth_iters,
       ),
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
+      texture_pc_knn_k: this._parsePositiveInt(this._inputs.texture_pc_knn_k?.value, 8),
+      texture_pc_idw_power: this._parsePositiveFloat(this._inputs.texture_pc_idw_power?.value, 2.0),
+      texture_pc_max_distance: this._parseNonNegativeFloat(this._inputs.texture_pc_max_distance?.value, 0),
+      texture_pc_weighting: this._inputs.texture_pc_weighting?.value || 'idw',
+      texture_pc_gaussian_sigma: this._parsePositiveFloat(this._inputs.texture_pc_gaussian_sigma?.value, 1.0),
+      texture_pc_normal_aware: Boolean(this._inputs.texture_pc_normal_aware?.checked),
+      texture_pc_normal_threshold_deg: this._parsePositiveFloat(this._inputs.texture_pc_normal_threshold_deg?.value, 60.0),
+      texture_pc_adaptive_k: Boolean(this._inputs.texture_pc_adaptive_k?.checked),
     };
   }
 
@@ -652,6 +668,18 @@ export class ConfigPanel {
     this._refreshObjectsBtn.addEventListener('click', () => {
       this.refreshObjects();
     });
+
+    // Texture KNN quality controls
+    if (this._inputs.texture_pc_weighting) {
+      this._inputs.texture_pc_weighting.addEventListener('change', () =>
+        this._updateTextureKnnControls(),
+      );
+    }
+    if (this._inputs.texture_pc_normal_aware) {
+      this._inputs.texture_pc_normal_aware.addEventListener('change', () =>
+        this._updateTextureKnnControls(),
+      );
+    }
   }
 
   _populateObjectSelect(objects) {
@@ -937,6 +965,29 @@ export class ConfigPanel {
     if (cfg.mesh_repair_enabled != null && this._inputs.mesh_repair_enabled) {
       this._inputs.mesh_repair_enabled.checked = Boolean(cfg.mesh_repair_enabled);
     }
+
+    // Texture KNN quality parameters
+    for (const key of [
+      'texture_pc_knn_k',
+      'texture_pc_idw_power',
+      'texture_pc_max_distance',
+      'texture_pc_gaussian_sigma',
+      'texture_pc_normal_threshold_deg',
+    ]) {
+      if (cfg[key] != null && this._inputs[key]) {
+        this._inputs[key].value = String(cfg[key]);
+      }
+    }
+    if (cfg.texture_pc_weighting != null && this._inputs.texture_pc_weighting) {
+      this._setSelectValue(this._inputs.texture_pc_weighting, String(cfg.texture_pc_weighting));
+    }
+    if (cfg.texture_pc_normal_aware != null && this._inputs.texture_pc_normal_aware) {
+      this._inputs.texture_pc_normal_aware.checked = Boolean(cfg.texture_pc_normal_aware);
+    }
+    if (cfg.texture_pc_adaptive_k != null && this._inputs.texture_pc_adaptive_k) {
+      this._inputs.texture_pc_adaptive_k.checked = Boolean(cfg.texture_pc_adaptive_k);
+    }
+    this._updateTextureKnnControls();
 
     // Classical mesh parameters
     const classicalPresetRaw = String(cfg.classical_preset || '');
@@ -1440,6 +1491,19 @@ export class ConfigPanel {
     if (!autoOption) return;
     const autoSize = this._computeAutoTextureSize(videoMeta?.width, videoMeta?.height);
     autoOption.textContent = autoSize == null ? 'Auto' : `Auto (~${autoSize})`;
+  }
+
+  _updateTextureKnnControls() {
+    const gaussianRow = document.getElementById('texture-gaussian-row');
+    const normalGroup = document.getElementById('texture-normal-threshold-group');
+    if (gaussianRow) {
+      gaussianRow.style.display =
+        this._inputs.texture_pc_weighting?.value === 'gaussian' ? '' : 'none';
+    }
+    if (normalGroup) {
+      normalGroup.style.display =
+        this._inputs.texture_pc_normal_aware?.checked ? '' : 'none';
+    }
   }
 
   _parsePositiveInt(value, fallback) {

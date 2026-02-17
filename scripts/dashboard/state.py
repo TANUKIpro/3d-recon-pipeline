@@ -132,6 +132,11 @@ class PipelineConfig:
     texture_pc_knn_k: int = 8
     texture_pc_max_distance: float = 0.0
     texture_pc_idw_power: float = 2.0
+    texture_pc_normal_aware: bool = False
+    texture_pc_normal_threshold_deg: float = 60.0
+    texture_pc_adaptive_k: bool = False
+    texture_pc_weighting: str = "idw"
+    texture_pc_gaussian_sigma: float = 1.0
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PipelineConfig:

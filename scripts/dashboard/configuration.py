@@ -145,6 +145,12 @@ def env_bool(name: str, fallback: bool, env: Mapping[str, str] | None = None) ->
     return parse_bool(env_map.get(name), fallback)
 
 
+def env_str(name: str, fallback: str, env: Mapping[str, str] | None = None) -> str:
+    env_map = os.environ if env is None else env
+    val = env_map.get(name, "").strip()
+    return val if val else fallback
+
+
 def build_pipeline_config(
     raw: dict[str, Any],
     *,
@@ -381,6 +387,33 @@ def build_pipeline_config(
             parse_float(
                 raw.get("texture_pc_idw_power"),
                 env_float("TEXTURE_PC_IDW_POWER", 2.0, env_map),
+            ),
+        ),
+        texture_pc_normal_aware=parse_bool(
+            raw.get("texture_pc_normal_aware"),
+            env_bool("TEXTURE_PC_NORMAL_AWARE", False, env_map),
+        ),
+        texture_pc_normal_threshold_deg=max(
+            0.0,
+            parse_float(
+                raw.get("texture_pc_normal_threshold_deg"),
+                env_float("TEXTURE_PC_NORMAL_THRESHOLD_DEG", 60.0, env_map),
+            ),
+        ),
+        texture_pc_adaptive_k=parse_bool(
+            raw.get("texture_pc_adaptive_k"),
+            env_bool("TEXTURE_PC_ADAPTIVE_K", False, env_map),
+        ),
+        texture_pc_weighting=parse_choice(
+            raw.get("texture_pc_weighting"),
+            {"idw", "gaussian"},
+            env_str("TEXTURE_PC_WEIGHTING", "idw", env_map),
+        ),
+        texture_pc_gaussian_sigma=max(
+            0.01,
+            parse_float(
+                raw.get("texture_pc_gaussian_sigma"),
+                env_float("TEXTURE_PC_GAUSSIAN_SIGMA", 1.0, env_map),
             ),
         ),
     )

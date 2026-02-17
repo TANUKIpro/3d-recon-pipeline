@@ -611,6 +611,65 @@
               <option value="4096">4096</option>
             </select>
           </div>
+          <details class="config-advanced">
+            <summary>KNN Quality</summary>
+            <div class="config-advanced-body">
+              <div class="meshwrap-param-group">
+                <div class="meshwrap-param-title">Interpolation</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-knn-k">KNN Neighbors (k)</label>
+                    <input type="number" id="cfg-texture-pc-knn-k" value="8" min="1" max="32" step="1">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-idw-power">IDW Power</label>
+                    <input type="number" id="cfg-texture-pc-idw-power" value="2.0" min="0.1" max="8.0" step="0.1">
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-max-distance">Max Distance (0=auto)</label>
+                    <input type="number" id="cfg-texture-pc-max-distance" value="0" min="0" max="10" step="0.001">
+                  </div>
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-weighting">Weighting</label>
+                    <select id="cfg-texture-pc-weighting">
+                      <option value="idw" selected>IDW</option>
+                      <option value="gaussian">Gaussian</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-row" id="texture-gaussian-row" style="display:none">
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-gaussian-sigma">Gaussian Sigma Factor</label>
+                    <input type="number" id="cfg-texture-pc-gaussian-sigma" value="1.0" min="0.01" max="5.0" step="0.1">
+                  </div>
+                </div>
+              </div>
+              <div class="meshwrap-param-group">
+                <div class="meshwrap-param-title">Normal-Aware Filtering</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-normal-aware">Enabled</label>
+                    <input type="checkbox" id="cfg-texture-pc-normal-aware">
+                  </div>
+                  <div class="form-group" id="texture-normal-threshold-group" style="display:none">
+                    <label for="cfg-texture-pc-normal-threshold-deg">Normal Threshold (deg)</label>
+                    <input type="number" id="cfg-texture-pc-normal-threshold-deg" value="60" min="5" max="170" step="1">
+                  </div>
+                </div>
+              </div>
+              <div class="meshwrap-param-group">
+                <div class="meshwrap-param-title">Density Adaptation</div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label for="cfg-texture-pc-adaptive-k">Adaptive K</label>
+                    <input type="checkbox" id="cfg-texture-pc-adaptive-k">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </details>
         </div>
 
         <!-- Global: action buttons (always visible) -->

@@ -241,6 +241,32 @@ def _project_simple(pts, c2w, K):
 # Point-cloud KNN colour interpolation
 # ---------------------------------------------------------------------------
 
+
+def _estimate_pc_normals(pc_points: np.ndarray, k_neighbors: int = 30) -> np.ndarray:
+    """Estimate point cloud normals via Open3D.
+
+    Args:
+        pc_points: (N, 3) point cloud positions.
+        k_neighbors: number of neighbours for normal estimation.
+
+    Returns:
+        (N, 3) float64 normals, oriented towards the centroid.
+    """
+    import open3d as o3d
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pc_points.astype(np.float64))
+    pcd.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamKNN(knn=k_neighbors)
+    )
+    center = pc_points.mean(axis=0)
+    pcd.orient_normals_towards_camera_location(center.tolist())
+    normals = np.asarray(pcd.normals)
+    norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    normals = normals / np.maximum(norms, 1e-10)
+    return normals
+
+
 def _kdtree_color_interpolation(
     pos3d: np.ndarray,
     pc_points: np.ndarray,
@@ -250,8 +276,14 @@ def _kdtree_color_interpolation(
     idw_power: float = 2.0,
     batch_size: int = 50_000,
     progress_cb: ProgressCallback | None = None,
+    texel_normals: np.ndarray | None = None,
+    pc_normals: np.ndarray | None = None,
+    normal_threshold_deg: float = 0.0,
+    adaptive_k: bool = False,
+    weighting: str = "idw",
+    gaussian_sigma_factor: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Colour texels via KNN inverse-distance-weighted interpolation from a point cloud.
+    """Colour texels via KNN interpolation from a point cloud.
 
     Args:
         pos3d: (M, 3) texel 3D positions.
@@ -263,6 +295,13 @@ def _kdtree_color_interpolation(
         idw_power: exponent for inverse-distance weighting.
         batch_size: query batch size to limit peak memory.
         progress_cb: optional ``(progress%, detail)`` callback.
+        texel_normals: (M, 3) per-texel normals (face normals).
+        pc_normals: (N, 3) per-point normals from the point cloud.
+        normal_threshold_deg: discard neighbours whose normal deviates
+            more than this many degrees from the texel normal (0 = disabled).
+        adaptive_k: dynamically reduce k in dense regions for sharper results.
+        weighting: ``"idw"`` (inverse-distance) or ``"gaussian"``.
+        gaussian_sigma_factor: sigma = nearest-neighbour distance * factor.
 
     Returns:
         (colors (M, 3) float32, covered (M,) bool)
@@ -270,6 +309,13 @@ def _kdtree_color_interpolation(
     from scipy.spatial import cKDTree
 
     M = len(pos3d)
+    use_normal_filter = (
+        normal_threshold_deg > 0.0
+        and texel_normals is not None
+        and pc_normals is not None
+    )
+    normal_cos_thresh = math.cos(math.radians(normal_threshold_deg)) if use_normal_filter else -1.0
+    query_k = min(k * 3, len(pc_points)) if use_normal_filter else min(k, len(pc_points))
     k = min(k, len(pc_points))
     tree = cKDTree(pc_points)
 
@@ -283,6 +329,15 @@ def _kdtree_color_interpolation(
         max_distance = float(np.median(kth_dists) * 3.0)
         print(f"  KNN auto max_distance = {max_distance:.6f}")
 
+    # For adaptive_k: compute median nearest-neighbour distance over point cloud.
+    median_nn_dist = None
+    if adaptive_k:
+        n_sample = min(10_000, len(pc_points))
+        rng = np.random.default_rng(0)
+        sample_idx = rng.choice(len(pc_points), size=n_sample, replace=False)
+        sample_dists_1, _ = tree.query(pc_points[sample_idx], k=2)
+        median_nn_dist = float(np.median(sample_dists_1[:, 1]))
+
     colors = np.zeros((M, 3), dtype=np.float32)
     covered = np.zeros(M, dtype=bool)
     eps = 1e-12
@@ -291,26 +346,79 @@ def _kdtree_color_interpolation(
     for bi in range(n_batches):
         start = bi * batch_size
         end = min(start + batch_size, M)
-        dists, idxs = tree.query(pos3d[start:end], k=k)
+        chunk_size = end - start
+        dists, idxs = tree.query(pos3d[start:end], k=query_k)
 
         if dists.ndim == 1:
             dists = dists[:, np.newaxis]
             idxs = idxs[:, np.newaxis]
 
-        # Mask neighbours beyond max_distance.
-        within = dists <= max_distance
-        any_within = np.any(within, axis=1)
+        # --- Normal filtering ---
+        if use_normal_filter:
+            t_norms = texel_normals[start:end]  # (chunk, 3)
+            nn_norms = pc_normals[idxs]  # (chunk, query_k, 3)
+            cos_vals = np.einsum("ij,ikj->ik", t_norms, nn_norms)  # (chunk, query_k)
+            normal_ok = cos_vals >= normal_cos_thresh
+        else:
+            normal_ok = np.ones((chunk_size, dists.shape[1]), dtype=bool)
 
-        if np.any(any_within):
-            w = np.where(within, 1.0 / np.maximum(dists, eps) ** idw_power, 0.0)
+        # --- Distance filtering ---
+        within = dists <= max_distance
+        valid_mask = within & normal_ok
+
+        # Limit each row to at most k valid neighbours.
+        for ri in range(chunk_size):
+            valid_cols = np.where(valid_mask[ri])[0]
+            if len(valid_cols) > k:
+                valid_mask[ri, valid_cols[k:]] = False
+
+        any_valid = np.any(valid_mask, axis=1)
+
+        # Fallback: if normal filter removed ALL neighbours, keep nearest 1
+        # (column 0 is always nearest since cKDTree returns sorted results).
+        if use_normal_filter:
+            no_valid = ~any_valid & within.any(axis=1)
+            if np.any(no_valid):
+                valid_mask[no_valid, 0] = True
+                any_valid = np.any(valid_mask, axis=1)
+
+        if np.any(any_valid):
+            # --- Adaptive k: reduce effective neighbours in dense regions ---
+            if adaptive_k and median_nn_dist is not None and median_nn_dist > 0:
+                nn1_dist = dists[:, 0]  # nearest neighbour distance
+                density_ratio = nn1_dist / max(median_nn_dist, eps)
+                # In dense regions (ratio < 1), use fewer neighbours.
+                eff_k = np.clip(
+                    np.round(k * density_ratio).astype(int), 1, k
+                )
+                for ri in np.where(any_valid)[0]:
+                    valid_cols = np.where(valid_mask[ri])[0]
+                    if len(valid_cols) > eff_k[ri]:
+                        valid_mask[ri, valid_cols[eff_k[ri]:]] = False
+
+            # --- Weight computation ---
+            if weighting == "gaussian":
+                sigma = np.maximum(dists[:, 0:1], eps) * gaussian_sigma_factor
+                w = np.where(
+                    valid_mask,
+                    np.exp(-0.5 * (dists / np.maximum(sigma, eps)) ** 2),
+                    0.0,
+                )
+            else:
+                w = np.where(
+                    valid_mask,
+                    1.0 / np.maximum(dists, eps) ** idw_power,
+                    0.0,
+                )
+
             w_sum = w.sum(axis=1, keepdims=True)
             w_sum = np.maximum(w_sum, eps)
-            w_norm = w / w_sum  # (chunk, k)
+            w_norm = w / w_sum  # (chunk, query_k)
 
-            nn_colors = pc_colors[idxs]  # (chunk, k, 3)
+            nn_colors = pc_colors[idxs]  # (chunk, query_k, 3)
             interp = np.einsum("ij,ijk->ik", w_norm, nn_colors)  # (chunk, 3)
 
-            chunk_covered = any_within
+            chunk_covered = any_valid
             colors[start:end][chunk_covered] = interp[chunk_covered].astype(np.float32)
             covered[start:end] |= chunk_covered
 
@@ -600,6 +708,11 @@ def bake_texture(
     pc_knn_k: int = 8,
     pc_max_distance: float = 0.0,
     pc_idw_power: float = 2.0,
+    pc_normal_aware: bool = False,
+    pc_normal_threshold_deg: float = 60.0,
+    pc_adaptive_k: bool = False,
+    pc_weighting: str = "idw",
+    pc_gaussian_sigma: float = 1.0,
     progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Full texture baking pipeline: point-cloud KNN colour + frame-projection fallback.
@@ -621,6 +734,11 @@ def bake_texture(
         pc_knn_k: Number of nearest neighbours for KNN colour interpolation.
         pc_max_distance: Max distance for KNN; 0 = auto-compute from point cloud.
         pc_idw_power: Exponent for inverse-distance weighting.
+        pc_normal_aware: Enable normal-aware filtering to reduce cross-edge bleeding.
+        pc_normal_threshold_deg: Max angle (degrees) between texel and neighbour normals.
+        pc_adaptive_k: Dynamically reduce k in dense regions for sharper results.
+        pc_weighting: ``"idw"`` or ``"gaussian"`` weight function.
+        pc_gaussian_sigma: Sigma = nearest-neighbour distance * this factor.
 
     Environment toggles for quality:
         TEXTURE_DEVICE (str): 'cuda' (default), 'auto', or 'cpu' request hint.
@@ -632,6 +750,11 @@ def bake_texture(
         TEXTURE_PC_KNN_K (int): Override pc_knn_k (default 8).
         TEXTURE_PC_MAX_DISTANCE (float): Override pc_max_distance (default 0.0).
         TEXTURE_PC_IDW_POWER (float): Override pc_idw_power (default 2.0).
+        TEXTURE_PC_NORMAL_AWARE (bool): Override pc_normal_aware (default false).
+        TEXTURE_PC_NORMAL_THRESHOLD_DEG (float): Override pc_normal_threshold_deg (default 60.0).
+        TEXTURE_PC_ADAPTIVE_K (bool): Override pc_adaptive_k (default false).
+        TEXTURE_PC_WEIGHTING (str): Override pc_weighting ('idw' or 'gaussian').
+        TEXTURE_PC_GAUSSIAN_SIGMA (float): Override pc_gaussian_sigma (default 1.0).
 
     Returns:
         Path to the output OBJ file.
@@ -647,6 +770,23 @@ def bake_texture(
     pc_knn_k = max(1, int(os.environ.get("TEXTURE_PC_KNN_K", str(pc_knn_k))))
     pc_max_distance = max(0.0, float(os.environ.get("TEXTURE_PC_MAX_DISTANCE", str(pc_max_distance))))
     pc_idw_power = max(0.1, float(os.environ.get("TEXTURE_PC_IDW_POWER", str(pc_idw_power))))
+    _env_na = os.environ.get("TEXTURE_PC_NORMAL_AWARE", "")
+    if _env_na:
+        pc_normal_aware = _env_na.strip().lower() in {"1", "true", "yes"}
+    pc_normal_threshold_deg = max(
+        0.0,
+        float(os.environ.get("TEXTURE_PC_NORMAL_THRESHOLD_DEG", str(pc_normal_threshold_deg))),
+    )
+    _env_ak = os.environ.get("TEXTURE_PC_ADAPTIVE_K", "")
+    if _env_ak:
+        pc_adaptive_k = _env_ak.strip().lower() in {"1", "true", "yes"}
+    _env_wt = os.environ.get("TEXTURE_PC_WEIGHTING", "").strip().lower()
+    if _env_wt in {"idw", "gaussian"}:
+        pc_weighting = _env_wt
+    pc_gaussian_sigma = max(
+        0.01,
+        float(os.environ.get("TEXTURE_PC_GAUSSIAN_SIGMA", str(pc_gaussian_sigma))),
+    )
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -776,8 +916,17 @@ def bake_texture(
     # --- Point-cloud KNN colour interpolation (primary) ---
     print(
         f"KNN colour interpolation: k={pc_knn_k}, max_dist={pc_max_distance}, "
-        f"idw_power={pc_idw_power}"
+        f"idw_power={pc_idw_power}, weighting={pc_weighting}, "
+        f"normal_aware={pc_normal_aware}, adaptive_k={pc_adaptive_k}"
     )
+
+    pc_normals_arr = None
+    if pc_normal_aware:
+        print("  Estimating point cloud normals for normal-aware filtering...")
+        _emit_progress(progress_cb, 59.0, "Estimating point cloud normals")
+        pc_normals_arr = _estimate_pc_normals(pc_points)
+        print(f"  Normal threshold: {pc_normal_threshold_deg:.1f} deg")
+
     _emit_progress(progress_cb, 60.0, "KNN colour interpolation")
     pc_colors_interp, pc_covered = _kdtree_color_interpolation(
         pos3d, pc_points, pc_colors,
@@ -785,6 +934,12 @@ def bake_texture(
         max_distance=pc_max_distance,
         idw_power=pc_idw_power,
         progress_cb=progress_cb,
+        texel_normals=normals if pc_normal_aware else None,
+        pc_normals=pc_normals_arr,
+        normal_threshold_deg=pc_normal_threshold_deg if pc_normal_aware else 0.0,
+        adaptive_k=pc_adaptive_k,
+        weighting=pc_weighting,
+        gaussian_sigma_factor=pc_gaussian_sigma,
     )
 
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float32)

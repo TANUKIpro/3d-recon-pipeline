@@ -531,6 +531,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.texture_pc_knn_k,
                 cfg.texture_pc_max_distance,
                 cfg.texture_pc_idw_power,
+                cfg.texture_pc_normal_aware,
+                cfg.texture_pc_normal_threshold_deg,
+                cfg.texture_pc_adaptive_k,
+                cfg.texture_pc_weighting,
+                cfg.texture_pc_gaussian_sigma,
             )
             session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
 
@@ -1205,6 +1210,9 @@ def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
     pc_knn_k: int = 8, pc_max_distance: float = 0.0, pc_idw_power: float = 2.0,
+    pc_normal_aware: bool = False, pc_normal_threshold_deg: float = 60.0,
+    pc_adaptive_k: bool = False, pc_weighting: str = "idw",
+    pc_gaussian_sigma: float = 1.0,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -1222,6 +1230,11 @@ def _stage_texture_bake(
         pc_knn_k=pc_knn_k,
         pc_max_distance=pc_max_distance,
         pc_idw_power=pc_idw_power,
+        pc_normal_aware=pc_normal_aware,
+        pc_normal_threshold_deg=pc_normal_threshold_deg,
+        pc_adaptive_k=pc_adaptive_k,
+        pc_weighting=pc_weighting,
+        pc_gaussian_sigma=pc_gaussian_sigma,
         progress_cb=progress_cb,
     )
 
