@@ -484,10 +484,8 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         if start_stage <= int(PipelineStage.MESH_REPAIR):
             _require_file(session.mesh_ply, "Wrapped mesh")
             # ── Stage 7: Mesh Repair ──────────────────────────────
-            await _run_stage(
+            await _run_mesh_repair_interactive(
                 session,
-                PipelineStage.MESH_REPAIR,
-                _stage_mesh_repair,
                 session.mesh_ply,
                 output_dir,
                 cfg.mesh_repair_enabled,
@@ -604,6 +602,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await asyncio.to_thread(sam2_service.release)
         except Exception:
             pass
+        session.clear_mesh_repair_candidates()
         session.clear_next_stage_confirmation()
         session.running = False
         session._task = None
@@ -690,6 +689,162 @@ async def _wait_for_next_stage_confirmation(
         },
     )
     _check_cancelled(session)
+
+
+async def _run_mesh_repair_interactive(
+    session: PipelineSession,
+    mesh_ply: str,
+    output_dir: str,
+    mesh_repair_enabled: bool,
+    mesh_repair_max_diameter_ratio: float,
+    mesh_repair_y_band_ratio: float,
+    mesh_repair_smooth_iters: int,
+) -> None:
+    stage = PipelineStage.MESH_REPAIR
+
+    if not mesh_repair_enabled:
+        await _run_stage(
+            session,
+            stage,
+            _stage_mesh_repair,
+            mesh_ply,
+            output_dir,
+            mesh_repair_enabled,
+            mesh_repair_max_diameter_ratio,
+            mesh_repair_y_band_ratio,
+            mesh_repair_smooth_iters,
+        )
+        return
+
+    session.stage_start(stage)
+    checkpoint_id = first_checkpoint_id(int(stage), mesh_method_key(session.config.mesh_method))
+    if checkpoint_id:
+        session.stage_progress(stage, checkpoint_id=checkpoint_id)
+    await broadcast(
+        session,
+        {
+            "type": "stage_start",
+            "stage": int(stage),
+            "label": STAGE_LABELS[stage],
+            "checkpoint_id": checkpoint_id,
+        },
+    )
+    await _broadcast_stage_progress(session, stage, progress=0.0, detail="Starting")
+
+    loop = asyncio.get_running_loop()
+
+    def _progress_cb(
+        progress: float,
+        detail: str | None = None,
+        checkpoint_id: str | None = None,
+    ) -> None:
+        _check_cancelled(session)
+
+        def _push() -> None:
+            payload = _build_stage_progress_payload(
+                session,
+                stage,
+                progress=progress,
+                detail=detail,
+                checkpoint_id=checkpoint_id,
+            )
+            asyncio.create_task(broadcast(session, payload))
+
+        loop.call_soon_threadsafe(_push)
+
+    def _cancel_cb() -> None:
+        _check_cancelled(session)
+
+    try:
+        analysis = await asyncio.to_thread(
+            _stage_mesh_repair_analyze,
+            mesh_ply,
+            _progress_cb,
+            _cancel_cb,
+        )
+
+        candidates = analysis.get("loops") if isinstance(analysis, dict) else None
+        if not isinstance(candidates, list):
+            raise ValueError("Mesh repair analysis returned invalid candidate data")
+        if len(candidates) == 0:
+            raise ValueError("No selectable boundary loops found for mesh repair")
+
+        analysis_meta = {
+            "mesh_path": analysis.get("mesh_path"),
+            "vertex_count": analysis.get("vertex_count"),
+            "face_count": analysis.get("face_count"),
+            "bbox_min": analysis.get("bbox_min"),
+            "bbox_max": analysis.get("bbox_max"),
+            "bbox_center": analysis.get("bbox_center"),
+            "loop_count": analysis.get("loop_count"),
+            "stats": analysis.get("stats"),
+        }
+        session.set_mesh_repair_candidates(mesh_ply, candidates, analysis=analysis_meta)
+        session.stage_interactive(stage)
+        await _broadcast_stage_progress(
+            session,
+            stage,
+            progress=38.0,
+            detail="Waiting for repair-loop selection",
+        )
+        await broadcast(
+            session,
+            {
+                "type": "mesh_repair_ready",
+                "stage": int(stage),
+                "candidate_count": len(candidates),
+                "overall_progress": session.overall_progress(),
+            },
+        )
+
+        await session.mesh_repair_confirm_event.wait()
+        _check_cancelled(session)
+        selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]
+        if not selected_loop_ids:
+            raise ValueError("No selected loops provided for mesh repair")
+
+        await asyncio.to_thread(
+            _stage_mesh_repair_selected,
+            mesh_ply,
+            output_dir,
+            selected_loop_ids,
+            mesh_repair_enabled,
+            mesh_repair_max_diameter_ratio,
+            mesh_repair_y_band_ratio,
+            mesh_repair_smooth_iters,
+            _progress_cb,
+            _cancel_cb,
+        )
+    except _CancelledError:
+        session.clear_mesh_repair_candidates()
+        raise
+    except Exception as e:
+        session.clear_mesh_repair_candidates()
+        session.stage_failed(stage, str(e))
+        await broadcast(
+            session,
+            {
+                "type": "stage_complete",
+                "stage": int(stage),
+                "elapsed": session.stages[int(stage)].elapsed,
+                "error": str(e),
+                "checkpoint_id": session.stages[int(stage)].checkpoint_id,
+                "overall_progress": session.overall_progress(),
+            },
+        )
+        raise
+
+    session.clear_mesh_repair_candidates()
+    session.stage_complete(stage)
+    await broadcast(
+        session,
+        {
+            "type": "stage_complete",
+            "stage": int(stage),
+            "elapsed": session.stages[int(stage)].elapsed,
+            "overall_progress": session.overall_progress(),
+        },
+    )
 
 
 async def _run_stage(
@@ -968,6 +1123,49 @@ def _stage_mesh_repair(
         y_band_ratio=mesh_repair_y_band_ratio,
         smooth_iters=mesh_repair_smooth_iters,
     )
+
+
+def _stage_mesh_repair_analyze(
+    mesh_ply: str,
+    progress_cb=None,
+    cancel_cb=None,
+) -> dict:
+    from stage_contact_hole_repair import analyze_contact_hole_candidates
+
+    with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
+        analysis = analyze_contact_hole_candidates(
+            mesh_ply,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+        )
+    return analysis.to_dict()
+
+
+def _stage_mesh_repair_selected(
+    mesh_ply: str,
+    output_dir: str,
+    selected_loop_ids: list[int],
+    mesh_repair_enabled: bool = True,
+    mesh_repair_max_diameter_ratio: float = 0.08,
+    mesh_repair_y_band_ratio: float = 0.06,
+    mesh_repair_smooth_iters: int = 2,
+    progress_cb=None,
+    cancel_cb=None,
+) -> None:
+    from stage_contact_hole_repair import run_selected_contact_hole_repair
+
+    with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
+        run_selected_contact_hole_repair(
+            mesh_ply,
+            output_dir,
+            selected_loop_ids=selected_loop_ids,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+            enabled=mesh_repair_enabled,
+            max_diameter_ratio=mesh_repair_max_diameter_ratio,
+            y_band_ratio=mesh_repair_y_band_ratio,
+            smooth_iters=mesh_repair_smooth_iters,
+        )
 
 
 def _stage_texture_bake(

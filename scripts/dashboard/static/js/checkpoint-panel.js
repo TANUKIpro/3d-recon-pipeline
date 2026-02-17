@@ -184,7 +184,7 @@ const DETAIL_MATCHERS = {
   ],
   7: [
     { re: /contact hole repair: loading mesh/i, idx: 0 },
-    { re: /contact hole repair: extracting boundary loops|contact hole repair: evaluating boundary loop/i, idx: 1 },
+    { re: /contact hole repair: extracting boundary loops|contact hole repair: extracting selectable loops|contact hole repair: analyzing boundary loop|contact hole repair: evaluating boundary loop|waiting for repair-loop selection/i, idx: 1 },
     { re: /contact hole repair: writing repaired mesh|saved repaired mesh|contact hole repair: complete|contact hole repair: skipped/i, idx: 2 },
   ],
   8: [

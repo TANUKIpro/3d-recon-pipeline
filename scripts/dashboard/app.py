@@ -697,6 +697,7 @@ async def pipeline_cancel():
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
     session.next_stage_confirm_event.set()
+    session.mesh_repair_confirm_event.set()
     return JSONResponse(
         {
             "status": "cancelling",
@@ -719,6 +720,86 @@ async def pipeline_confirm_next():
         return JSONResponse({"status": "no_waiting_confirmation"})
     session.next_stage_confirm_event.set()
     return JSONResponse({"status": "confirmed"})
+
+
+# ── Mesh repair interactive API ───────────────────────────────────
+
+@app.get("/api/mesh-repair/candidates")
+async def mesh_repair_candidates():
+    if not session.running:
+        return JSONResponse({"error": "Pipeline is not running"}, status_code=409)
+    if not session.mesh_repair_ready:
+        return JSONResponse({"error": "Mesh repair selection is not ready"}, status_code=409)
+
+    source_rel: str | None = None
+    source_path = session.mesh_repair_source_mesh_path
+    if source_path:
+        try:
+            out = _active_output_dir().resolve()
+            source_obj = Path(source_path).resolve()
+            source_rel = str(source_obj.relative_to(out))
+        except Exception:
+            source_rel = None
+
+    return JSONResponse(
+        {
+            "status": "ok",
+            "source_mesh_path": source_path,
+            "source_mesh_relpath": source_rel,
+            "loop_count": len(session.mesh_repair_candidates),
+            "loops": session.mesh_repair_candidates,
+            "analysis": session.mesh_repair_analysis,
+            "color_scheme": {
+                "candidate": "#f4d03f",
+                "selected": "#e74c3c",
+                "confirmed": "#2ecc71",
+            },
+        }
+    )
+
+
+@app.post("/api/mesh-repair/confirm")
+async def mesh_repair_confirm(body: dict | None = None):
+    if not session.running:
+        return JSONResponse({"error": "Pipeline is not running"}, status_code=409)
+    if not session.mesh_repair_ready:
+        return JSONResponse({"error": "Mesh repair selection is not ready"}, status_code=409)
+
+    raw = body or {}
+    selected_raw = raw.get("selected_loop_ids")
+    if not isinstance(selected_raw, list) or len(selected_raw) == 0:
+        return JSONResponse({"error": "selected_loop_ids must be a non-empty list"}, status_code=400)
+
+    selected: list[int] = []
+    seen: set[int] = set()
+    for value in selected_raw:
+        try:
+            loop_id = int(value)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": f"Invalid loop id: {value!r}"}, status_code=400)
+        if loop_id in seen:
+            continue
+        selected.append(loop_id)
+        seen.add(loop_id)
+
+    available_ids = {
+        int(item.get("loop_id"))
+        for item in session.mesh_repair_candidates
+        if isinstance(item, dict) and item.get("loop_id") is not None
+    }
+    missing = sorted(loop_id for loop_id in selected if loop_id not in available_ids)
+    if missing:
+        return JSONResponse({"error": f"Unknown loop ids: {missing}"}, status_code=400)
+
+    session.mesh_repair_selected_loop_ids = selected
+    session.mesh_repair_confirm_event.set()
+    return JSONResponse(
+        {
+            "status": "confirmed",
+            "selected_loop_ids": selected,
+            "selected_count": len(selected),
+        }
+    )
 
 
 # ── Mesh post-process API ────────────────────────────────────────
