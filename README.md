@@ -276,6 +276,7 @@ data/output/
         ├── textured_mesh.mtl      # マテリアル定義
         ├── texture.png            # テクスチャアトラス (既定は入力動画と同等画素数の正方形)
         ├── object_mesh.ply        # Stage 5出力メッシュ (後処理 + 必要時ダウンサンプル済み)
+        ├── object_mesh_preview.ply # Stage 5表示用の軽量メッシュ (UIプレビュー優先)
         ├── object_mesh_wrapped.ply # Stage 6出力メッシュ (Wrap結果)
         ├── object_mesh_repaired.ply # Stage 7出力メッシュ (Repair結果, Texture入力)
         ├── object_mesh_raw.ply    # Stage 5の平滑化前メッシュ

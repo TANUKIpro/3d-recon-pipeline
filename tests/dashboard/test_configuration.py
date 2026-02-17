@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from scripts.dashboard.app import STAGE_RESET_PATHS
 from scripts.dashboard.configuration import build_pipeline_config
 from scripts.dashboard.state import detect_stage_outputs
 
@@ -114,6 +115,9 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
 
 class DetectStageOutputsTests(unittest.TestCase):
+    def test_stage5_reset_plan_includes_preview_mesh(self) -> None:
+        self.assertIn("object_mesh_preview.ply", STAGE_RESET_PATHS[5]["files"])
+
     def test_stage6_and_stage7_require_mesh_outputs(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)

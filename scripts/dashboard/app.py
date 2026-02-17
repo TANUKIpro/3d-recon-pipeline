@@ -60,6 +60,7 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         "dirs": ("diffcd", "classical_mesh"),
         "files": (
             "object_mesh.ply",
+            "object_mesh_preview.ply",
             "object_mesh_raw.ply",
             "object_mesh_postprocessed.ply",
             "object_mesh_input.ply",
@@ -91,6 +92,7 @@ PRIMARY_ARTIFACT_PATHS = (
     "object.ply",
     "object_denoised.ply",
     "object_mesh.ply",
+    "object_mesh_preview.ply",
     "object_mesh_wrapped.ply",
     "object_mesh_repaired.ply",
     "textured_mesh.obj",
@@ -862,6 +864,7 @@ async def mesh_postprocess(body: dict | None = None):
         source = "current"
 
     def _apply() -> tuple[int, int, bool]:
+        from stage_classical_mesh import generate_preview_mesh
         from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
         import open3d as o3d
 
@@ -898,6 +901,12 @@ async def mesh_postprocess(body: dict | None = None):
                     except TypeError:
                         o3d.io.write_triangle_mesh(str(mesh_path), simplified)
                     downsample_applied = True
+
+        preview_mesh_path = out / "object_mesh_preview.ply"
+        try:
+            generate_preview_mesh(mesh_path, preview_mesh_path)
+        except Exception as preview_err:
+            print(f"Preview mesh generation failed after post-process (non-fatal): {preview_err}")
 
         vertices, faces = mesh_vertex_face_count(mesh_path)
         return vertices, faces, downsample_applied

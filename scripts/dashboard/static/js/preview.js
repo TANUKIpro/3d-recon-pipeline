@@ -13,6 +13,7 @@ let MTLLoader;
 
 const FIRST_MESH_PREVIEW_FILES = new Set([
   'object_mesh_raw.ply',
+  'object_mesh_preview.ply',
   'object_mesh_poisson_raw.ply',
   'object_mesh_wrapped.ply',
   'object_mesh_repaired.ply',
@@ -477,13 +478,23 @@ export class PreviewPanel {
    * Show crop bounding box overlay on Stage 6 scene.
    * Loads Stage 5 output mesh into Stage 6 and draws an OBB wireframe.
    */
-  async showCropBbox(cropScale) {
-    const loaded = await this.loadStageResult(6, {
-      file: 'object_mesh.ply',
+  async showCropBbox(cropScale, opts = {}) {
+    const preferPreview = opts.preferPreview === true;
+    const preferredFile = preferPreview ? 'object_mesh_preview.ply' : 'object_mesh.ply';
+    let loaded = await this.loadStageResult(6, {
+      file: preferredFile,
       renderMode: 'mesh',
       stripVertexColors: true,
       enableShadows: true,
     });
+    if (!loaded && preferPreview) {
+      loaded = await this.loadStageResult(6, {
+        file: 'object_mesh.ply',
+        renderMode: 'mesh',
+        stripVertexColors: true,
+        enableShadows: true,
+      });
+    }
     if (!loaded) return;
 
     const stage = this._stages[6];
@@ -1041,7 +1052,9 @@ export class PreviewPanel {
     };
 
     const overrideFile = String(opts.file || '').trim();
-    const file = overrideFile || fileMap[stageNum];
+    const defaultFile = fileMap[stageNum];
+    const preferPreview = !overrideFile && stageNum === 5 && opts.preferPreview === true;
+    const file = overrideFile || (preferPreview ? 'object_mesh_preview.ply' : defaultFile);
     if (!file) return false;
     const fileName = file.split('/').pop()?.toLowerCase() || '';
     const isFirstMeshPreview = FIRST_MESH_PREVIEW_FILES.has(fileName);
@@ -1058,21 +1071,39 @@ export class PreviewPanel {
     const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
     const stripVertexColors = opts.stripVertexColors ?? isFirstMeshPreview;
     const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
-    let loaded = false;
-    if (ext === 'ply') {
-      loaded = await this._loadPLYIntoStage(stageNum, file, {
+    let loaded = await this._loadPreviewAssetForStage(stageNum, file, {
+      ext,
+      cacheToken,
+      renderMode,
+      stripVertexColors: stripVertexColors === true,
+      enableShadows: enableShadows === true,
+    });
+    if (!loaded && preferPreview && defaultFile && file !== defaultFile) {
+      loaded = await this._loadPreviewAssetForStage(stageNum, defaultFile, {
         cacheToken,
         renderMode,
         stripVertexColors: stripVertexColors === true,
         enableShadows: enableShadows === true,
       });
-    } else if (ext === 'obj') {
-      loaded = await this._loadOBJIntoStage(stageNum, file, { cacheToken });
-    } else {
-      loaded = false;
     }
     if (empty) empty.classList.toggle('hidden', loaded);
     return loaded;
+  }
+
+  async _loadPreviewAssetForStage(stageNum, file, opts = {}) {
+    const ext = String(opts.ext || file.split('.').pop() || '').toLowerCase();
+    if (ext === 'ply') {
+      return this._loadPLYIntoStage(stageNum, file, {
+        cacheToken: opts.cacheToken,
+        renderMode: opts.renderMode,
+        stripVertexColors: opts.stripVertexColors === true,
+        enableShadows: opts.enableShadows === true,
+      });
+    }
+    if (ext === 'obj') {
+      return this._loadOBJIntoStage(stageNum, file, { cacheToken: opts.cacheToken });
+    }
+    return false;
   }
 
   /**
