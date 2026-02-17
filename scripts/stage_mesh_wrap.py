@@ -251,7 +251,10 @@ def _run_poisson_wrap(
     progress_cb: ProgressCallback | None,
 ) -> o3d.geometry.TriangleMesh:
     wrapped = source_mesh
-    source_bbox = wrapped.get_axis_aligned_bounding_box()
+    source_obb = wrapped.get_oriented_bounding_box()
+    source_obb_center = np.asarray(source_obb.center).copy()
+    source_obb_R = np.asarray(source_obb.R).copy()
+    source_obb_extent = np.asarray(source_obb.extent).copy()
     source_diag = _bbox_diag(wrapped)
     source_faces = int(len(wrapped.triangles))
 
@@ -297,7 +300,7 @@ def _run_poisson_wrap(
             radius=normal_radius,
             max_nn=params.normal_max_nn,
             orient_k=params.normal_orient_k,
-            center=source_bbox.get_center(),
+            center=source_obb_center,
         )
 
         _emit_progress(
@@ -338,7 +341,11 @@ def _run_poisson_wrap(
                     f"removed={int(drop_mask.sum()):,}/{int(drop_mask.size):,}"
                 )
 
-        crop_bbox = source_bbox.scale(params.crop_scale, source_bbox.get_center())
+        crop_bbox = o3d.geometry.OrientedBoundingBox(
+            source_obb_center,
+            source_obb_R,
+            source_obb_extent * params.crop_scale,
+        )
         cropped = mesh_new.crop(crop_bbox)
         if len(cropped.vertices) > 0 and len(cropped.triangles) > 0:
             mesh_new = cropped
