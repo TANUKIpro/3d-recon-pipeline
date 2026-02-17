@@ -2,8 +2,10 @@
  * Stage progress bar UI controller.
  */
 
-const STAGE_COUNT = 8;
-const MESH_METHODS = new Set(['diffcd', 'poisson']);
+import { formatTime } from './utils.js';
+import { STAGE_COUNT, MESH_METHOD_SET } from './constants.js';
+
+const MESH_METHODS = MESH_METHOD_SET;
 
 function _isDone(info = {}) {
   const status = String(info.status || 'pending');
@@ -342,11 +344,7 @@ export class PipelineUI {
   }
 
   _formatTime(secs) {
-    if (secs == null) return '';
-    if (secs < 60) return `${Math.round(secs)}s`;
-    const m = Math.floor(secs / 60);
-    const s = Math.round(secs % 60);
-    return `${m}m${s}s`;
+    return formatTime(secs);
   }
 
   _normalizeProgress(progress) {

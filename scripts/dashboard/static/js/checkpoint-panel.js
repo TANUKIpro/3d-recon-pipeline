@@ -5,8 +5,11 @@
  * to one running checkpoint.
  */
 
+import { normalizeMeshMethod } from './utils.js';
+import { STAGE_COUNT } from './constants.js';
+
 const STAGE_MIN = 1;
-const STAGE_MAX = 8;
+const STAGE_MAX = STAGE_COUNT;
 
 const STAGE_LABELS = {
   1: 'Extract Frames',
@@ -211,9 +214,7 @@ function normalizeStatus(status) {
   return 'pending';
 }
 
-function normalizeMeshMethod(method) {
-  return String(method || '').trim().toLowerCase() === 'diffcd' ? 'diffcd' : 'poisson';
-}
+// normalizeMeshMethod imported from utils.js
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

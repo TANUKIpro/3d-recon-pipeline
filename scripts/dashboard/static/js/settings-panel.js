@@ -3,13 +3,9 @@
  * All settings persisted to localStorage.
  */
 
-const KEYS = {
-  theme: 'clip2mesh:theme',
-  lang: 'clip2mesh:lang',
-  autoScroll: 'clip2mesh:log.autoScroll',
-  maxLines: 'clip2mesh:log.maxLines',
-  autoAccept: 'clip2mesh:autoAccept',
-};
+import { STORAGE_KEYS } from './constants.js';
+
+const KEYS = STORAGE_KEYS;
 
 const DEFAULTS = {
   theme: 'light',

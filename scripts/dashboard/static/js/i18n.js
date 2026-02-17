@@ -3,7 +3,9 @@
  * Reads/writes language preference to localStorage.
  */
 
-const STORAGE_KEY = 'clip2mesh:lang';
+import { STORAGE_KEYS } from './constants.js';
+
+const STORAGE_KEY = STORAGE_KEYS.lang;
 const DEFAULT_LANG = 'en';
 
 const TRANSLATIONS = {

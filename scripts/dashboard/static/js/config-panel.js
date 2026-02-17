@@ -2,6 +2,13 @@
  * Configuration panel: video/object selection and parameter inputs.
  */
 
+import {
+  parsePositiveInt,
+  parseNonNegativeInt,
+  parsePositiveFloat,
+  parseNonNegativeFloat,
+} from './utils.js';
+
 const NEW_OBJECT_VALUE = '__new__';
 const STAGE_LABELS = {
   1: 'Extract Frames',
@@ -1451,26 +1458,18 @@ export class ConfigPanel {
   }
 
   _parsePositiveInt(value, fallback) {
-    const n = Number.parseInt(value, 10);
-    if (!Number.isFinite(n) || n <= 0) return fallback;
-    return n;
+    return parsePositiveInt(value, fallback);
   }
 
   _parseNonNegativeInt(value, fallback) {
-    const n = Number.parseInt(value, 10);
-    if (!Number.isFinite(n) || n < 0) return fallback;
-    return n;
+    return parseNonNegativeInt(value, fallback);
   }
 
   _parsePositiveFloat(value, fallback) {
-    const n = Number.parseFloat(value);
-    if (!Number.isFinite(n) || n <= 0) return fallback;
-    return n;
+    return parsePositiveFloat(value, fallback);
   }
 
   _parseNonNegativeFloat(value, fallback) {
-    const n = Number.parseFloat(value);
-    if (!Number.isFinite(n) || n < 0) return fallback;
-    return n;
+    return parseNonNegativeFloat(value, fallback);
   }
 }

@@ -5,6 +5,13 @@
  * Stage 2 has a dedicated scene for camera overlay support.
  */
 
+import { clampMeshRepairThreshold } from './utils.js';
+import {
+  MESH_REPAIR_THRESHOLD_MIN,
+  MESH_REPAIR_THRESHOLD_MAX,
+  MESH_REPAIR_THRESHOLD_DEFAULT,
+} from './constants.js';
+
 let THREE;
 let OrbitControls;
 let PLYLoader;
@@ -18,16 +25,6 @@ const FIRST_MESH_PREVIEW_FILES = new Set([
   'object_mesh_wrapped.ply',
   'object_mesh_repaired.ply',
 ]);
-
-const MESH_REPAIR_THRESHOLD_MIN = -1.0;
-const MESH_REPAIR_THRESHOLD_MAX = 0.0;
-const MESH_REPAIR_THRESHOLD_DEFAULT = -0.25;
-
-function clampMeshRepairThreshold(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return MESH_REPAIR_THRESHOLD_DEFAULT;
-  return Math.max(MESH_REPAIR_THRESHOLD_MIN, Math.min(MESH_REPAIR_THRESHOLD_MAX, parsed));
-}
 
 const SCENE_THEMES = {
   dark: {
