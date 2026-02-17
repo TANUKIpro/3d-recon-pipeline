@@ -125,9 +125,18 @@ docker compose run --rm --service-ports \
 docker compose run --rm --service-ports \
   --entrypoint python3 \
   pipeline /app/scripts/pipeline.py /data/input/video.mp4 --skip-to 4
+
+# Stage 7 実行時は補修対象ループ選択 JSON が必須
+docker compose run --rm --service-ports \
+  --entrypoint python3 \
+  pipeline /app/scripts/pipeline.py /data/input/video.mp4 \
+  --skip-to 7 \
+  --repair-selection-json /data/input/repair_selection.json
 ```
 
 > **注意**: CLI モードでは Stage 3 で Gradio UI が起動する。
+> **注意**: CLI で Stage 7 を実行する場合、`--repair-selection-json` が未指定だとエラー終了する。
+> JSON 形式: `{\"selected_loop_ids\": [0, 3, 5]}`
 
 ### 個別ステージ実行
 

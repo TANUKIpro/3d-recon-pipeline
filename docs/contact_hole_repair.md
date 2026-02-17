@@ -7,9 +7,12 @@
 
 ## 概要
 
-`object_mesh_wrapped.ply` から境界ループを検出し、
-「下端Y帯域にあり、直径が小さく、下向き法線を持つ」ループだけを補修対象にする。
-対象ループは2D投影 + Ear clipping で三角形充填し、補修近傍のみ軽く平滑化する。
+Stage 7 は以下の 2 モードを持つ。
+
+1. Dashboard 実行: 境界ループ候補を可視化し、ユーザーがクリック選択したループのみ補修
+2. 既存自動実行: ヒューリスティクス（下端Y帯域・直径・法線）で候補を自動選定して補修
+
+補修は 2D 投影 + Ear clipping で三角形充填し、補修近傍のみ軽く平滑化する。
 
 ## 入出力関係
 
@@ -28,6 +31,11 @@
 後段利用:
 
 - Stage 8 (`texture_bake`) が `object_mesh_repaired.ply` を入力
+
+Dashboard 追加 API:
+
+- `GET /api/mesh-repair/candidates`
+- `POST /api/mesh-repair/confirm`
 
 ## パラメータ
 

@@ -30,6 +30,23 @@ export class PreviewPanel {
     this._animating = false;
     this._sceneFlipX = null;
     this._previewAssetRevision = 0;
+    this.onMeshRepairSelectionChanged = null;
+    this._meshRepair = {
+      active: false,
+      confirmed: false,
+      group: null,
+      loopObjects: new Map(),
+      selected: new Set(),
+      clickHandler: (event) => this._handleMeshRepairClick(event),
+      clickBound: false,
+      raycaster: null,
+      pointer: null,
+      colors: {
+        candidate: 0xf4d03f,
+        selected: 0xe74c3c,
+        confirmed: 0x2ecc71,
+      },
+    };
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -56,6 +73,7 @@ export class PreviewPanel {
 
   reset() {
     this._sceneFlipX = null;
+    this._clearMeshRepairOverlay();
     this.clearFromStage(1);
   }
 
@@ -130,6 +148,12 @@ export class PreviewPanel {
       PLYLoader = addons[1].PLYLoader;
       OBJLoader = addons[2].OBJLoader;
       MTLLoader = addons[3].MTLLoader;
+      if (!this._meshRepair.raycaster) {
+        this._meshRepair.raycaster = new THREE.Raycaster();
+      }
+      if (!this._meshRepair.pointer) {
+        this._meshRepair.pointer = new THREE.Vector2();
+      }
       this._threeLoaded = true;
     } catch (e) {
       console.error('Failed to load three.js:', e);
@@ -287,6 +311,9 @@ export class PreviewPanel {
   _clearStageScene(stageNum) {
     const stage = this._stages[stageNum];
     if (!stage) return;
+    if (stageNum === 7) {
+      this._clearMeshRepairOverlay();
+    }
     if (stage.currentObject) {
       this._disposeObject(stage.currentObject);
       stage.sceneRoot.remove(stage.currentObject);
@@ -317,6 +344,208 @@ export class PreviewPanel {
       }
       if (typeof node.material.dispose === 'function') node.material.dispose();
     });
+  }
+
+  _setMeshRepairClickEnabled(enabled) {
+    const stage = this._stages[7];
+    const container = stage?.container;
+    if (!container) return;
+    if (enabled) {
+      if (!this._meshRepair.clickBound) {
+        container.addEventListener('click', this._meshRepair.clickHandler);
+        this._meshRepair.clickBound = true;
+      }
+      return;
+    }
+    if (this._meshRepair.clickBound) {
+      container.removeEventListener('click', this._meshRepair.clickHandler);
+      this._meshRepair.clickBound = false;
+    }
+  }
+
+  _handleMeshRepairClick(event) {
+    if (!this._meshRepair.active || this._meshRepair.confirmed) return;
+    if (this._activeStage !== 7) return;
+
+    const stage = this._stages[7];
+    if (!stage || !this._meshRepair.raycaster || !this._meshRepair.pointer) return;
+    const objects = Array.from(this._meshRepair.loopObjects.values());
+    if (objects.length === 0) return;
+
+    const rect = stage.container.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    this._meshRepair.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this._meshRepair.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this._meshRepair.raycaster.params.Line = this._meshRepair.raycaster.params.Line || {};
+    this._meshRepair.raycaster.params.Line.threshold = 0.03;
+    this._meshRepair.raycaster.setFromCamera(this._meshRepair.pointer, stage.camera);
+    const hit = this._meshRepair.raycaster.intersectObjects(objects, false)
+      .find((item) => item?.object?.userData?.loopId != null);
+    if (!hit) return;
+
+    const loopId = Number(hit.object.userData.loopId);
+    if (!Number.isFinite(loopId)) return;
+    if (this._meshRepair.selected.has(loopId)) {
+      this._meshRepair.selected.delete(loopId);
+    } else {
+      this._meshRepair.selected.add(loopId);
+    }
+    this._updateMeshRepairColors();
+    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
+  }
+
+  _updateMeshRepairColors() {
+    for (const [loopId, obj] of this._meshRepair.loopObjects.entries()) {
+      if (!obj?.material) continue;
+      let colorHex = this._meshRepair.colors.candidate;
+      if (this._meshRepair.selected.has(loopId)) {
+        colorHex = this._meshRepair.confirmed
+          ? this._meshRepair.colors.confirmed
+          : this._meshRepair.colors.selected;
+      }
+      obj.material.color.setHex(colorHex);
+      obj.material.opacity = this._meshRepair.selected.has(loopId) ? 1.0 : 0.9;
+    }
+  }
+
+  _clearMeshRepairOverlay() {
+    this._setMeshRepairClickEnabled(false);
+    if (this._meshRepair.group) {
+      this._meshRepair.group.traverse((node) => {
+        if (node?.geometry?.dispose) node.geometry.dispose();
+        if (!node?.material) return;
+        if (Array.isArray(node.material)) {
+          for (const mat of node.material) {
+            if (mat?.dispose) mat.dispose();
+          }
+          return;
+        }
+        if (node.material.dispose) node.material.dispose();
+      });
+      const stage = this._stages[7];
+      if (stage?.sceneRoot) {
+        stage.sceneRoot.remove(this._meshRepair.group);
+      }
+    }
+
+    this._meshRepair.group = null;
+    this._meshRepair.loopObjects = new Map();
+    this._meshRepair.selected = new Set();
+    this._meshRepair.active = false;
+    this._meshRepair.confirmed = false;
+    this.onMeshRepairSelectionChanged?.([]);
+  }
+
+  clearMeshRepairSelection() {
+    if (!this._meshRepair.active) return;
+    this._meshRepair.confirmed = false;
+    this._meshRepair.selected.clear();
+    this._updateMeshRepairColors();
+    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
+  }
+
+  setMeshRepairConfirmed() {
+    if (!this._meshRepair.active) return;
+    this._meshRepair.confirmed = true;
+    this._updateMeshRepairColors();
+    this._setMeshRepairClickEnabled(false);
+    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
+  }
+
+  getMeshRepairSelectedLoopIds() {
+    return Array.from(this._meshRepair.selected).sort((a, b) => a - b);
+  }
+
+  _applyStageCenterOffset(stage, point3) {
+    if (!Array.isArray(point3) || point3.length < 3) return null;
+    const x = Number(point3[0]);
+    const y = Number(point3[1]);
+    const z = Number(point3[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
+
+    const offset = stage?.centerOffset;
+    if (!offset) return [x, y, z];
+    return [x - offset.x, y - offset.y, z - offset.z];
+  }
+
+  async beginMeshRepairSelection(payload = {}) {
+    const loops = Array.isArray(payload?.loops) ? payload.loops : [];
+    if (loops.length === 0) {
+      throw new Error('No mesh-repair loop candidates');
+    }
+
+    await this.initSceneForStage(7);
+    await this._ensureSceneFlipForStage(7);
+    this.activateStage(7);
+
+    const sourceFile = String(payload?.source_mesh_relpath || '').trim()
+      || String(payload?.source_mesh_path || '').trim().split('/').pop()
+      || 'object_mesh_wrapped.ply';
+    const loaded = await this.loadStageResult(7, {
+      file: sourceFile,
+      renderMode: 'mesh',
+      stripVertexColors: true,
+      enableShadows: true,
+    });
+    if (!loaded) {
+      throw new Error(`Failed to load source mesh for repair selection: ${sourceFile}`);
+    }
+
+    this._clearMeshRepairOverlay();
+    const stage = this._stages[7];
+    if (!stage?.sceneRoot) {
+      throw new Error('Stage 7 scene is not available');
+    }
+
+    const group = new THREE.Group();
+    stage.sceneRoot.add(group);
+
+    let valid = 0;
+    for (const loop of loops) {
+      const loopId = Number(loop?.loop_id);
+      const points = Array.isArray(loop?.points) ? loop.points : [];
+      if (!Number.isFinite(loopId) || points.length < 3) continue;
+
+      const positions = [];
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i];
+        const b = points[(i + 1) % points.length];
+        const p0 = this._applyStageCenterOffset(stage, a);
+        const p1 = this._applyStageCenterOffset(stage, b);
+        if (!p0 || !p1) continue;
+        positions.push(p0[0], p0[1], p0[2]);
+        positions.push(p1[0], p1[1], p1[2]);
+      }
+      if (positions.length < 6) continue;
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      const mat = new THREE.LineBasicMaterial({
+        color: this._meshRepair.colors.candidate,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const line = new THREE.LineSegments(geom, mat);
+      line.userData.loopId = loopId;
+      group.add(line);
+      this._meshRepair.loopObjects.set(loopId, line);
+      valid += 1;
+    }
+
+    if (valid === 0) {
+      stage.sceneRoot.remove(group);
+      this._clearMeshRepairOverlay();
+      throw new Error('No valid mesh-repair loops to render');
+    }
+
+    this._meshRepair.group = group;
+    this._meshRepair.active = true;
+    this._meshRepair.confirmed = false;
+    this._meshRepair.selected.clear();
+    this._updateMeshRepairColors();
+    this._setMeshRepairClickEnabled(true);
+    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
   }
 
   /**
@@ -731,6 +960,9 @@ export class PreviewPanel {
   async _loadPLYIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
     if (!stage) return false;
+    if (stageNum === 7) {
+      this._clearMeshRepairOverlay();
+    }
 
     // Remove previous object
     if (stage.currentObject) {

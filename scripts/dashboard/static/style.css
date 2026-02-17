@@ -660,6 +660,29 @@ html, body {
   color: var(--success);
 }
 
+/* ── Stage 7 Mesh Repair Toolbar ──────────────────────────── */
+#mesh-repair-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mesh-repair-status {
+  margin-right: auto;
+}
+
+#mesh-repair-status.error {
+  color: var(--danger);
+}
+
+#mesh-repair-status.success {
+  color: var(--success);
+}
+
 /* ── Frame Count Header ──────────────────────────────────── */
 .frame-count-header {
   padding: 8px 12px;

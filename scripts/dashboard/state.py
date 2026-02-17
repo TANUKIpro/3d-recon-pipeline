@@ -179,6 +179,14 @@ class PipelineSession:
     next_stage_confirmation_to: int | None = None
     next_stage_confirmation_message: str | None = None
 
+    # Stage 7 interactive mesh-repair handshake
+    mesh_repair_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
+    mesh_repair_ready: bool = False
+    mesh_repair_candidates: list[dict[str, Any]] = field(default_factory=list)
+    mesh_repair_selected_loop_ids: list[int] = field(default_factory=list)
+    mesh_repair_source_mesh_path: str | None = None
+    mesh_repair_analysis: dict[str, Any] = field(default_factory=dict)
+
     # Pipeline task handle
     _task: asyncio.Task | None = field(default=None, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -220,6 +228,12 @@ class PipelineSession:
         self.next_stage_confirmation_from = None
         self.next_stage_confirmation_to = None
         self.next_stage_confirmation_message = None
+        self.mesh_repair_confirm_event = asyncio.Event()
+        self.mesh_repair_ready = False
+        self.mesh_repair_candidates = []
+        self.mesh_repair_selected_loop_ids = []
+        self.mesh_repair_source_mesh_path = None
+        self.mesh_repair_analysis = {}
         self.sam2_frame_count = 0
         self._task = None
         self.cancel_event = threading.Event()
@@ -311,11 +325,38 @@ class PipelineSession:
         self.next_stage_confirmation_to = None
         self.next_stage_confirmation_message = None
         self.next_stage_confirm_event = asyncio.Event()
+        self.mesh_repair_confirm_event = asyncio.Event()
+        self.mesh_repair_ready = False
+        self.mesh_repair_candidates = []
+        self.mesh_repair_selected_loop_ids = []
+        self.mesh_repair_source_mesh_path = None
+        self.mesh_repair_analysis = {}
         return {
             "stage_complete": stage_complete,
             "frame_count": frame_count,
             "mask_count": mask_count,
         }
+
+    def set_mesh_repair_candidates(
+        self,
+        mesh_path: str,
+        candidates: list[dict[str, Any]],
+        analysis: dict[str, Any] | None = None,
+    ) -> None:
+        self.mesh_repair_ready = True
+        self.mesh_repair_source_mesh_path = str(mesh_path)
+        self.mesh_repair_candidates = list(candidates)
+        self.mesh_repair_analysis = dict(analysis or {})
+        self.mesh_repair_selected_loop_ids = []
+        self.mesh_repair_confirm_event.clear()
+
+    def clear_mesh_repair_candidates(self) -> None:
+        self.mesh_repair_ready = False
+        self.mesh_repair_source_mesh_path = None
+        self.mesh_repair_candidates = []
+        self.mesh_repair_selected_loop_ids = []
+        self.mesh_repair_analysis = {}
+        self.mesh_repair_confirm_event = asyncio.Event()
 
     def stage_start(self, stage: PipelineStage) -> None:
         self.current_stage = stage
@@ -449,6 +490,13 @@ class PipelineSession:
                 "from_stage": self.next_stage_confirmation_from,
                 "to_stage": self.next_stage_confirmation_to,
                 "message": self.next_stage_confirmation_message,
+            },
+            "mesh_repair": {
+                "ready": self.mesh_repair_ready,
+                "source_mesh_path": self.mesh_repair_source_mesh_path,
+                "candidate_count": len(self.mesh_repair_candidates),
+                "selected_loop_count": len(self.mesh_repair_selected_loop_ids),
+                "analysis": self.mesh_repair_analysis,
             },
             "stages": {
                 str(k): {

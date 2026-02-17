@@ -15,6 +15,7 @@ Pipeline stages:
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -46,11 +47,17 @@ Examples:
         choices=["poisson", "diffcd"],
         help="Mesh method for stage 5 (default: poisson)",
     )
+    parser.add_argument(
+        "--repair-selection-json",
+        default="",
+        help="Stage 7 selection file JSON: {'selected_loop_ids': [..]} (required when stage 7 runs)",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir
     skip_to = args.skip_to
     mesh_method = str(args.mesh_method or "poisson").strip().lower()
+    repair_selection_json = str(args.repair_selection_json or "").strip()
 
     print("=" * 60)
     print("im2pc-pipeline: RGB Video → Textured 3D Mesh")
@@ -178,7 +185,26 @@ Examples:
         print("=" * 60)
         from stage_contact_hole_repair import run_contact_hole_repair
 
-        repaired_mesh_ply = run_contact_hole_repair(str(wrapped_mesh_ply), output_dir)
+        if not repair_selection_json:
+            raise ValueError(
+                "Stage 7 requires --repair-selection-json when running from CLI"
+            )
+        selection_path = Path(repair_selection_json)
+        if not selection_path.is_file():
+            raise FileNotFoundError(
+                f"repair selection JSON not found: {selection_path}"
+            )
+        payload = json.loads(selection_path.read_text(encoding="utf-8"))
+        raw_selected = payload.get("selected_loop_ids") if isinstance(payload, dict) else None
+        if not isinstance(raw_selected, list) or len(raw_selected) == 0:
+            raise ValueError("repair selection JSON must contain non-empty 'selected_loop_ids' list")
+        selected_loop_ids = [int(v) for v in raw_selected]
+        repaired_mesh_ply = run_contact_hole_repair(
+            str(wrapped_mesh_ply),
+            output_dir,
+            selected_loop_ids=selected_loop_ids,
+            require_selection=True,
+        )
         print(f"  → Repaired: {repaired_mesh_ply}")
     else:
         repaired_mesh_ply = Path(output_dir) / "object_mesh_repaired.ply"

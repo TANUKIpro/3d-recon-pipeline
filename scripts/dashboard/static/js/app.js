@@ -57,6 +57,10 @@ const meshPostResetBtn = document.getElementById('mesh-post-reset');
 const meshPostStatus = document.getElementById('mesh-post-status');
 const meshPhaseStatusBar = document.getElementById('mesh-phase-status');
 const meshPhaseStatusText = document.getElementById('mesh-phase-status-text');
+const meshRepairToolbar = document.getElementById('mesh-repair-toolbar');
+const meshRepairStatus = document.getElementById('mesh-repair-status');
+const meshRepairClearBtn = document.getElementById('mesh-repair-clear');
+const meshRepairApplyBtn = document.getElementById('mesh-repair-apply');
 const meshMethodPills = {
   diffcd: document.getElementById('mesh-pill-diffcd'),
   poisson: document.getElementById('mesh-pill-poisson'),
@@ -74,6 +78,8 @@ let _waitingConfirmationToStage = null;
 let _latestStatusSnapshot = null;
 let _meshPostInFlight = false;
 let _meshMethod = MESH_METHOD_DEFAULT;
+let _meshRepairCandidateCount = 0;
+let _meshRepairInFlight = false;
 
 for (let stage = 1; stage <= STAGE_COUNT; stage++) {
   _taskConfirmBars[stage] = document.querySelector(`.task-confirm-bar[data-stage="${stage}"]`);
@@ -86,8 +92,12 @@ for (let stage = 1; stage <= STAGE_COUNT; stage++) {
 }
 resetTaskConfirmBars();
 initMeshPostToolbar();
+initMeshRepairToolbar();
 bindMeshMethodPills();
 applyMeshMethod(config.getMeshMethod?.() || MESH_METHOD_DEFAULT, { announce: false });
+preview.onMeshRepairSelectionChanged = (selectedIds) => {
+  updateMeshRepairStatus(selectedIds);
+};
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -125,6 +135,10 @@ config.onObjectSelected = async (objectName) => {
     resetTaskConfirmBars();
     setMeshPostToolbarVisible(false);
     setMeshPostStatus('');
+    setMeshRepairToolbarVisible(false);
+    setMeshRepairStatus('');
+    _meshRepairCandidateCount = 0;
+    _meshRepairInFlight = false;
     setMeshPhaseStatus('', '');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
@@ -196,6 +210,10 @@ config.onStart = async (cfg) => {
     _latestStatusSnapshot = null;
     setMeshPostToolbarVisible(false);
     setMeshPostStatus('');
+    setMeshRepairToolbarVisible(false);
+    setMeshRepairStatus('');
+    _meshRepairCandidateCount = 0;
+    _meshRepairInFlight = false;
     setMeshPhaseStatus('', '');
     setOverallProgress(pipelineUI.getOverallProgress());
 
@@ -258,6 +276,16 @@ ws.on('stage_start', (msg) => {
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
   }
+  if (Number(msg.stage) !== 7 || !_meshRepairInFlight) {
+    setMeshRepairToolbarVisible(false);
+    if (!_meshRepairInFlight) {
+      setMeshRepairStatus('');
+    }
+  }
+  if (Number(msg.stage) === 7) {
+    _meshRepairCandidateCount = 0;
+    _meshRepairInFlight = false;
+  }
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
     setMeshPhaseStatus('Classical Mesh started.', 'live');
   } else if (Number(msg.stage) === 5 && _meshMethod !== 'poisson') {
@@ -278,6 +306,11 @@ ws.on('stage_complete', async (msg) => {
     stageCtrl.setStageState(msg.stage, 'failed');
     if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
       setMeshPhaseStatus(`Stage 5 failed: ${msg.error}`, 'error');
+    }
+    if (Number(msg.stage) === 7) {
+      setMeshRepairToolbarVisible(false);
+      setMeshRepairStatus(`Stage 7 failed: ${msg.error}`, 'error');
+      _meshRepairInFlight = false;
     }
     return;
   }
@@ -308,6 +341,13 @@ ws.on('stage_complete', async (msg) => {
     setMeshPostEnabled(true);
     if (!_meshPostInFlight) {
       setMeshPostStatus('');
+    }
+  }
+  if (msg.stage === 7) {
+    _meshRepairInFlight = false;
+    setMeshRepairToolbarVisible(false);
+    if (!_meshRepairInFlight) {
+      setMeshRepairStatus('');
     }
   }
 });
@@ -351,6 +391,22 @@ ws.on('pi3x_preview_ready', () => {
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
   appendLog('stdout', 'Pi3X complete. Review the 3D preview, then confirm on Stage 2.\n', { stage: 2 });
+});
+
+ws.on('mesh_repair_ready', async (msg) => {
+  checkpoints.onStageInteractive(7, 'Waiting for repair-loop selection');
+  pipelineUI.stageInteractive(7);
+  stageCtrl.setStageState(7, 'interactive');
+  try {
+    await activateMeshRepairSelectionFromApi();
+    stageCtrl.activateStage(7);
+    const loopCount = Number(msg.candidate_count) || _meshRepairCandidateCount;
+    appendLog('stdout', `Mesh Repair ready: ${loopCount} selectable loops. Click loops, then apply.\n`, { stage: 7 });
+  } catch (e) {
+    setMeshRepairToolbarVisible(false);
+    setMeshRepairStatus(`Mesh Repair UI failed: ${e.message}`, 'error');
+    appendLog('stderr', `Mesh Repair setup failed: ${e.message}\n`, { stage: 7 });
+  }
 });
 
 ws.on('next_stage_confirmation_required', (msg) => {
@@ -413,6 +469,10 @@ ws.on('pipeline_complete', (msg) => {
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
   setMeshPostToolbarVisible(true);
   setMeshPostEnabled(true);
+  setMeshRepairToolbarVisible(false);
+  setMeshRepairStatus('');
+  _meshRepairCandidateCount = 0;
+  _meshRepairInFlight = false;
   if (_meshMethod === 'poisson') {
     setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
   } else {
@@ -449,6 +509,12 @@ ws.on('pipeline_error', (msg) => {
   if (!_meshPostInFlight) {
     setMeshPostStatus('');
   }
+  setMeshRepairToolbarVisible(false);
+  if (!_meshRepairInFlight) {
+    setMeshRepairStatus('');
+  }
+  _meshRepairCandidateCount = 0;
+  _meshRepairInFlight = false;
   if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
     setMeshPhaseStatus(`Stage 5 error: ${msg.error}`, 'error');
   }
@@ -609,6 +675,96 @@ function setMeshPostStatus(message, tone = '') {
   }
 }
 
+function initMeshRepairToolbar() {
+  if (!meshRepairToolbar) return;
+  setMeshRepairToolbarVisible(false);
+  setMeshRepairEnabled(false);
+  setMeshRepairStatus('');
+  meshRepairClearBtn?.addEventListener('click', () => {
+    preview.clearMeshRepairSelection();
+    updateMeshRepairStatus();
+  });
+  meshRepairApplyBtn?.addEventListener('click', () => {
+    applyMeshRepairSelection();
+  });
+}
+
+function setMeshRepairToolbarVisible(visible) {
+  if (!meshRepairToolbar) return;
+  meshRepairToolbar.style.display = visible ? 'flex' : 'none';
+}
+
+function setMeshRepairEnabled(enabled) {
+  const disabled = !enabled;
+  if (meshRepairClearBtn) meshRepairClearBtn.disabled = disabled;
+  if (meshRepairApplyBtn) meshRepairApplyBtn.disabled = disabled;
+}
+
+function setMeshRepairStatus(message, tone = '') {
+  if (!meshRepairStatus) return;
+  meshRepairStatus.textContent = String(message || '');
+  meshRepairStatus.classList.remove('error', 'success');
+  if (tone === 'error' || tone === 'success') {
+    meshRepairStatus.classList.add(tone);
+  }
+}
+
+function updateMeshRepairStatus(selectedIds = null) {
+  if (!meshRepairToolbar || meshRepairToolbar.style.display === 'none') return;
+  const selected = Array.isArray(selectedIds)
+    ? selectedIds.length
+    : preview.getMeshRepairSelectedLoopIds().length;
+  setMeshRepairStatus(
+    `Mesh Repair: ${_meshRepairCandidateCount} candidates, ${selected} selected.`,
+  );
+}
+
+async function activateMeshRepairSelectionFromApi() {
+  const res = await fetch('/api/mesh-repair/candidates', { cache: 'no-store' });
+  const data = await res.json();
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  await preview.beginMeshRepairSelection(data);
+  _meshRepairCandidateCount = Number(data.loop_count) || 0;
+  _meshRepairInFlight = false;
+  setMeshRepairToolbarVisible(true);
+  setMeshRepairEnabled(true);
+  updateMeshRepairStatus([]);
+}
+
+async function applyMeshRepairSelection() {
+  if (_meshRepairInFlight) return;
+  const selectedLoopIds = preview.getMeshRepairSelectedLoopIds();
+  if (!Array.isArray(selectedLoopIds) || selectedLoopIds.length === 0) {
+    setMeshRepairStatus('Select at least one loop before applying.', 'error');
+    return;
+  }
+
+  _meshRepairInFlight = true;
+  setMeshRepairEnabled(false);
+  setMeshRepairStatus('Applying mesh repair selection...');
+  try {
+    const res = await fetch('/api/mesh-repair/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selected_loop_ids: selectedLoopIds }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    preview.setMeshRepairConfirmed();
+    setMeshRepairStatus(`Selection confirmed (${selectedLoopIds.length} loops). Repairing mesh...`, 'success');
+    appendLog('stdout', `Mesh Repair confirmed with ${selectedLoopIds.length} selected loops.\n`, { stage: 7 });
+  } catch (e) {
+    _meshRepairInFlight = false;
+    setMeshRepairEnabled(true);
+    setMeshRepairStatus(`Failed to confirm repair selection: ${e.message}`, 'error');
+    appendLog('stderr', `Mesh Repair confirm failed: ${e.message}\n`, { stage: 7 });
+  }
+}
+
 function canRunMeshPostprocess(statusMsg) {
   if (!statusMsg) return true;
   if (!statusMsg.running) return true;
@@ -640,6 +796,27 @@ function syncMeshPostToolbarFromStatus(statusMsg) {
   if (meshPostStatus?.textContent === 'Mesh post-process is disabled while pipeline is running.') {
     setMeshPostStatus('');
   }
+}
+
+function syncMeshRepairToolbarFromStatus(statusMsg) {
+  const stage7 = getStageInfo(statusMsg, 7);
+  const ready = statusMsg?.running === true
+    && stage7?.status === 'interactive'
+    && statusMsg?.mesh_repair?.ready === true;
+  if (!ready) {
+    if (!_meshRepairInFlight) {
+      setMeshRepairToolbarVisible(false);
+      setMeshRepairStatus('');
+    }
+    return;
+  }
+  if (_meshRepairInFlight) return;
+  setMeshRepairToolbarVisible(true);
+  setMeshRepairEnabled(true);
+  const selected = Number(statusMsg?.mesh_repair?.selected_loop_count) || 0;
+  const candidateCount = Number(statusMsg?.mesh_repair?.candidate_count) || _meshRepairCandidateCount;
+  _meshRepairCandidateCount = candidateCount;
+  setMeshRepairStatus(`Mesh Repair: ${candidateCount} candidates, ${selected} selected.`);
 }
 
 async function applyMeshPostprocess({ resetToRaw = false } = {}) {
@@ -1106,6 +1283,7 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
   syncStageStates(statusMsg);
   syncTaskConfirmBarsFromStatus(statusMsg);
   syncMeshPostToolbarFromStatus(statusMsg);
+  syncMeshRepairToolbarFromStatus(statusMsg);
   setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
 
   if (statusMsg.object_name) {
@@ -1117,6 +1295,8 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
     setStatus('running', 'Running');
     const waiting = statusMsg?.next_stage_confirmation?.required === true;
     const waitingFromStage = Number(statusMsg?.next_stage_confirmation?.from_stage);
+    const meshRepairInteractive = statusMsg?.mesh_repair?.ready === true
+      && getStageInfo(statusMsg, 7)?.status === 'interactive';
     if (waiting) {
       await hydrateOutputsFromStatus(statusMsg, {
         force: opts.forceHydrate === true,
@@ -1127,6 +1307,18 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
       } else {
         stageCtrl.activateStage(resolvePreferredStage(statusMsg));
       }
+    } else if (meshRepairInteractive) {
+      await hydrateOutputsFromStatus(statusMsg, {
+        force: opts.forceHydrate === true,
+        activate: false,
+      });
+      try {
+        await activateMeshRepairSelectionFromApi();
+      } catch (e) {
+        setMeshRepairToolbarVisible(false);
+        setMeshRepairStatus(`Mesh Repair UI failed: ${e.message}`, 'error');
+      }
+      stageCtrl.activateStage(7);
     } else {
       stageCtrl.activateStage(resolvePreferredStage(statusMsg));
     }
@@ -1135,6 +1327,9 @@ async function applyStatusSnapshot(statusMsg, opts = {}) {
 
   config.setRunning(false);
   config.setActiveStage(null);
+  _meshRepairInFlight = false;
+  setMeshRepairToolbarVisible(false);
+  setMeshRepairStatus('');
 
   const allDone = [1, 2, 3, 4, 5, 6, 7, 8].every((stage) => isStageDone(statusMsg, stage));
   if (allDone) setStatus('complete', 'Done');
