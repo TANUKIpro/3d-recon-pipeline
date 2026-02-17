@@ -111,10 +111,10 @@ class PipelineConfig:
     meshwrap_poisson_depth: int = 6
     meshwrap_poisson_scale: float = 1.18
     meshwrap_density_trim_q: float = 0.06
-    meshwrap_target_face_ratio: float = 1.80
+    meshwrap_target_face_ratio: float = 1.50
     meshwrap_iterations: int = 2
     meshwrap_crop_scale: float = 2.0
-    meshwrap_sample_points: int = 180_000
+    meshwrap_sample_points: int = 300_000
     meshwrap_normal_radius_ratio: float = 0.035
     mesh_repair_enabled: bool = True
     mesh_repair_max_diameter_ratio: float = 0.08
