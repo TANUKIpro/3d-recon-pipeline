@@ -6,3 +6,4 @@ data/output/*
 __pycache__/
 *.pyc
 *-mcp
+node_modules/
