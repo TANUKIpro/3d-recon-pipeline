@@ -61,6 +61,8 @@
 | `radius_neighbors` | `8` | Radius法の最小近傍数 |
 | `radius_ratio` | `0.015` | 半径 = `median_bbox_extent * ratio` |
 
+既定値の定義元: `scripts/config_defaults.py`
+
 利用可能 `preset`:
 
 - `balanced`

@@ -73,7 +73,18 @@ SAM2 マスク適用は Stage 3 で `pi3x_cache.npz` を使って後適用する
 | `PI3X_ESTIMATED_MODEL_MB` | `5500` | 事前推定に使うモデルVRAM見積 |
 | `PI3X_RUNTIME_OVERHEAD_MB` | `1200` | 事前推定に使う実行オーバーヘッド |
 | `PI3X_FRAME_PIXELS_PER_MB` | `800` | 画素量->VRAM換算の近似係数 |
-| `pi3x_frame_target` (Dashboard設定) | `max_frames` 由来 | Stage 2 で実際に使うフレーム数目標 |
+| `pi3x_frame_target` (Dashboard設定) | `max_frames` (最大値) | Stage 2 で実際に使うフレーム数目標。既定値はフレーム最大数 |
+
+既定値の定義元: `scripts/config_defaults.py`
+
+## Pi3X Frame Target の既定値
+
+`pi3x_frame_target` の既定値は `max_frames`（フレーム最大数）に変更された（従来は VRAM 推奨値）。
+Dashboard スライダ上にゴールドマーカーで VRAM 推奨値を表示し、ユーザーが参考にできるようになっている。
+
+- VRAM 推奨値は `PI3X_VRAM_TARGET_UTILIZATION` 等のパラメータから自動算出
+- スライダの既定位置は最大値だが、VRAM が不足する場合は推奨値に下げることが推奨される
+- 推奨値がフレーム最大数以上の場合はマーカーを非表示にする
 
 ## 失敗時の典型原因
 

@@ -33,7 +33,7 @@ Stage 5 のメッシュを入力に、Poisson 再構成ベースで外皮メッ�
 1. 入力メッシュの退化/重複/非多様体を除去。
 2. メッシュ表面から点群をサンプリングし、法線を推定・整合。
 3. Screened Poisson 再構成で外皮を生成。
-4. 低密度頂点トリム + bbox crop + 最大連結成分抽出で整形。
+4. 低密度頂点トリム + OBB crop（PCA ベースの方向付きバウンディングボックス） + 最大連結成分抽出で整形。
 5. 必要に応じて面数を target に再簡略化して保存。
 
 ## パラメータ
@@ -51,12 +51,23 @@ Stage 5 のメッシュを入力に、Poisson 再構成ベースで外皮メッ�
 | `MESH_WRAP_POISSON_SCALE` | `1.18` | Poisson scale |
 | `MESH_WRAP_POISSON_LINEAR_FIT` | `0` | Poisson linear fit |
 | `MESH_WRAP_DENSITY_TRIM_Q` | `0.01` | 低密度頂点除去分位点 |
-| `MESH_WRAP_CROP_SCALE` | `1.03` | bbox crop 拡大倍率 |
+| `MESH_WRAP_CROP_SCALE` | `1.03` | OBB crop 拡大倍率 (PCA ベースの方向付き BB に適用) |
 | `MESH_WRAP_KEEP_LARGEST_COMPONENT` | `1` | 最大連結成分のみ保持 |
 | `MESH_WRAP_TARGET_FACE_RATIO` | `2.20` | 入力面数に対する目標比率 |
 | `MESH_WRAP_MIN_FACES` | `25000` | 目標面数の下限 |
 | `MESH_WRAP_MAX_FACES` | `200000` | 目標面数の上限 |
 | `MESH_WRAP_PRESERVE_INPUT_ON_FAILURE` | `1` | 失敗時に入力メッシュを保存して続行 |
+
+既定値の定義元: `scripts/config_defaults.py`
+
+## OBB Crop 方式
+
+Stage 6 の crop は AABB（軸整列バウンディングボックス）から OBB（方向付きバウンディングボックス）に移行した。
+
+- **理由**: 入力メッシュが座標軸に対して斜めに配置されている場合、AABB では不要な余白を含むか、必要な部分を切り落とすリスクがあった。
+- **PCA ベースの方向検出**: 入力メッシュの `get_oriented_bounding_box()` で主成分方向を取得し、その回転行列・中心・大きさを基準にする。
+- **crop_scale の適用**: `MESH_WRAP_CROP_SCALE` は OBB の extent に乗算され、生成メッシュの crop 範囲を制御する。
+- **Dashboard 表示**: Stage 6 の 3D プレビューでシアンのワイヤーフレームとして OBB を表示する。
 
 ## 補足
 

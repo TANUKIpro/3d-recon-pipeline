@@ -49,6 +49,8 @@
 | `MAX_FRAMES` (env) | `50` | 動画フレーム総数が取れない場合の最終フォールバック |
 | `FRAME_INTERVAL` (env) | `10` | Dashboard 側の設定既定値 (Stage 関数内では直接参照しない) |
 
+既定値の定義元: `scripts/config_defaults.py`
+
 ## 補足
 
 - 保存先が既存でも上書き運用前提で動作するため、再実行時は既存成果物管理 (`app.py` の stage reset) に依存する。

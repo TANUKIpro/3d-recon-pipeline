@@ -56,6 +56,8 @@
 | `SAM2_MODEL` | `large` | SAM2モデル種別の設定値 |
 | `model_type` 引数 | `None` | `None` の場合 `SAM2_MODEL` を参照 |
 
+既定値の定義元: `scripts/config_defaults.py`
+
 実装上の注意:
 
 - `SAM2Session._load_model()` は現状 `SAM2_MODEL` を参照せず `large` を固定ロードする。

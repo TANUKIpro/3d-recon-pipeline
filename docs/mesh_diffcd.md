@@ -73,6 +73,12 @@ PyTorch と JAX の GPU コンテキスト競合を避けるため、DiffCD は�
 | `DIFFCD_SMOOTH_LAMBDA` | `0.5` | 平滑化係数 |
 | `DIFFCD_SMOOTH_TAUBIN_NU` | `-0.53` | Taubin の `nu` |
 
+既定値の定義元: `scripts/config_defaults.py`
+
+補足:
+
+- Stage 5 の最終チェックポイントラベルは "Simplify mesh" に変更された（Classical 側と共通）。
+
 ## 実装上の注意
 
 - `prepare_for_jax()` が `XLA_PYTHON_CLIENT_PREALLOCATE=false` を設定。

@@ -2,9 +2,9 @@
 
 ## 対象タスク
 
-- Stage 5 (Classical): 法線推定 + Screened Poisson + 後処理 + ダウンサンプル
+- Stage 5 (Classical): 法線推定 + Screened Poisson + 後処理 + Simplify mesh
 - 実装: `scripts/stage_classical_mesh.py`
-- Dashboard では 4 サブタスクを個別承認で進行
+- Dashboard では 4 サブタスクを個別承認で進行（最終チェックポイントラベル: "Simplify mesh"）
 
 ## 概要
 
@@ -53,6 +53,16 @@
 4. Downsample:
    - 面数が閾値を超える場合のみ quadric decimation
 
+## プリセット
+
+`CLASSICAL_DEFAULT_PRESET` でプリセットを選択できる（既定: `default`）。
+プリセット定義元: `scripts/config_defaults.CLASSICAL_PRESET_DEFAULTS`
+
+| プリセット | 前処理 | Poisson 深さ | Density trim | スムージング | ダウンサンプル | 目標面数 |
+|---|---|---|---|---|---|---|
+| `default` | 有効 | `9` | `0.005` | 無効 (反復 2) | 有効 | `120,000` |
+| `trust_point_cloud` | 無効 | `11` | `0.001` | 無効 (反復 0) | 無効 | `500,000` |
+
 ## アルゴリズム要点
 
 - Poisson: `create_from_point_cloud_poisson`
@@ -68,25 +78,28 @@
 | `CLASSICAL_PREPROCESS_VOXEL_RATIO` | `0.003` | 前処理 voxel サイズ比率 (bbox 対角) |
 | `CLASSICAL_PREPROCESS_MAX_POINTS` | `700000` | この点数超過時に voxel downsample |
 | `CLASSICAL_PREPROCESS_SOR_NEIGHBORS` | `20` | 前処理SOR近傍数 |
-| `CLASSICAL_PREPROCESS_SOR_STD_RATIO` | `2.8` | 前処理SOR標準偏差倍率 |
+| `CLASSICAL_PREPROCESS_SOR_STD_RATIO` | `3.2` | 前処理SOR標準偏差倍率 |
 | `POISSON_NORMAL_RADIUS_RATIO` | `0.02` | 法線推定半径比率 |
 | `POISSON_NORMAL_MAX_NN` | `32` | 法線推定最大近傍数 |
 | `POISSON_NORMAL_ORIENT_K` | `24` | 法線方向整合の近傍数 |
 | `POISSON_DEPTH` | `9` | Poisson 深さ |
 | `POISSON_SCALE` | `1.08` | Poisson scale |
 | `POISSON_LINEAR_FIT` | `0` | Poisson linear fit |
-| `POISSON_DENSITY_TRIM_QUANTILE` | `0.02` | 低密度頂点除去分位点 |
+| `POISSON_DENSITY_TRIM_QUANTILE` | `0.005` | 低密度頂点除去分位点 |
 | `POISSON_CROP_SCALE` | `1.03` | bbox crop 拡大倍率 |
-| `CLASSICAL_POST_MIN_COMPONENT_TRIANGLES` | `400` | 小連結成分除去の最小三角形数 |
-| `CLASSICAL_POST_MIN_COMPONENT_RATIO` | `0.01` | 小連結成分除去の最大成分比 |
+| `CLASSICAL_POST_MIN_COMPONENT_TRIANGLES` | `150` | 小連結成分除去の最小三角形数 |
+| `CLASSICAL_POST_MIN_COMPONENT_RATIO` | `0.005` | 小連結成分除去の最大成分比 |
 | `CLASSICAL_AUTO_SMOOTH` | `0` | 後処理スムージング自動適用 |
 | `CLASSICAL_SMOOTH_METHOD` | `laplacian` | `laplacian` / `taubin` |
 | `CLASSICAL_SMOOTH_ITERATIONS` | `2` | スムージング反復数 |
 | `CLASSICAL_SMOOTH_LAMBDA` | `0.5` | スムージング係数 |
 | `CLASSICAL_SMOOTH_TAUBIN_NU` | `-0.53` | Taubin の `nu` |
 | `CLASSICAL_DOWNSAMPLE_ENABLED` | `1` | 面数ダウンサンプル有効化 |
-| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `100000` | 目標面数 |
-| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `140000` | 実行トリガ面数 |
+| `CLASSICAL_DOWNSAMPLE_TARGET_FACES` | `120000` | 目標面数 |
+| `CLASSICAL_DOWNSAMPLE_TRIGGER_FACES` | `170000` | 実行トリガ面数 |
+| `CLASSICAL_DEFAULT_PRESET` | `default` | プリセット名 (`default` / `trust_point_cloud`) |
+
+既定値の定義元: `scripts/config_defaults.py`
 
 補足:
 
