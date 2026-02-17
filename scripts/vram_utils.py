@@ -5,11 +5,13 @@ import os
 import subprocess
 import time
 
-# Pi3X inference budgeting defaults (can be overridden via env vars).
-_PI3X_TARGET_VRAM_UTILIZATION = 0.95
-_PI3X_ESTIMATED_MODEL_MB = 5500
-_PI3X_RUNTIME_OVERHEAD_MB = 1200
-_PI3X_FRAME_PIXELS_PER_MB = 800
+from config_defaults import (
+    _VRAM_PI3X_ESTIMATED_MODEL_MB as _PI3X_ESTIMATED_MODEL_MB,
+    _VRAM_PI3X_FRAME_PIXELS_PER_MB as _PI3X_FRAME_PIXELS_PER_MB,
+    _VRAM_PI3X_RUNTIME_OVERHEAD_MB as _PI3X_RUNTIME_OVERHEAD_MB,
+    _VRAM_PI3X_TARGET_UTILIZATION as _PI3X_TARGET_VRAM_UTILIZATION,
+    _VRAM_GATE_MIN_FREE_MB,
+)
 
 
 def _parse_nvidia_int(value: str) -> int | None:
@@ -261,7 +263,7 @@ def estimate_pi3x_frame_plan(
 
 
 def ensure_vram_available(
-    min_free_mb: int = 12000,
+    min_free_mb: int = _VRAM_GATE_MIN_FREE_MB,
     stage_name: str = "",
     max_retries: int = 3,
 ) -> None:

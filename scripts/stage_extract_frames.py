@@ -11,6 +11,8 @@ from typing import Callable
 
 import cv2
 
+from config_defaults import _EXTRACT_FPS_FALLBACK
+
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]
 
@@ -79,7 +81,7 @@ def _rotation_to_cv2_code(rotation: int):
     return None
 
 
-def _normalize_fps(raw_fps: float | int | None, fallback: int = 30) -> int:
+def _normalize_fps(raw_fps: float | int | None, fallback: int = _EXTRACT_FPS_FALLBACK) -> int:
     """Normalize FPS for UI/parameter defaults (e.g. 59.94 -> 60)."""
     try:
         fps = float(raw_fps)

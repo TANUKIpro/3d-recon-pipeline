@@ -16,18 +16,18 @@ from typing import Any, Callable
 import numpy as np
 import open3d as o3d
 
+from config_defaults import (
+    REPAIR_ENABLED as _DEFAULT_ENABLED,
+    REPAIR_MAX_DIAMETER_RATIO as _DEFAULT_MAX_DIAMETER_RATIO,
+    REPAIR_SMOOTH_ITERS as _DEFAULT_SMOOTH_ITERS,
+    REPAIR_Y_BAND_RATIO as _DEFAULT_Y_BAND_RATIO,
+    _REPAIR_MIN_DOWNWARD_NORMAL_Y as _MIN_DOWNWARD_NORMAL_Y,
+    _REPAIR_MIN_LOOP_VERTICES as _MIN_LOOP_VERTICES,
+    _REPAIR_SMOOTH_LAMBDA as _DEFAULT_SMOOTH_LAMBDA,
+)
+
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]
-
-_DEFAULT_ENABLED = True
-_DEFAULT_MAX_DIAMETER_RATIO = 0.08
-_DEFAULT_Y_BAND_RATIO = 0.06
-_DEFAULT_SMOOTH_ITERS = 3
-_DEFAULT_SMOOTH_LAMBDA = 0.18
-
-# Keep this conservative to reduce accidental top-side hole filling.
-_MIN_DOWNWARD_NORMAL_Y = 0.25
-_MIN_LOOP_VERTICES = 4
 
 
 @dataclass(frozen=True)

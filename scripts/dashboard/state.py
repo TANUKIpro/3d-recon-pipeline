@@ -12,6 +12,44 @@ from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Any
 
+from scripts.config_defaults import (
+    CLASSICAL_AUTO_SMOOTH,
+    CLASSICAL_DEFAULT_PRESET,
+    CLASSICAL_DENSITY_TRIM_Q,
+    CLASSICAL_DOWNSAMPLE_ENABLED,
+    CLASSICAL_DOWNSAMPLE_TARGET_FACES,
+    CLASSICAL_POISSON_DEPTH,
+    CLASSICAL_PREPROCESS_ENABLED,
+    CLASSICAL_SMOOTH_ITERATIONS,
+    DENOISE_DEFAULT_ALGORITHM,
+    DENOISE_DEFAULT_PRESET,
+    DIFFCD_BATCH_SIZE,
+    DIFFCD_N_BATCHES,
+    DIFFCD_RESOLUTION,
+    EXTRACT_FRAME_INTERVAL,
+    EXTRACT_MAX_FRAMES,
+    MESH_DEFAULT_METHOD,
+    MESHWRAP_CROP_SCALE,
+    MESHWRAP_DENSITY_TRIM_Q,
+    MESHWRAP_ITERATIONS,
+    MESHWRAP_NORMAL_RADIUS_RATIO,
+    MESHWRAP_POISSON_DEPTH,
+    MESHWRAP_POISSON_SCALE,
+    MESHWRAP_SAMPLE_POINTS,
+    MESHWRAP_TARGET_FACE_RATIO,
+    PI3X_CONFIDENCE_THRESHOLD,
+    PI3X_EDGE_RTOL,
+    PI3X_FRAME_TARGET,
+    PI3X_PIXEL_LIMIT,
+    REPAIR_ENABLED,
+    REPAIR_MAX_DIAMETER_RATIO,
+    REPAIR_SMOOTH_ITERS,
+    REPAIR_Y_BAND_RATIO,
+    SAM2_DEFAULT_MODEL,
+    TEXTURE_SIZE,
+    _OUTPUT_DIR_DEFAULT,
+)
+
 
 class StageStatus(str, Enum):
     PENDING = "pending"
@@ -85,17 +123,17 @@ class PipelineConfig:
     """All pipeline parameters — defaults match docker-compose env vars."""
 
     video_path: str = ""
-    output_dir: str = "/data/output"
+    output_dir: str = _OUTPUT_DIR_DEFAULT
     object_name: str = ""
-    frame_interval: int = 10
-    max_frames: int = 50
-    pixel_limit: int = 255_000
-    pi3x_frame_target: int = 50
-    confidence_threshold: float = 0.2
-    edge_rtol: float = 0.03
-    sam2_model: str = "large"
-    denoise_preset: str = "balanced"
-    denoise_algorithm: str = "dbscan_sor"
+    frame_interval: int = EXTRACT_FRAME_INTERVAL
+    max_frames: int = EXTRACT_MAX_FRAMES
+    pixel_limit: int = PI3X_PIXEL_LIMIT
+    pi3x_frame_target: int = PI3X_FRAME_TARGET
+    confidence_threshold: float = PI3X_CONFIDENCE_THRESHOLD
+    edge_rtol: float = PI3X_EDGE_RTOL
+    sam2_model: str = SAM2_DEFAULT_MODEL
+    denoise_preset: str = DENOISE_DEFAULT_PRESET
+    denoise_algorithm: str = DENOISE_DEFAULT_ALGORITHM
     denoise_dbscan_eps: float = 0.0
     denoise_dbscan_eps_ratio: float = 0.02
     denoise_dbscan_min_samples: int = 10
@@ -104,31 +142,31 @@ class PipelineConfig:
     denoise_sor_std_ratio: float = 2.0
     denoise_radius_neighbors: int = 8
     denoise_radius_radius_ratio: float = 0.015
-    mesh_method: str = "poisson"
-    diffcd_batch_size: int = 5000
-    diffcd_n_batches: int = 30000
-    diffcd_resolution: int = 512
-    meshwrap_poisson_depth: int = 6
-    meshwrap_poisson_scale: float = 1.18
-    meshwrap_density_trim_q: float = 0.01
-    meshwrap_target_face_ratio: float = 2.20
-    meshwrap_iterations: int = 1
-    meshwrap_crop_scale: float = 1.03
-    meshwrap_sample_points: int = 400_000
-    meshwrap_normal_radius_ratio: float = 0.02
-    classical_preset: str = "default"
-    classical_preprocess_enabled: bool = True
-    classical_poisson_depth: int = 9
-    classical_density_trim_q: float = 0.005
-    classical_auto_smooth: bool = False
-    classical_smooth_iterations: int = 2
-    classical_downsample_enabled: bool = True
-    classical_downsample_target_faces: int = 120_000
-    mesh_repair_enabled: bool = True
-    mesh_repair_max_diameter_ratio: float = 0.08
-    mesh_repair_y_band_ratio: float = 0.06
-    mesh_repair_smooth_iters: int = 3
-    texture_size: int = 0
+    mesh_method: str = MESH_DEFAULT_METHOD
+    diffcd_batch_size: int = DIFFCD_BATCH_SIZE
+    diffcd_n_batches: int = DIFFCD_N_BATCHES
+    diffcd_resolution: int = DIFFCD_RESOLUTION
+    meshwrap_poisson_depth: int = MESHWRAP_POISSON_DEPTH
+    meshwrap_poisson_scale: float = MESHWRAP_POISSON_SCALE
+    meshwrap_density_trim_q: float = MESHWRAP_DENSITY_TRIM_Q
+    meshwrap_target_face_ratio: float = MESHWRAP_TARGET_FACE_RATIO
+    meshwrap_iterations: int = MESHWRAP_ITERATIONS
+    meshwrap_crop_scale: float = MESHWRAP_CROP_SCALE
+    meshwrap_sample_points: int = MESHWRAP_SAMPLE_POINTS
+    meshwrap_normal_radius_ratio: float = MESHWRAP_NORMAL_RADIUS_RATIO
+    classical_preset: str = CLASSICAL_DEFAULT_PRESET
+    classical_preprocess_enabled: bool = CLASSICAL_PREPROCESS_ENABLED
+    classical_poisson_depth: int = CLASSICAL_POISSON_DEPTH
+    classical_density_trim_q: float = CLASSICAL_DENSITY_TRIM_Q
+    classical_auto_smooth: bool = CLASSICAL_AUTO_SMOOTH
+    classical_smooth_iterations: int = CLASSICAL_SMOOTH_ITERATIONS
+    classical_downsample_enabled: bool = CLASSICAL_DOWNSAMPLE_ENABLED
+    classical_downsample_target_faces: int = CLASSICAL_DOWNSAMPLE_TARGET_FACES
+    mesh_repair_enabled: bool = REPAIR_ENABLED
+    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO
+    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO
+    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS
+    texture_size: int = TEXTURE_SIZE
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> PipelineConfig:

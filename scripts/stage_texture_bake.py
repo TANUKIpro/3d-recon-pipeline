@@ -20,6 +20,18 @@ import cv2
 import numpy as np
 from plyfile import PlyData
 
+from config_defaults import (
+    TEXTURE_ANGLE_EXP,
+    TEXTURE_DIST_POW,
+    TEXTURE_MIN_COS,
+    TEXTURE_OVERSAMPLE,
+    TEXTURE_SHARPEN,
+    _TEXTURE_CACHE_SAFETY_MB,
+    _TEXTURE_FRAME_BUDGET_RATIO,
+    _TEXTURE_MASK_BUDGET_RATIO,
+    _TEXTURE_MEM_FALLBACK_MB,
+)
+
 try:
     import torch
 except Exception:  # pragma: no cover - optional dependency for GPU acceleration
@@ -47,7 +59,7 @@ def _get_available_memory_mb() -> float:
                     return float(line.split()[1]) / 1024.0  # kB -> MB
     except (OSError, ValueError, IndexError):
         pass
-    return 4096.0  # conservative fallback
+    return _TEXTURE_MEM_FALLBACK_MB  # conservative fallback
 
 
 class _FrameCache:
@@ -55,14 +67,13 @@ class _FrameCache:
 
     def __init__(self, img_w: int, img_h: int) -> None:
         avail_mb = _get_available_memory_mb()
-        safety_mb = 1024.0
-        budget_mb = max(0.0, avail_mb - safety_mb)
+        budget_mb = max(0.0, avail_mb - _TEXTURE_CACHE_SAFETY_MB)
 
         frame_bytes = img_w * img_h * 3 * 8  # float64 RGB
         mask_bytes = img_w * img_h  # bool
 
-        frame_budget_mb = budget_mb * 0.7
-        mask_budget_mb = budget_mb * 0.3
+        frame_budget_mb = budget_mb * _TEXTURE_FRAME_BUDGET_RATIO
+        mask_budget_mb = budget_mb * _TEXTURE_MASK_BUDGET_RATIO
 
         self._max_frames = max(1, int(frame_budget_mb * 1024 * 1024 / max(frame_bytes, 1)))
         self._max_masks = max(1, int(mask_budget_mb * 1024 * 1024 / max(mask_bytes, 1)))
@@ -673,11 +684,11 @@ def bake_texture(
     """
     import xatlas
 
-    oversample = max(1, int(os.environ.get("TEXTURE_OVERSAMPLE", "2")))
-    min_cos = float(os.environ.get("TEXTURE_MIN_COS", "0.2"))
-    angle_exp = float(os.environ.get("TEXTURE_ANGLE_EXP", "2.0"))
-    dist_pow = float(os.environ.get("TEXTURE_DIST_POW", "1.0"))
-    sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", "0.15"))
+    oversample = max(1, int(os.environ.get("TEXTURE_OVERSAMPLE", str(TEXTURE_OVERSAMPLE))))
+    min_cos = float(os.environ.get("TEXTURE_MIN_COS", str(TEXTURE_MIN_COS)))
+    angle_exp = float(os.environ.get("TEXTURE_ANGLE_EXP", str(TEXTURE_ANGLE_EXP)))
+    dist_pow = float(os.environ.get("TEXTURE_DIST_POW", str(TEXTURE_DIST_POW)))
+    sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", str(TEXTURE_SHARPEN)))
     texture_device = _resolve_texture_device()
 
     output_path = Path(output_dir)

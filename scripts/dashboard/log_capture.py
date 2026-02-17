@@ -10,6 +10,8 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, TextIO
 
+from scripts.config_defaults import _LOG_QUEUE_MAXSIZE
+
 
 _CURRENT_LOG_STAGE: contextvars.ContextVar[int | None] = contextvars.ContextVar(
     "dashboard_log_stage",
@@ -68,7 +70,7 @@ class LogBroadcaster:
         stage_resolver: Callable[[], int | None] | None = None,
     ) -> None:
         self._loop = loop
-        self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=4096)
+        self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=_LOG_QUEUE_MAXSIZE)
         self._original_stdout = sys.stdout
         self._original_stderr = sys.stderr
         self._stdout_capture: StreamCapture | None = None

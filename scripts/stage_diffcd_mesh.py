@@ -21,6 +21,21 @@ from typing import Callable
 import numpy as np
 import trimesh
 
+from config_defaults import (
+    DIFFCD_BATCH_SIZE as _DEFAULT_DIFFCD_BATCH_SIZE,
+    DIFFCD_N_BATCHES as _DEFAULT_DIFFCD_N_BATCHES,
+    DIFFCD_RESOLUTION as _DEFAULT_DIFFCD_RESOLUTION,
+    DIFFCD_SMOOTH_ITERATIONS as _DEFAULT_MESH_SMOOTH_ITERATIONS,
+    DIFFCD_SMOOTH_LAMBDA as _DEFAULT_MESH_SMOOTH_LAMBDA,
+    DIFFCD_SMOOTH_METHOD as _DEFAULT_MESH_SMOOTH_METHOD,
+    DIFFCD_SMOOTH_TAUBIN_NU as _DEFAULT_MESH_SMOOTH_TAUBIN_NU,
+    _DIFFCD_AUTO_MIN_N_BATCHES as _DEFAULT_AUTO_MIN_N_BATCHES,
+    _DIFFCD_BATCH_STEP,
+    _DIFFCD_MIN_BATCH_SIZE as _MIN_DIFFCD_BATCH_SIZE,
+    _DIFFCD_MIN_N_BATCHES as _MIN_DIFFCD_N_BATCHES,
+    _DIFFCD_OOM_MARKERS as _OOM_MARKERS,
+    _DIFFCD_SMOOTH_METHODS as _MESH_SMOOTH_METHODS,
+)
 from vram_utils import (
     get_gpu_inventory,
     log_vram,
@@ -37,26 +52,6 @@ _ITER_FRACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_FRACTION_RE = re.compile(r"(\d+)\s*/\s*(\d+)")
-_OOM_MARKERS = (
-    "out of memory",
-    "resource exhausted",
-    "cuda_error_out_of_memory",
-    "cudnn_status_alloc_failed",
-    "std::bad_alloc",
-)
-
-_DEFAULT_DIFFCD_BATCH_SIZE = 5000
-_DEFAULT_DIFFCD_N_BATCHES = 30000
-_DEFAULT_DIFFCD_RESOLUTION = 512
-_MIN_DIFFCD_BATCH_SIZE = 500
-_DIFFCD_BATCH_STEP = 100
-_MIN_DIFFCD_N_BATCHES = 1000
-_DEFAULT_AUTO_MIN_N_BATCHES = 10000
-_MESH_SMOOTH_METHODS = {"laplacian", "taubin"}
-_DEFAULT_MESH_SMOOTH_METHOD = "laplacian"
-_DEFAULT_MESH_SMOOTH_ITERATIONS = 2
-_DEFAULT_MESH_SMOOTH_LAMBDA = 0.5
-_DEFAULT_MESH_SMOOTH_TAUBIN_NU = -0.53
 
 
 def _env_flag(name: str, default: bool) -> bool:

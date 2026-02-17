@@ -23,6 +23,7 @@ from pathlib import Path
 # Add scripts directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
+from config_defaults import _VRAM_GATE_MIN_FREE_MB
 from vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
 
 
@@ -85,7 +86,7 @@ Examples:
 
     # VRAM gate: ensure sufficient free VRAM before Pi3X
     if skip_to <= 1:
-        ensure_vram_available(min_free_mb=12000, stage_name="before Pi3X")
+        ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before Pi3X")
 
     # =====================================================================
     # Stage 2: Pi3X 3D Reconstruction

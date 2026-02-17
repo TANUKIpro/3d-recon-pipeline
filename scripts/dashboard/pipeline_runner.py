@@ -1220,6 +1220,7 @@ def _stage_texture_bake(
 
 
 def _vram_gate() -> None:
+    from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB
     from vram_utils import cleanup_pytorch_vram, ensure_vram_available
     cleanup_pytorch_vram()
-    ensure_vram_available(min_free_mb=12000, stage_name="before Pi3X")
+    ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before Pi3X")

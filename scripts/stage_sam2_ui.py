@@ -14,27 +14,14 @@ import cv2
 import numpy as np
 import torch
 
+from config_defaults import (
+    SAM2_MODEL_CONFIGS,
+    _SAM2_CIRCLE_OUTLINE_WIDTH,
+    _SAM2_CIRCLE_RADIUS,
+    _SAM2_MASK_COLOR,
+    _SAM2_MASK_OVERLAY_ALPHA,
+)
 from vram_utils import log_vram
-
-# SAM2 model configurations
-SAM2_MODEL_CONFIGS = {
-    "tiny": {
-        "config": "configs/sam2.1/sam2.1_hiera_t.yaml",
-        "hf_model_id": "facebook/sam2.1-hiera-tiny",
-    },
-    "small": {
-        "config": "configs/sam2.1/sam2.1_hiera_s.yaml",
-        "hf_model_id": "facebook/sam2.1-hiera-small",
-    },
-    "base": {
-        "config": "configs/sam2.1/sam2.1_hiera_b+.yaml",
-        "hf_model_id": "facebook/sam2.1-hiera-base-plus",
-    },
-    "large": {
-        "config": "configs/sam2.1/sam2.1_hiera_l.yaml",
-        "hf_model_id": "facebook/sam2.1-hiera-large",
-    },
-}
 
 _NORM_UPPER = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
 
@@ -132,11 +119,11 @@ def _create_mask_overlay(
     mask: np.ndarray | None,
     points: list[tuple[float, float]],
     labels: list[int],
-    alpha: float = 0.45,
+    alpha: float = _SAM2_MASK_OVERLAY_ALPHA,
 ) -> np.ndarray:
     """Draw segmentation mask overlay and click points on frame."""
     vis = frame.copy().astype(np.float32)
-    color = np.array([30, 144, 255], dtype=np.float32)  # Dodger blue
+    color = np.array(_SAM2_MASK_COLOR, dtype=np.float32)
     if mask is not None and mask.any():
         vis[mask] = vis[mask] * (1 - alpha) + color * alpha
     vis = np.clip(vis, 0, 255).astype(np.uint8)
@@ -147,8 +134,8 @@ def _create_mask_overlay(
         px = int(np.clip(round(nx * w), 0, w - 1))
         py = int(np.clip(round(ny * h), 0, h - 1))
         c = (0, 255, 0) if label == 1 else (255, 0, 0)
-        cv2.circle(vis, (px, py), 8, c, -1)
-        cv2.circle(vis, (px, py), 10, (255, 255, 255), 2)
+        cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS, c, -1)
+        cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS + _SAM2_CIRCLE_OUTLINE_WIDTH, (255, 255, 255), _SAM2_CIRCLE_OUTLINE_WIDTH)
     return vis
 
 

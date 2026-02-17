@@ -15,6 +15,22 @@ import cv2
 import numpy as np
 import torch
 
+from config_defaults import (
+    _PI3X_ALIGN_MAX_PLANAR_RATIO as _ALIGN_MAX_PLANAR_RATIO,
+    _PI3X_ALIGN_MIN_FRAMES as _ALIGN_MIN_FRAMES,
+    _PI3X_ALIGN_MIN_LINE_RATIO as _ALIGN_MIN_LINE_RATIO,
+    _PI3X_ALIGN_MIN_RADIUS as _ALIGN_MIN_RADIUS,
+    _PI3X_ALIGN_ORIENTATION_SCORE_EPS as _ALIGN_ORIENTATION_SCORE_EPS,
+    _PI3X_CHUNK_SCALE_MAX as _CHUNK_SCALE_MAX,
+    _PI3X_CHUNK_SCALE_MIN as _CHUNK_SCALE_MIN,
+    _PI3X_MAX_OOM_RETRIES as _MAX_OOM_RETRIES,
+    _PI3X_MIN_INFER_FRAMES as _MIN_INFER_FRAMES,
+    _PI3X_MIN_PIXEL_LIMIT as _MIN_PIXEL_LIMIT,
+    _PI3X_OOM_FRAME_REDUCTION_FACTOR as _OOM_FRAME_REDUCTION_FACTOR,
+    _PI3X_OOM_REDUCTION_FACTOR as _OOM_REDUCTION_FACTOR,
+    _PI3X_TARGET_PLANE_NORMAL,
+    _PI3X_USE_CHUNK_FALLBACK as _USE_CHUNK_FALLBACK,
+)
 from vram_utils import (
     cleanup_pytorch_vram,
     estimate_pi3x_frame_plan,
@@ -22,25 +38,7 @@ from vram_utils import (
     offload_module,
 )
 
-# OOM strategy: keep image detail first, then reduce resolution as a last resort.
-_OOM_FRAME_REDUCTION_FACTOR = 0.80
-_OOM_REDUCTION_FACTOR = 0.70
-_MIN_INFER_FRAMES = 12
-_MIN_PIXEL_LIMIT = 50_000
-_MAX_OOM_RETRIES = 7
-_USE_CHUNK_FALLBACK = True
-
-# Clamp per-chunk similarity scale to avoid catastrophic drift.
-_CHUNK_SCALE_MIN = 0.85
-_CHUNK_SCALE_MAX = 1.15
-
-# Camera-orbit plane alignment (Stage 2 output coordinate normalization)
-_ALIGN_MIN_FRAMES = 4
-_ALIGN_MIN_LINE_RATIO = 1e-3
-_ALIGN_MAX_PLANAR_RATIO = 0.35
-_ALIGN_MIN_RADIUS = 1e-4
-_ALIGN_ORIENTATION_SCORE_EPS = 1e-4
-_TARGET_PLANE_NORMAL = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+_TARGET_PLANE_NORMAL = np.array(_PI3X_TARGET_PLANE_NORMAL, dtype=np.float64)
 
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]

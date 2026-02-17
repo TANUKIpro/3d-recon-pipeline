@@ -13,73 +13,12 @@ from plyfile import PlyData, PlyElement
 from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
 
+from config_defaults import (
+    DENOISE_ALGORITHM_STEPS as ALGORITHM_STEPS,
+    DENOISE_PRESET_DEFAULTS as PRESET_DEFAULTS,
+)
+
 ProgressCallback = Callable[[float, str | None], None]
-
-ALGORITHM_STEPS: dict[str, tuple[str, ...]] = {
-    "dbscan_sor": ("dbscan", "sor"),
-    "dbscan_only": ("dbscan",),
-    "sor_only": ("sor",),
-    "radius_only": ("radius",),
-    "dbscan_radius": ("dbscan", "radius"),
-}
-
-PRESET_DEFAULTS: dict[str, dict[str, float | int | str]] = {
-    "balanced": {
-        "algorithm": "dbscan_sor",
-        "dbscan_eps": 0.0,
-        "dbscan_eps_ratio": 0.02,
-        "dbscan_min_samples": 10,
-        "dbscan_max_points": 500000,
-        "sor_neighbors": 20,
-        "sor_std_ratio": 2.0,
-        "radius_neighbors": 8,
-        "radius_ratio": 0.015,
-    },
-    "detail_preserving": {
-        "algorithm": "sor_only",
-        "dbscan_eps": 0.0,
-        "dbscan_eps_ratio": 0.02,
-        "dbscan_min_samples": 10,
-        "dbscan_max_points": 500000,
-        "sor_neighbors": 16,
-        "sor_std_ratio": 2.6,
-        "radius_neighbors": 8,
-        "radius_ratio": 0.015,
-    },
-    "isolate_subject": {
-        "algorithm": "dbscan_only",
-        "dbscan_eps": 0.0,
-        "dbscan_eps_ratio": 0.018,
-        "dbscan_min_samples": 8,
-        "dbscan_max_points": 500000,
-        "sor_neighbors": 20,
-        "sor_std_ratio": 2.0,
-        "radius_neighbors": 8,
-        "radius_ratio": 0.015,
-    },
-    "sparse_noise": {
-        "algorithm": "radius_only",
-        "dbscan_eps": 0.0,
-        "dbscan_eps_ratio": 0.02,
-        "dbscan_min_samples": 10,
-        "dbscan_max_points": 500000,
-        "sor_neighbors": 20,
-        "sor_std_ratio": 2.0,
-        "radius_neighbors": 6,
-        "radius_ratio": 0.012,
-    },
-    "aggressive_cleanup": {
-        "algorithm": "dbscan_radius",
-        "dbscan_eps": 0.0,
-        "dbscan_eps_ratio": 0.024,
-        "dbscan_min_samples": 14,
-        "dbscan_max_points": 500000,
-        "sor_neighbors": 20,
-        "sor_std_ratio": 2.0,
-        "radius_neighbors": 10,
-        "radius_ratio": 0.02,
-    },
-}
 
 
 def _emit_progress(
