@@ -203,6 +203,7 @@ export class ConfigPanel {
     this.onStart = null;  // callback(config)
     this.onCancel = null; // callback()
     this.onObjectSelected = null; // callback(objectName|null)
+    this.onCropScaleChanged = null; // callback(cropScale: number)
     this._videoMeta = null;
     this._maxFramesAuto = true;
     this._extractDefaults = { frame_interval: 10, max_frames: 50 };
@@ -317,6 +318,13 @@ export class ConfigPanel {
 
   getMeshMethod() {
     return this._inputs.mesh_method?.value || 'poisson';
+  }
+
+  getCropScale() {
+    return this._parsePositiveFloat(
+      this._inputs.meshwrap_crop_scale?.value,
+      MESHWRAP_DEFAULTS.meshwrap_crop_scale,
+    );
   }
 
   getConfig() {
@@ -1023,6 +1031,9 @@ export class ConfigPanel {
 
   _onMeshWrapInputChanged() {
     this._updateMeshWrapSummary();
+    if (this.onCropScaleChanged) {
+      this.onCropScaleChanged(this.getCropScale());
+    }
   }
 
   _resetMeshWrapParams() {
@@ -1030,6 +1041,9 @@ export class ConfigPanel {
       if (this._inputs[key]) this._inputs[key].value = String(val);
     }
     this._updateMeshWrapSummary();
+    if (this.onCropScaleChanged) {
+      this.onCropScaleChanged(this.getCropScale());
+    }
   }
 
   _applyClassicalPreset(name) {

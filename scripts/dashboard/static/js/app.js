@@ -99,6 +99,10 @@ preview.onMeshRepairSelectionChanged = (selectedIds) => {
   updateMeshRepairStatus(selectedIds);
 };
 
+config.onCropScaleChanged = (cropScale) => {
+  preview.updateCropBbox(cropScale);
+};
+
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
 document.addEventListener('stage-activated', async (e) => {
@@ -114,6 +118,16 @@ document.addEventListener('stage-activated', async (e) => {
       preview.activateStage(stage);
     }
   }
+
+  // Show crop bbox preview when Stage 6 is activated with Stage 5 done and Stage 6 not yet done
+  if (stage === 6) {
+    const s5 = stageCtrl.getStageState(5);
+    const s6 = stageCtrl.getStageState(6);
+    if (s5 === 'complete' && s6 !== 'complete') {
+      await preview.showCropBbox(config.getCropScale());
+    }
+  }
+
   setTaskConfirmVisibleStage(stage);
 });
 
@@ -290,6 +304,11 @@ ws.on('stage_start', (msg) => {
     setMeshPhaseStatus('Classical Mesh started.', 'live');
   } else if (Number(msg.stage) === 5 && _meshMethod !== 'poisson') {
     setMeshPhaseStatus('', '');
+  }
+  if (Number(msg.stage) === 6) {
+    preview.showCropBbox(config.getCropScale()).catch((e) => {
+      console.warn('Crop bbox preview failed:', e);
+    });
   }
 });
 
@@ -1284,6 +1303,9 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
     }
   } else if (statusMsg.running && Number(statusMsg.current_stage) === 5 && isPoissonMesh) {
     setMeshPhaseStatus('Running: Classical Mesh', 'live');
+  }
+  if (isStageDone(statusMsg, 5) && !isStageDone(statusMsg, 6)) {
+    await preview.showCropBbox(config.getCropScale());
   }
   if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
   if (isStageDone(statusMsg, 7)) await preview.loadStageResult(7);

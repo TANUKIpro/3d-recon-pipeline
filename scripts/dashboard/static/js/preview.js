@@ -47,6 +47,10 @@ export class PreviewPanel {
         confirmed: 0x2ecc71,
       },
     };
+    this._cropBbox = {
+      helper: null,        // THREE.Box3Helper
+      sourceBbox: null,    // THREE.Box3 (centered mesh AABB)
+    };
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -311,6 +315,9 @@ export class PreviewPanel {
   _clearStageScene(stageNum) {
     const stage = this._stages[stageNum];
     if (!stage) return;
+    if (stageNum === 6) {
+      this.clearCropBbox();
+    }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
     }
@@ -455,6 +462,89 @@ export class PreviewPanel {
 
   getMeshRepairSelectedLoopIds() {
     return Array.from(this._meshRepair.selected).sort((a, b) => a - b);
+  }
+
+  /**
+   * Show crop bounding box overlay on Stage 6 scene.
+   * Loads Stage 5 output mesh into Stage 6 and draws a scaled AABB wireframe.
+   */
+  async showCropBbox(cropScale) {
+    const loaded = await this.loadStageResult(6, {
+      file: 'object_mesh.ply',
+      renderMode: 'mesh',
+      stripVertexColors: true,
+      enableShadows: true,
+    });
+    if (!loaded) return;
+
+    const stage = this._stages[6];
+    if (!stage?.currentObject) return;
+
+    // Get geometry bounding box from the loaded mesh (already centered).
+    let geometry = null;
+    stage.currentObject.traverse((node) => {
+      if (!geometry && node.geometry) geometry = node.geometry;
+    });
+    if (!geometry) return;
+
+    geometry.computeBoundingBox();
+    this._cropBbox.sourceBbox = geometry.boundingBox.clone();
+    this._createCropBboxHelper(cropScale);
+
+    const empty = document.getElementById('stage-6-empty');
+    if (empty) empty.classList.add('hidden');
+  }
+
+  _createCropBboxHelper(cropScale) {
+    const stage = this._stages[6];
+    if (!stage?.sceneRoot || !this._cropBbox.sourceBbox) return;
+
+    // Remove stale helper if exists
+    if (this._cropBbox.helper) {
+      stage.sceneRoot.remove(this._cropBbox.helper);
+      this._disposeObject(this._cropBbox.helper);
+      this._cropBbox.helper = null;
+    }
+
+    const scale = Math.max(0.01, Number(cropScale) || 1.0);
+    const scaledBox = new THREE.Box3(
+      this._cropBbox.sourceBbox.min.clone().multiplyScalar(scale),
+      this._cropBbox.sourceBbox.max.clone().multiplyScalar(scale),
+    );
+
+    const helper = new THREE.Box3Helper(scaledBox, new THREE.Color(0x00ccff));
+    helper.material.transparent = true;
+    helper.material.opacity = 0.7;
+    stage.sceneRoot.add(helper);
+    this._cropBbox.helper = helper;
+  }
+
+  updateCropBbox(cropScale) {
+    if (!this._cropBbox.sourceBbox) return;
+
+    const stage = this._stages[6];
+    if (!stage?.sceneRoot) return;
+
+    // Remove old helper
+    if (this._cropBbox.helper) {
+      stage.sceneRoot.remove(this._cropBbox.helper);
+      this._disposeObject(this._cropBbox.helper);
+      this._cropBbox.helper = null;
+    }
+
+    this._createCropBboxHelper(cropScale);
+  }
+
+  clearCropBbox() {
+    const stage = this._stages[6];
+    if (this._cropBbox.helper) {
+      if (stage?.sceneRoot) {
+        stage.sceneRoot.remove(this._cropBbox.helper);
+      }
+      this._disposeObject(this._cropBbox.helper);
+      this._cropBbox.helper = null;
+    }
+    this._cropBbox.sourceBbox = null;
   }
 
   _applyStageCenterOffset(stage, point3) {
@@ -960,6 +1050,9 @@ export class PreviewPanel {
   async _loadPLYIntoStage(stageNum, relativePath, opts = {}) {
     const stage = this._stages[stageNum];
     if (!stage) return false;
+    if (stageNum === 6) {
+      this.clearCropBbox();
+    }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
     }
