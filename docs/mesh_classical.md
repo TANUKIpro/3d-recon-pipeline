@@ -24,6 +24,7 @@
 - `<output_dir>/object_mesh_raw.ply`
 - `<output_dir>/object_mesh_postprocessed.ply`
 - `<output_dir>/object_mesh.ply` (最終)
+- `<output_dir>/object_mesh_preview.ply` (表示用軽量メッシュ)
 
 補助出力:
 

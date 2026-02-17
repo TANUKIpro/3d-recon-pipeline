@@ -41,6 +41,7 @@ _DEFAULT_AUTO_SMOOTH = False
 _DEFAULT_DOWNSAMPLE_ENABLED = True
 _DEFAULT_DOWNSAMPLE_TARGET_FACES = 120_000
 _DEFAULT_DOWNSAMPLE_TRIGGER_FACES = 170_000
+_DEFAULT_PREVIEW_TARGET_FACES = 120_000
 
 
 @dataclass(frozen=True)
@@ -384,6 +385,55 @@ def _downsample_mesh_if_needed(
     return simplified, True, before_faces, after_faces
 
 
+def _build_preview_mesh(
+    mesh: o3d.geometry.TriangleMesh,
+    *,
+    target_faces: int,
+) -> tuple[o3d.geometry.TriangleMesh, bool, int, int]:
+    before_faces = int(len(mesh.triangles))
+    if before_faces == 0 or len(mesh.vertices) == 0:
+        raise ValueError("Mesh is empty.")
+
+    effective_target = min(max(4, int(target_faces)), max(4, before_faces - 1))
+    if before_faces <= effective_target:
+        return mesh, False, before_faces, before_faces
+
+    simplified = mesh.simplify_quadric_decimation(effective_target)
+    if len(simplified.vertices) == 0 or len(simplified.triangles) == 0:
+        return mesh, False, before_faces, before_faces
+
+    simplified.remove_degenerate_triangles()
+    simplified.remove_duplicated_triangles()
+    simplified.remove_duplicated_vertices()
+    simplified.remove_non_manifold_edges()
+    simplified.remove_unreferenced_vertices()
+    simplified.compute_vertex_normals()
+
+    after_faces = int(len(simplified.triangles))
+    if after_faces == 0:
+        return mesh, False, before_faces, before_faces
+    return simplified, True, before_faces, after_faces
+
+
+def generate_preview_mesh(
+    source_mesh_ply: str | Path,
+    preview_mesh_ply: str | Path,
+    *,
+    target_faces: int = _DEFAULT_PREVIEW_TARGET_FACES,
+) -> tuple[int, int, bool]:
+    """Generate a lightweight preview mesh for UI display."""
+    source_mesh = o3d.io.read_triangle_mesh(str(source_mesh_ply))
+    if len(source_mesh.vertices) == 0 or len(source_mesh.triangles) == 0:
+        raise ValueError(f"Mesh is empty: {source_mesh_ply}")
+
+    preview_mesh, downsampled, before_faces, after_faces = _build_preview_mesh(
+        source_mesh,
+        target_faces=max(1000, int(target_faces)),
+    )
+    _write_mesh_safe(Path(preview_mesh_ply), preview_mesh)
+    return before_faces, after_faces, downsampled
+
+
 def _prepare_output_dirs(output_dir: str) -> tuple[Path, Path]:
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -650,6 +700,30 @@ def run_classical_downsample(
     final_vertices, final_faces = mesh_vertex_face_count(final_path)
     print(f"Saved final mesh: {final_path}")
     print(f"  Final vertices: {final_vertices:,}, Faces: {final_faces:,}")
+
+    preview_path = output_path / "object_mesh_preview.ply"
+    preview_copy_path = classical_dir / "object_mesh_preview.ply"
+    try:
+        preview_mesh, preview_downsampled, preview_before_faces, preview_after_faces = _build_preview_mesh(
+            downsample_mesh,
+            target_faces=_DEFAULT_PREVIEW_TARGET_FACES,
+        )
+        _write_mesh_safe(preview_path, preview_mesh)
+        _write_mesh_safe(preview_copy_path, preview_mesh)
+        if preview_downsampled:
+            print(
+                "Preview mesh generated: "
+                f"{preview_before_faces:,} -> {preview_after_faces:,} faces "
+                f"(target={_DEFAULT_PREVIEW_TARGET_FACES:,})"
+            )
+        else:
+            print(
+                "Preview mesh generated without simplification: "
+                f"faces={preview_before_faces:,} (target={_DEFAULT_PREVIEW_TARGET_FACES:,})"
+            )
+    except Exception as e:
+        print(f"Preview mesh generation skipped (non-fatal): {e}")
+
     _emit_progress(progress_cb, 100.0, "Classical/Downsample: complete")
     return final_path
 

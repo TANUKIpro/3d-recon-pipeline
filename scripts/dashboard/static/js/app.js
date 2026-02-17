@@ -124,7 +124,7 @@ document.addEventListener('stage-activated', async (e) => {
     const s5 = stageCtrl.getStageState(5);
     const s6 = stageCtrl.getStageState(6);
     if (s5 === 'complete' && s6 !== 'complete') {
-      await preview.showCropBbox(config.getCropScale());
+      await preview.showCropBbox(config.getCropScale(), { preferPreview: _meshMethod === 'poisson' });
     }
   }
 
@@ -306,7 +306,7 @@ ws.on('stage_start', (msg) => {
     setMeshPhaseStatus('', '');
   }
   if (Number(msg.stage) === 6) {
-    preview.showCropBbox(config.getCropScale()).catch((e) => {
+    preview.showCropBbox(config.getCropScale(), { preferPreview: _meshMethod === 'poisson' }).catch((e) => {
       console.warn('Crop bbox preview failed:', e);
     });
   }
@@ -346,6 +346,8 @@ ws.on('stage_complete', async (msg) => {
   } else if (msg.stage === 3) {
     // SAM2 complete — reload Pi3X viewer with filtered object.ply
     await preview.loadPi3xResults(cameraOverlay, 'object.ply');
+  } else if (msg.stage === 5) {
+    await preview.loadStageResult(5, { preferPreview: _meshMethod === 'poisson' });
   } else if (msg.stage >= 4 && msg.stage <= 8) {
     await preview.loadStageResult(msg.stage);
   }
@@ -909,7 +911,7 @@ async function applyMeshPostprocess({ resetToRaw = false } = {}) {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
 
-    await preview.loadStageResult(5);
+    await preview.loadStageResult(5, { preferPreview: _meshMethod === 'poisson' });
     if (_meshMethod === 'poisson') {
       setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
     }
@@ -1295,7 +1297,7 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
 
   if (isStageDone(statusMsg, 4)) await preview.loadStageResult(4);
   if (isStageDone(statusMsg, 5)) {
-    await preview.loadStageResult(5);
+    await preview.loadStageResult(5, { preferPreview: isPoissonMesh });
     if (isPoissonMesh) {
       setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
     } else {
@@ -1305,7 +1307,7 @@ async function hydrateOutputsFromStatus(statusMsg, opts = {}) {
     setMeshPhaseStatus('Running: Classical Mesh', 'live');
   }
   if (isStageDone(statusMsg, 5) && !isStageDone(statusMsg, 6)) {
-    await preview.showCropBbox(config.getCropScale());
+    await preview.showCropBbox(config.getCropScale(), { preferPreview: isPoissonMesh });
   }
   if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
   if (isStageDone(statusMsg, 7)) await preview.loadStageResult(7);
