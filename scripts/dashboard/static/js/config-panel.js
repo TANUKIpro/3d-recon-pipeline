@@ -121,7 +121,15 @@ const CLASSICAL_DEFAULTS = {
 };
 
 const CLASSICAL_PRESETS = {
-  default: { ...CLASSICAL_DEFAULTS },
+  lightweight: {
+    classical_preprocess_enabled: true,
+    classical_poisson_depth: 9,
+    classical_density_trim_q: 0.005,
+    classical_auto_smooth: false,
+    classical_smooth_iterations: 2,
+    classical_downsample_enabled: true,
+    classical_downsample_target_faces: 120000,
+  },
   trust_point_cloud: {
     classical_preprocess_enabled: false,
     classical_poisson_depth: 11,

@@ -37,7 +37,7 @@
     "meshwrap_crop_scale": 1.03,
     "meshwrap_sample_points": 400000,
     "meshwrap_normal_radius_ratio": 0.02,
-    "classical_preset": "default",
+    "classical_preset": "lightweight",
     "classical_preprocess_enabled": true,
     "classical_poisson_depth": 9,
     "classical_density_trim_q": 0.005,

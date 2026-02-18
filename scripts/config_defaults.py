@@ -140,7 +140,7 @@ CLASSICAL_DOWNSAMPLE_ENABLED = False
 CLASSICAL_DOWNSAMPLE_TARGET_FACES = 500_000
 CLASSICAL_DOWNSAMPLE_TRIGGER_FACES = 170_000
 CLASSICAL_PRESET_DEFAULTS: dict[str, dict[str, object]] = {
-    "default": {
+    "lightweight": {
         "classical_preprocess_enabled": True,
         "classical_poisson_depth": 9,
         "classical_density_trim_q": 0.005,

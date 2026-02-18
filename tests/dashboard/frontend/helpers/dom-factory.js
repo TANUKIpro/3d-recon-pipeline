@@ -193,7 +193,7 @@ export function buildConfigPanelDOM() {
       <button id="btn-classical-reset">Reset</button>
 
       <select id="cfg-classical-preset">
-        <option value="default">Default</option>
+        <option value="lightweight">Lightweight</option>
         <option value="trust_point_cloud">Trust Point Cloud</option>
         <option value="custom">Custom</option>
       </select>
