@@ -194,7 +194,7 @@ export function buildConfigPanelDOM() {
 
       <select id="cfg-classical-preset">
         <option value="lightweight">Lightweight</option>
-        <option value="trust_point_cloud">Trust Point Cloud</option>
+        <option value="trust_point_cloud" selected>Trust Point Cloud</option>
         <option value="custom">Custom</option>
       </select>
       <input type="checkbox" id="cfg-classical-preprocess" checked>
