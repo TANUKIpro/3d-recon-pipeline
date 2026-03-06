@@ -829,7 +829,15 @@ async def preview_file(path: str):
         ".json": "application/json",
     }
     mt = media_types.get(target.suffix.lower(), "application/octet-stream")
-    return FileResponse(str(target), media_type=mt)
+    return FileResponse(
+        str(target),
+        media_type=mt,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/preview/crop-obb")

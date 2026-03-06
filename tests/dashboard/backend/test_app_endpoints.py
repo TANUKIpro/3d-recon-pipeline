@@ -19,6 +19,7 @@ from scripts.dashboard.app import (
     mesh_repair_candidates,
     pipeline_cancel,
     pipeline_confirm_next,
+    preview_file,
     pipeline_status,
     sam2_approve,
     sam2_click,
@@ -436,6 +437,32 @@ class TestMeshRepairCandidatesEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertIn("candidate", payload["color_scheme"])
         self.assertIn("selected", payload["color_scheme"])
         self.assertIn("confirmed", payload["color_scheme"])
+
+
+# ── Preview file endpoint ─────────────────────────────────────────
+
+
+class TestPreviewFileEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_output_dir = session.config.output_dir
+        self._tmp = tempfile.TemporaryDirectory()
+        session.config.output_dir = self._tmp.name
+
+    def tearDown(self) -> None:
+        session.config.output_dir = self._orig_output_dir
+        self._tmp.cleanup()
+
+    async def test_preview_file_sets_no_store_cache_headers(self) -> None:
+        out = Path(session.config.output_dir)
+        target = out / "object_full.ply"
+        target.write_text("ply\n", encoding="utf-8")
+
+        response = await preview_file("object_full.ply")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store, max-age=0")
+        self.assertEqual(response.headers.get("pragma"), "no-cache")
+        self.assertEqual(response.headers.get("expires"), "0")
 
 
 if __name__ == "__main__":

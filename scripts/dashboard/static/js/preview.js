@@ -856,9 +856,10 @@ export class PreviewPanel {
     if (!stage) return;
     stage.centerOffset = null;
     cameraOverlay.remove();
+    const cacheToken = this._nextPreviewRevision();
 
     // Load point cloud
-    const loaded = await this._loadPLYIntoStage(2, plyFile);
+    const loaded = await this._loadPLYIntoStage(2, plyFile, { cacheToken });
     if (!loaded) {
       console.warn(`Pi3X point cloud not ready: ${plyFile}`);
       if (empty) empty.classList.remove('hidden');
@@ -877,7 +878,7 @@ export class PreviewPanel {
     // Load camera poses
     let cameraLoaded = false;
     try {
-      const res = await fetch('/api/preview/file/camera_poses.json');
+      const res = await fetch(this._buildPreviewFileUrl('camera_poses.json', cacheToken));
       if (res.ok) {
         const data = await res.json();
 
@@ -977,10 +978,10 @@ export class PreviewPanel {
     }
   }
 
-  async _ensureSceneFlipForStage(stageNum) {
+  async _ensureSceneFlipForStage(stageNum, cacheToken = null) {
     if (stageNum < 4 || stageNum > 8) return;
     if (this._sceneFlipX == null) {
-      this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses();
+      this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses(cacheToken);
     }
     const stage = this._stages[stageNum];
     if (stage?.sceneRoot) {
@@ -988,9 +989,9 @@ export class PreviewPanel {
     }
   }
 
-  async _resolveSceneFlipFromCameraPoses() {
+  async _resolveSceneFlipFromCameraPoses(cacheToken = null) {
     try {
-      const res = await fetch('/api/preview/file/camera_poses.json');
+      const res = await fetch(this._buildPreviewFileUrl('camera_poses.json', cacheToken));
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
@@ -1218,15 +1219,15 @@ export class PreviewPanel {
     const fileName = file.split('/').pop()?.toLowerCase() || '';
     const isFirstMeshPreview = FIRST_MESH_PREVIEW_FILES.has(fileName);
 
+    const cacheToken = opts.cacheToken ?? this._nextPreviewRevision();
     await this.initSceneForStage(stageNum);
-    await this._ensureSceneFlipForStage(stageNum);
+    await this._ensureSceneFlipForStage(stageNum, cacheToken);
     this.activateStage(stageNum);
 
     // Toggle empty placeholder based on load result.
     const empty = document.getElementById(`stage-${stageNum}-empty`);
 
     const ext = file.split('.').pop().toLowerCase();
-    const cacheToken = opts.cacheToken ?? this._nextPreviewRevision();
     const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
     const stripVertexColors = opts.stripVertexColors ?? isFirstMeshPreview;
     const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
