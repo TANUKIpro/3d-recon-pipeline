@@ -33,6 +33,7 @@ from config_defaults import (
     _MESHWRAP_POISSON_LINEAR_FIT as _DEFAULT_WRAP_POISSON_LINEAR_FIT,
     _MESHWRAP_PRESERVE_INPUT_ON_FAILURE as _DEFAULT_WRAP_PRESERVE_INPUT_ON_FAILURE,
 )
+from mesh_orientation import orient_faces_outward
 
 ProgressCallback = Callable[[float, str | None], None]
 
@@ -462,6 +463,21 @@ def run_mesh_wrap(
                 f"(reason: {e})"
             )
             wrapped = source_mesh
+
+    wrapped_vertices = np.asarray(wrapped.vertices)
+    wrapped_faces = np.asarray(wrapped.triangles)
+    oriented_faces, flipped, ratio_before, ratio_after = orient_faces_outward(
+        wrapped_vertices,
+        wrapped_faces,
+        min_outward_ratio=0.5,
+    )
+    if flipped:
+        wrapped.triangles = o3d.utility.Vector3iVector(oriented_faces.astype(np.int32))
+        wrapped.compute_vertex_normals()
+        print(
+            "Mesh Wrap orientation fix: flipped face winding "
+            f"(outward_ratio {ratio_before:.3f} -> {ratio_after:.3f})"
+        )
 
     _emit_progress(progress_cb, 94.0, "Mesh Wrap: saving wrapped mesh")
     _write_mesh_safe(wrapped_path, wrapped)

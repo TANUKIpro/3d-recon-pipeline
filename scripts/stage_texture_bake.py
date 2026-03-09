@@ -29,6 +29,7 @@ from config_defaults import (
     _TEXTURE_MASK_BUDGET_RATIO,
     _TEXTURE_MEM_FALLBACK_MB,
 )
+from mesh_orientation import orient_faces_outward
 
 try:
     import torch
@@ -769,7 +770,17 @@ def bake_texture(
         vertices.astype(np.float32), faces.astype(np.uint32)
     )
     new_vertices = vertices[vmapping]
+    new_faces, flipped_winding, ratio_before, ratio_after = orient_faces_outward(
+        new_vertices,
+        new_faces,
+        min_outward_ratio=0.5,
+    )
     print(f"  {len(new_vertices)} verts, {len(new_faces)} faces")
+    if flipped_winding:
+        print(
+            "  Orientation fix: flipped UV faces "
+            f"(outward_ratio {ratio_before:.3f} -> {ratio_after:.3f})"
+        )
 
     # Face normals
     v0 = new_vertices[new_faces[:, 0]]
