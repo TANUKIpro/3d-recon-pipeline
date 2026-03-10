@@ -482,6 +482,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.meshwrap_crop_scale,
                 cfg.meshwrap_sample_points,
                 cfg.meshwrap_normal_radius_ratio,
+                cfg.meshwrap_smooth_iterations,
+                cfg.meshwrap_quality_threshold,
+                cfg.meshwrap_method,
+                cfg.meshwrap_alpha_ratio,
+                cfg.meshwrap_offset_ratio,
             )
             wrapped_mesh = Path(output_dir) / "object_mesh_wrapped.ply"
             if wrapped_mesh.is_file():

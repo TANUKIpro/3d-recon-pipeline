@@ -18,13 +18,17 @@ from scripts.config_defaults import (
     EXTRACT_MAX_FRAMES,
     MESH_DEFAULT_METHOD,
     MESH_METHODS,
+    MESHWRAP_ALPHA_RATIO,
     MESHWRAP_CROP_SCALE,
     MESHWRAP_DENSITY_TRIM_Q,
     MESHWRAP_ITERATIONS,
     MESHWRAP_NORMAL_RADIUS_RATIO,
+    MESHWRAP_OFFSET_RATIO,
     MESHWRAP_POISSON_DEPTH,
     MESHWRAP_POISSON_SCALE,
+    MESHWRAP_QUALITY_THRESHOLD,
     MESHWRAP_SAMPLE_POINTS,
+    MESHWRAP_SMOOTH_ITERATIONS,
     MESHWRAP_TARGET_FACE_RATIO,
     PI3X_CONFIDENCE_THRESHOLD,
     PI3X_EDGE_RTOL,
@@ -35,6 +39,8 @@ from scripts.config_defaults import (
     REPAIR_Y_BAND_RATIO,
     SAM2_DEFAULT_MODEL,
     TEXTURE_SIZE,
+    _MESHWRAP_METHOD,
+    _MESHWRAP_METHODS,
 )
 from scripts.config_defaults import DENOISE_ALGORITHMS  # re-export
 from scripts.dashboard.state import PipelineConfig
@@ -254,6 +260,27 @@ def build_pipeline_config(
         meshwrap_normal_radius_ratio=max(
             0.001,
             parse_float(raw.get("meshwrap_normal_radius_ratio"), MESHWRAP_NORMAL_RADIUS_RATIO),
+        ),
+        meshwrap_smooth_iterations=max(
+            0,
+            min(10, parse_int(raw.get("meshwrap_smooth_iterations"), MESHWRAP_SMOOTH_ITERATIONS)),
+        ),
+        meshwrap_quality_threshold=max(
+            0.0,
+            min(1.0, parse_float(raw.get("meshwrap_quality_threshold"), MESHWRAP_QUALITY_THRESHOLD)),
+        ),
+        meshwrap_method=parse_choice(
+            raw.get("meshwrap_method"),
+            _MESHWRAP_METHODS,
+            _MESHWRAP_METHOD,
+        ),
+        meshwrap_alpha_ratio=max(
+            0.001,
+            min(0.2, parse_float(raw.get("meshwrap_alpha_ratio"), MESHWRAP_ALPHA_RATIO)),
+        ),
+        meshwrap_offset_ratio=max(
+            0.01,
+            min(2.0, parse_float(raw.get("meshwrap_offset_ratio"), MESHWRAP_OFFSET_RATIO)),
         ),
         classical_preset=classical_preset,
         classical_preprocess_enabled=parse_bool(

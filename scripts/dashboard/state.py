@@ -29,13 +29,17 @@ from scripts.config_defaults import (
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
     MESH_DEFAULT_METHOD,
+    MESHWRAP_ALPHA_RATIO,
     MESHWRAP_CROP_SCALE,
     MESHWRAP_DENSITY_TRIM_Q,
     MESHWRAP_ITERATIONS,
     MESHWRAP_NORMAL_RADIUS_RATIO,
+    MESHWRAP_OFFSET_RATIO,
     MESHWRAP_POISSON_DEPTH,
     MESHWRAP_POISSON_SCALE,
+    MESHWRAP_QUALITY_THRESHOLD,
     MESHWRAP_SAMPLE_POINTS,
+    MESHWRAP_SMOOTH_ITERATIONS,
     MESHWRAP_TARGET_FACE_RATIO,
     PI3X_CONFIDENCE_THRESHOLD,
     PI3X_EDGE_RTOL,
@@ -47,6 +51,7 @@ from scripts.config_defaults import (
     REPAIR_Y_BAND_RATIO,
     SAM2_DEFAULT_MODEL,
     TEXTURE_SIZE,
+    _MESHWRAP_METHOD,
     _OUTPUT_DIR_DEFAULT,
 )
 
@@ -146,6 +151,7 @@ class PipelineConfig:
     diffcd_batch_size: int = DIFFCD_BATCH_SIZE
     diffcd_n_batches: int = DIFFCD_N_BATCHES
     diffcd_resolution: int = DIFFCD_RESOLUTION
+    meshwrap_method: str = _MESHWRAP_METHOD
     meshwrap_poisson_depth: int = MESHWRAP_POISSON_DEPTH
     meshwrap_poisson_scale: float = MESHWRAP_POISSON_SCALE
     meshwrap_density_trim_q: float = MESHWRAP_DENSITY_TRIM_Q
@@ -154,6 +160,10 @@ class PipelineConfig:
     meshwrap_crop_scale: float = MESHWRAP_CROP_SCALE
     meshwrap_sample_points: int = MESHWRAP_SAMPLE_POINTS
     meshwrap_normal_radius_ratio: float = MESHWRAP_NORMAL_RADIUS_RATIO
+    meshwrap_smooth_iterations: int = MESHWRAP_SMOOTH_ITERATIONS
+    meshwrap_quality_threshold: float = MESHWRAP_QUALITY_THRESHOLD
+    meshwrap_alpha_ratio: float = MESHWRAP_ALPHA_RATIO
+    meshwrap_offset_ratio: float = MESHWRAP_OFFSET_RATIO
     classical_preset: str = CLASSICAL_DEFAULT_PRESET
     classical_preprocess_enabled: bool = CLASSICAL_PREPROCESS_ENABLED
     classical_poisson_depth: int = CLASSICAL_POISSON_DEPTH
