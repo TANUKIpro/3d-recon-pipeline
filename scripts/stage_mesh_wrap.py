@@ -1,4 +1,4 @@
-"""Stage 6: mesh wrapping via iterative Poisson reconstruction.
+"""Stage 6: mesh wrapping via iterative Poisson reconstruction or CGAL alpha wrap.
 
 This stage creates a closed "outer shell" mesh from the Stage 5 mesh.
 The wrapped output is used as texture baking input to improve UV robustness.
@@ -15,23 +15,31 @@ import numpy as np
 import open3d as o3d
 
 from config_defaults import (
+    MESHWRAP_ALPHA_RATIO as _DEFAULT_WRAP_ALPHA_RATIO,
     MESHWRAP_CROP_SCALE as _DEFAULT_WRAP_CROP_SCALE,
     MESHWRAP_DENSITY_TRIM_Q as _DEFAULT_WRAP_DENSITY_TRIM_Q,
     MESHWRAP_ITERATIONS as _DEFAULT_WRAP_ITERATIONS,
     MESHWRAP_NORMAL_RADIUS_RATIO as _DEFAULT_WRAP_NORMAL_RADIUS_RATIO,
+    MESHWRAP_OFFSET_RATIO as _DEFAULT_WRAP_OFFSET_RATIO,
     MESHWRAP_POISSON_DEPTH as _DEFAULT_WRAP_POISSON_DEPTH,
     MESHWRAP_POISSON_SCALE as _DEFAULT_WRAP_POISSON_SCALE,
+    MESHWRAP_QUALITY_THRESHOLD as _DEFAULT_WRAP_QUALITY_THRESHOLD,
     MESHWRAP_SAMPLE_POINTS as _DEFAULT_WRAP_SAMPLE_POINTS,
+    MESHWRAP_SMOOTH_ITERATIONS as _DEFAULT_WRAP_SMOOTH_ITERATIONS,
     MESHWRAP_TARGET_FACE_RATIO as _DEFAULT_WRAP_TARGET_FACE_RATIO,
     _MESHWRAP_ENABLED as _DEFAULT_WRAP_ENABLED,
     _MESHWRAP_KEEP_LARGEST_COMPONENT as _DEFAULT_WRAP_KEEP_LARGEST_COMPONENT,
     _MESHWRAP_MAX_FACES as _DEFAULT_WRAP_MAX_FACES,
     _MESHWRAP_METHOD as _DEFAULT_WRAP_METHOD,
+    _MESHWRAP_METHODS as _VALID_METHODS,
     _MESHWRAP_MIN_FACES as _DEFAULT_WRAP_MIN_FACES,
     _MESHWRAP_NORMAL_MAX_NN as _DEFAULT_WRAP_NORMAL_MAX_NN,
     _MESHWRAP_NORMAL_ORIENT_K as _DEFAULT_WRAP_NORMAL_ORIENT_K,
     _MESHWRAP_POISSON_LINEAR_FIT as _DEFAULT_WRAP_POISSON_LINEAR_FIT,
     _MESHWRAP_PRESERVE_INPUT_ON_FAILURE as _DEFAULT_WRAP_PRESERVE_INPUT_ON_FAILURE,
+    _MESHWRAP_QUALITY_SAMPLE_POINTS as _DEFAULT_WRAP_QUALITY_SAMPLE_POINTS,
+    _MESHWRAP_SMOOTH_LAMBDA as _DEFAULT_WRAP_SMOOTH_LAMBDA,
+    _MESHWRAP_SMOOTH_NU as _DEFAULT_WRAP_SMOOTH_NU,
 )
 from mesh_orientation import orient_faces_outward
 
@@ -57,6 +65,10 @@ class MeshWrapParams:
     min_faces: int
     max_faces: int
     preserve_input_on_failure: bool
+    smooth_iterations: int
+    quality_threshold: float
+    alpha_ratio: float
+    offset_ratio: float
 
 
 def _emit_progress(
@@ -100,8 +112,15 @@ def _resolve_params(overrides: dict | None = None) -> MeshWrapParams:
     """Build MeshWrapParams with priority: overrides (UI) > env vars > defaults."""
     ov = overrides or {}
 
-    method = str(os.environ.get("MESH_WRAP_METHOD", _DEFAULT_WRAP_METHOD)).strip().lower()
-    if method not in {"poisson_iterative", "ipsr"}:
+    # Method resolution: override > env > default
+    if "method" in ov and ov["method"] is not None:
+        method = str(ov["method"]).strip().lower()
+    else:
+        method = str(os.environ.get("MESH_WRAP_METHOD", _DEFAULT_WRAP_METHOD)).strip().lower()
+    # Accept legacy "ipsr" as alias for "poisson_iterative"
+    if method == "ipsr":
+        method = "poisson_iterative"
+    if method not in _VALID_METHODS:
         print(
             f"Unknown MESH_WRAP_METHOD='{method}', fallback to '{_DEFAULT_WRAP_METHOD}'."
         )
@@ -167,6 +186,22 @@ def _resolve_params(overrides: dict | None = None) -> MeshWrapParams:
         preserve_input_on_failure=_env_bool(
             "MESH_WRAP_PRESERVE_INPUT_ON_FAILURE",
             _DEFAULT_WRAP_PRESERVE_INPUT_ON_FAILURE,
+        ),
+        smooth_iterations=max(
+            0,
+            _val_int("smooth_iterations", "MESH_WRAP_SMOOTH_ITERATIONS", _DEFAULT_WRAP_SMOOTH_ITERATIONS),
+        ),
+        quality_threshold=max(
+            0.0,
+            _val_float("quality_threshold", "MESH_WRAP_QUALITY_THRESHOLD", _DEFAULT_WRAP_QUALITY_THRESHOLD),
+        ),
+        alpha_ratio=max(
+            0.001,
+            _val_float("alpha_ratio", "MESH_WRAP_ALPHA_RATIO", _DEFAULT_WRAP_ALPHA_RATIO),
+        ),
+        offset_ratio=max(
+            0.01,
+            _val_float("offset_ratio", "MESH_WRAP_OFFSET_RATIO", _DEFAULT_WRAP_OFFSET_RATIO),
         ),
     )
 
@@ -248,6 +283,120 @@ def _estimate_orient_normals(
     pcd.orient_normals_towards_camera_location(fallback)
 
 
+def _has_valid_normals(pcd: o3d.geometry.PointCloud) -> bool:
+    """Check if a point cloud has valid (non-zero, non-NaN) normals."""
+    if not pcd.has_normals():
+        return False
+    normals = np.asarray(pcd.normals)
+    if normals.shape[0] == 0:
+        return False
+    if np.any(np.isnan(normals)):
+        return False
+    norms = np.linalg.norm(normals, axis=1)
+    zero_ratio = float(np.sum(norms < 1e-8)) / float(norms.shape[0])
+    return zero_ratio < 0.1
+
+
+def _apply_taubin_smoothing(
+    mesh: o3d.geometry.TriangleMesh,
+    iterations: int,
+    lam: float = _DEFAULT_WRAP_SMOOTH_LAMBDA,
+    nu: float = _DEFAULT_WRAP_SMOOTH_NU,
+) -> o3d.geometry.TriangleMesh:
+    """Apply Taubin smoothing to reduce ringing without volume loss."""
+    if iterations <= 0:
+        return mesh
+    smoothed = mesh.filter_smooth_taubin(
+        number_of_iterations=iterations,
+        lambda_filter=lam,
+        mu=nu,
+    )
+    print(f"Mesh Wrap: applied Taubin smoothing ({iterations} iterations, lambda={lam}, nu={nu})")
+    return smoothed
+
+
+def _compute_chamfer_distance(
+    mesh_a: o3d.geometry.TriangleMesh,
+    mesh_b: o3d.geometry.TriangleMesh,
+) -> float:
+    """Compute symmetric mean Chamfer distance between two meshes."""
+    n_sample = _DEFAULT_WRAP_QUALITY_SAMPLE_POINTS
+    try:
+        pcd_a = mesh_a.sample_points_uniformly(number_of_points=n_sample)
+        pcd_b = mesh_b.sample_points_uniformly(number_of_points=n_sample)
+    except Exception:
+        return 0.0
+
+    if len(pcd_a.points) == 0 or len(pcd_b.points) == 0:
+        return 0.0
+
+    dist_a_to_b = np.asarray(pcd_a.compute_point_cloud_distance(pcd_b))
+    dist_b_to_a = np.asarray(pcd_b.compute_point_cloud_distance(pcd_a))
+    return float((dist_a_to_b.mean() + dist_b_to_a.mean()) / 2.0)
+
+
+def _run_alpha_wrap(
+    source_mesh: o3d.geometry.TriangleMesh,
+    params: MeshWrapParams,
+    progress_cb: ProgressCallback | None,
+) -> o3d.geometry.TriangleMesh:
+    """Wrap mesh using CGAL 3D alpha wrapping via seagullmesh."""
+    _emit_progress(progress_cb, 20.0, "Mesh Wrap: loading seagullmesh (CGAL)")
+    try:
+        from seagullmesh import Mesh3
+    except ImportError:
+        raise RuntimeError(
+            "seagullmesh not installed. Install with: "
+            "pip install git+https://github.com/darikg/seagullmesh.git  "
+            "Use method='poisson_iterative' as fallback."
+        )
+
+    vertices = np.asarray(source_mesh.vertices)
+    triangles = np.asarray(source_mesh.triangles)
+    diag = _bbox_diag(source_mesh)
+    alpha = diag * params.alpha_ratio
+    offset = alpha * params.offset_ratio
+
+    print(
+        f"Mesh Wrap alpha_wrap: alpha={alpha:.6f} (ratio={params.alpha_ratio}), "
+        f"offset={offset:.6f} (ratio={params.offset_ratio}), diag={diag:.4f}"
+    )
+
+    _emit_progress(progress_cb, 30.0, "Mesh Wrap: running CGAL alpha wrapping")
+
+    # seagullmesh wraps CGAL alpha_wrap_3 — accepts vertices+faces or just vertices
+    try:
+        sgm_input = Mesh3.from_polygon_soup(vertices, triangles)
+        wrapped_sgm = Mesh3.alpha_wrap(sgm_input, alpha, offset)
+    except (TypeError, AttributeError):
+        # Fallback: try point-cloud-only API variant
+        try:
+            wrapped_sgm = Mesh3.from_alpha_wrapping(vertices, alpha, offset)
+        except AttributeError:
+            raise RuntimeError(
+                "seagullmesh API mismatch — neither Mesh3.alpha_wrap() nor "
+                "Mesh3.from_alpha_wrapping() found. Check seagullmesh version."
+            )
+
+    _emit_progress(progress_cb, 75.0, "Mesh Wrap: converting alpha wrap result")
+
+    w_verts, w_faces = wrapped_sgm.to_vertices_and_faces()
+    result = o3d.geometry.TriangleMesh()
+    result.vertices = o3d.utility.Vector3dVector(np.asarray(w_verts, dtype=np.float64))
+    result.triangles = o3d.utility.Vector3iVector(np.asarray(w_faces, dtype=np.int32))
+    result = _clean_mesh(result)
+
+    if params.keep_largest_component:
+        result = _keep_largest_component(result)
+        result = _clean_mesh(result)
+
+    print(
+        f"Mesh Wrap alpha_wrap result: "
+        f"{len(result.vertices):,} verts, {len(result.triangles):,} faces"
+    )
+    return result
+
+
 def _run_poisson_wrap(
     source_mesh: o3d.geometry.TriangleMesh,
     params: MeshWrapParams,
@@ -260,13 +409,6 @@ def _run_poisson_wrap(
     source_obb_extent = np.asarray(source_obb.extent).copy()
     source_diag = _bbox_diag(wrapped)
     source_faces = int(len(wrapped.triangles))
-
-    if params.method == "ipsr":
-        # True iPSR from the paper requires a dedicated solver/library not bundled here.
-        print(
-            "MESH_WRAP_METHOD='ipsr' requested. "
-            "Using Poisson iterative wrap fallback (compatible in current environment)."
-        )
 
     for iter_idx in range(params.iterations):
         iter_start = 18.0 + (iter_idx / max(params.iterations, 1)) * 62.0
@@ -281,11 +423,13 @@ def _run_poisson_wrap(
             iter_start,
             f"Mesh Wrap: sampling surface points ({iter_idx + 1}/{params.iterations})",
         )
+        has_triangle_normals = False
         try:
             pcd = wrapped.sample_points_uniformly(
                 number_of_points=sample_n,
                 use_triangle_normal=True,
             )
+            has_triangle_normals = True
         except TypeError:
             pcd = wrapped.sample_points_uniformly(number_of_points=sample_n)
         points = np.asarray(pcd.points)
@@ -296,15 +440,29 @@ def _run_poisson_wrap(
         _emit_progress(
             progress_cb,
             iter_start + (iter_end - iter_start) * 0.20,
-            f"Mesh Wrap: estimating normals ({iter_idx + 1}/{params.iterations})",
+            f"Mesh Wrap: processing normals ({iter_idx + 1}/{params.iterations})",
         )
-        _estimate_orient_normals(
-            pcd,
-            radius=normal_radius,
-            max_nn=params.normal_max_nn,
-            orient_k=params.normal_orient_k,
-            center=source_obb_center,
-        )
+
+        # Phase 1 fix: preserve triangle normals when available and valid
+        if has_triangle_normals and _has_valid_normals(pcd):
+            pcd.normalize_normals()
+            print(
+                f"Mesh Wrap iter {iter_idx + 1}: using triangle normals "
+                f"(skipping KDTree re-estimation)"
+            )
+        else:
+            if has_triangle_normals:
+                print(
+                    f"Mesh Wrap iter {iter_idx + 1}: triangle normals invalid, "
+                    f"falling back to KDTree estimation"
+                )
+            _estimate_orient_normals(
+                pcd,
+                radius=normal_radius,
+                max_nn=params.normal_max_nn,
+                orient_k=params.normal_orient_k,
+                center=source_obb_center,
+            )
 
         _emit_progress(
             progress_cb,
@@ -392,6 +550,9 @@ def _run_poisson_wrap(
                 f"(target={target_faces:,})"
             )
 
+    # Taubin smoothing (Phase 1)
+    wrapped = _apply_taubin_smoothing(wrapped, params.smooth_iterations)
+
     wrapped.compute_vertex_normals()
     return wrapped
 
@@ -409,8 +570,13 @@ def run_mesh_wrap(
     crop_scale: float | None = None,
     sample_points: int | None = None,
     normal_radius_ratio: float | None = None,
+    smooth_iterations: int | None = None,
+    quality_threshold: float | None = None,
+    method: str | None = None,
+    alpha_ratio: float | None = None,
+    offset_ratio: float | None = None,
 ) -> Path:
-    """Wrap the input mesh with a Poisson shell for downstream texturing."""
+    """Wrap the input mesh with a Poisson shell or CGAL alpha wrap for downstream texturing."""
     overrides: dict = {}
     for key, val in [
         ("poisson_depth", poisson_depth),
@@ -421,6 +587,11 @@ def run_mesh_wrap(
         ("crop_scale", crop_scale),
         ("sample_points", sample_points),
         ("normal_radius_ratio", normal_radius_ratio),
+        ("smooth_iterations", smooth_iterations),
+        ("quality_threshold", quality_threshold),
+        ("method", method),
+        ("alpha_ratio", alpha_ratio),
+        ("offset_ratio", offset_ratio),
     ]:
         if val is not None:
             overrides[key] = val
@@ -437,11 +608,13 @@ def run_mesh_wrap(
     if len(source_mesh.vertices) == 0 or len(source_mesh.triangles) == 0:
         raise ValueError(f"Mesh is empty: {mesh_ply}")
     source_mesh = _clean_mesh(source_mesh)
+    source_diag = _bbox_diag(source_mesh)
     print(
         f"Mesh Wrap params: enabled={params.enabled}, method={params.method}, "
         f"iterations={params.iterations}, sample_points={params.sample_points:,}, "
         f"depth={params.poisson_depth}, scale={params.poisson_scale:.3f}, "
-        f"density_trim_q={params.density_trim_q:.3f}"
+        f"density_trim_q={params.density_trim_q:.3f}, smooth_iters={params.smooth_iterations}, "
+        f"quality_threshold={params.quality_threshold:.4f}"
     )
     print(
         f"Input mesh: {len(source_mesh.vertices):,} verts, "
@@ -454,7 +627,10 @@ def run_mesh_wrap(
         wrapped = source_mesh
     else:
         try:
-            wrapped = _run_poisson_wrap(source_mesh, params, progress_cb)
+            if params.method == "alpha_wrap":
+                wrapped = _run_alpha_wrap(source_mesh, params, progress_cb)
+            else:
+                wrapped = _run_poisson_wrap(source_mesh, params, progress_cb)
         except Exception as e:
             if not params.preserve_input_on_failure:
                 raise
@@ -463,6 +639,26 @@ def run_mesh_wrap(
                 f"(reason: {e})"
             )
             wrapped = source_mesh
+
+        # Quality gate (Phase 2): auto-bypass on quality degradation
+        # Skip for alpha_wrap — its offset is intentional, not degradation
+        if wrapped is not source_mesh and params.quality_threshold > 0.0 and params.method != "alpha_wrap":
+            _emit_progress(progress_cb, 88.0, "Mesh Wrap: quality gate check")
+            chamfer = _compute_chamfer_distance(source_mesh, wrapped)
+            chamfer_ratio = chamfer / source_diag if source_diag > 0 else 0.0
+            if chamfer_ratio > params.quality_threshold:
+                print(
+                    f"Mesh Wrap quality gate FAILED: "
+                    f"chamfer_ratio={chamfer_ratio:.4f} > threshold={params.quality_threshold:.4f} "
+                    f"(chamfer={chamfer:.6f}, diag={source_diag:.4f}). "
+                    f"Auto-bypassing to source mesh."
+                )
+                wrapped = source_mesh
+            else:
+                print(
+                    f"Mesh Wrap quality gate PASSED: "
+                    f"chamfer_ratio={chamfer_ratio:.4f} <= threshold={params.quality_threshold:.4f}"
+                )
 
     wrapped_vertices = np.asarray(wrapped.vertices)
     wrapped_faces = np.asarray(wrapped.triangles)

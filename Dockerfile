@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3.11-distutils \
     git wget curl ffmpeg \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1 \
+    libcgal-dev libeigen3-dev cmake \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3 \
@@ -46,6 +47,18 @@ RUN pip install --no-cache-dir \
 # --- Layer 3b: Extra deps needed by DiffCD (wandb, scikit-image) ---
 # Must come after numpy is installed (scikit-image build needs it)
 RUN pip install --no-cache-dir wandb scikit-image
+
+# --- Layer 3c: CGAL Python bindings (seagullmesh for alpha wrapping) ---
+# Ubuntu 22.04 ships CGAL 5.4, but alpha_wrap_3 requires CGAL >= 5.5.
+# Remove old CGAL headers and install full CGAL 6.0 (header-only).
+RUN rm -rf /usr/include/CGAL \
+    && ln -sf /usr/include/eigen3/Eigen /usr/include/Eigen \
+    && wget -qO /tmp/cgal.tar.xz https://github.com/CGAL/cgal/releases/download/v6.0.1/CGAL-6.0.1.tar.xz \
+    && tar -xJf /tmp/cgal.tar.xz -C /tmp \
+    && cp -r /tmp/CGAL-6.0.1/include/CGAL /usr/include/CGAL \
+    && rm -rf /tmp/cgal.tar.xz /tmp/CGAL-6.0.1 \
+    && pip install --no-cache-dir pybind11 \
+    && pip install --no-cache-dir git+https://github.com/darikg/seagullmesh.git
 
 # --- Layer 4: SAM2 (editable install with CUDA extension for post-processing) ---
 RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \

@@ -94,14 +94,19 @@ const DENOISE_PRESETS = {
 };
 
 const MESHWRAP_DEFAULTS = {
-  meshwrap_poisson_depth: 6,
+  meshwrap_method: 'alpha_wrap',
+  meshwrap_poisson_depth: 8,
   meshwrap_poisson_scale: 1.18,
   meshwrap_iterations: 1,
   meshwrap_sample_points: 400000,
-  meshwrap_density_trim_q: 0.01,
-  meshwrap_crop_scale: 1.03,
+  meshwrap_density_trim_q: 0.003,
+  meshwrap_crop_scale: 1.08,
   meshwrap_target_face_ratio: 2.20,
   meshwrap_normal_radius_ratio: 0.02,
+  meshwrap_smooth_iterations: 2,
+  meshwrap_quality_threshold: 0.02,
+  meshwrap_alpha_ratio: 0.02,
+  meshwrap_offset_ratio: 0.3,
 };
 
 const MESH_REPAIR_DEFAULTS = {
@@ -194,6 +199,11 @@ export class ConfigPanel {
       meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
       meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
       meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
+      meshwrap_smooth_iterations: document.getElementById('cfg-meshwrap-smooth-iterations'),
+      meshwrap_quality_threshold: document.getElementById('cfg-meshwrap-quality-threshold'),
+      meshwrap_method: document.getElementById('cfg-meshwrap-method'),
+      meshwrap_alpha_ratio: document.getElementById('cfg-meshwrap-alpha-ratio'),
+      meshwrap_offset_ratio: document.getElementById('cfg-meshwrap-offset-ratio'),
       classical_preset: document.getElementById('cfg-classical-preset'),
       classical_preprocess_enabled: document.getElementById('cfg-classical-preprocess'),
       classical_poisson_depth: document.getElementById('cfg-classical-poisson-depth'),
@@ -209,6 +219,8 @@ export class ConfigPanel {
     };
     this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
     this._meshwrapResetBtn = document.getElementById('btn-meshwrap-reset');
+    this._meshwrapPoissonGroup = document.getElementById('cfg-meshwrap-poisson-group');
+    this._meshwrapAlphaGroup = document.getElementById('cfg-meshwrap-alpha-group');
     this._classicalSummary = document.getElementById('cfg-classical-summary');
     this._classicalResetBtn = document.getElementById('btn-classical-reset');
     this._classicalControls = document.getElementById('cfg-classical-controls');
@@ -266,6 +278,7 @@ export class ConfigPanel {
       inp.disabled = running;
     }
     if (this._meshwrapResetBtn) this._meshwrapResetBtn.disabled = running;
+    if (this._inputs.meshwrap_method) this._inputs.meshwrap_method.disabled = running;
     if (this._classicalResetBtn) this._classicalResetBtn.disabled = running;
   }
 
@@ -417,6 +430,23 @@ export class ConfigPanel {
         this._inputs.meshwrap_normal_radius_ratio?.value,
         MESHWRAP_DEFAULTS.meshwrap_normal_radius_ratio,
       ),
+      meshwrap_smooth_iterations: this._parseNonNegativeInt(
+        this._inputs.meshwrap_smooth_iterations?.value,
+        MESHWRAP_DEFAULTS.meshwrap_smooth_iterations,
+      ),
+      meshwrap_quality_threshold: this._parseNonNegativeFloat(
+        this._inputs.meshwrap_quality_threshold?.value,
+        MESHWRAP_DEFAULTS.meshwrap_quality_threshold,
+      ),
+      meshwrap_method: this._inputs.meshwrap_method?.value || MESHWRAP_DEFAULTS.meshwrap_method,
+      meshwrap_alpha_ratio: this._parsePositiveFloat(
+        this._inputs.meshwrap_alpha_ratio?.value,
+        MESHWRAP_DEFAULTS.meshwrap_alpha_ratio,
+      ),
+      meshwrap_offset_ratio: this._parsePositiveFloat(
+        this._inputs.meshwrap_offset_ratio?.value,
+        MESHWRAP_DEFAULTS.meshwrap_offset_ratio,
+      ),
       classical_preset: this._inputs.classical_preset?.value || 'trust_point_cloud',
       classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
       classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 11),
@@ -557,10 +587,20 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
+      'meshwrap_smooth_iterations',
+      'meshwrap_quality_threshold',
+      'meshwrap_alpha_ratio',
+      'meshwrap_offset_ratio',
     ]) {
       if (this._inputs[key]) {
         this._inputs[key].addEventListener('input', () => this._onMeshWrapInputChanged());
       }
+    }
+    if (this._inputs.meshwrap_method) {
+      this._inputs.meshwrap_method.addEventListener('change', () => {
+        this._updateMeshWrapMethodVisibility();
+        this._onMeshWrapInputChanged();
+      });
     }
     for (const key of [
       'mesh_repair_max_diameter_ratio',
@@ -931,11 +971,19 @@ export class ConfigPanel {
       'meshwrap_crop_scale',
       'meshwrap_sample_points',
       'meshwrap_normal_radius_ratio',
+      'meshwrap_smooth_iterations',
+      'meshwrap_quality_threshold',
+      'meshwrap_alpha_ratio',
+      'meshwrap_offset_ratio',
     ]) {
       if (cfg[key] != null && this._inputs[key]) {
         this._inputs[key].value = String(cfg[key]);
       }
     }
+    if (cfg.meshwrap_method != null && this._inputs.meshwrap_method) {
+      this._inputs.meshwrap_method.value = cfg.meshwrap_method;
+    }
+    this._updateMeshWrapMethodVisibility();
     for (const key of [
       'mesh_repair_max_diameter_ratio',
       'mesh_repair_y_band_ratio',
@@ -1095,9 +1143,21 @@ export class ConfigPanel {
     for (const [key, val] of Object.entries(MESHWRAP_DEFAULTS)) {
       if (this._inputs[key]) this._inputs[key].value = String(val);
     }
+    this._updateMeshWrapMethodVisibility();
     this._updateMeshWrapSummary();
     if (this.onCropScaleChanged) {
       this.onCropScaleChanged(this.getCropScale());
+    }
+  }
+
+  _updateMeshWrapMethodVisibility() {
+    const method = this._inputs.meshwrap_method?.value || 'poisson_iterative';
+    const isAlpha = method === 'alpha_wrap';
+    if (this._meshwrapPoissonGroup) {
+      this._meshwrapPoissonGroup.style.display = isAlpha ? 'none' : '';
+    }
+    if (this._meshwrapAlphaGroup) {
+      this._meshwrapAlphaGroup.style.display = isAlpha ? '' : 'none';
     }
   }
 
@@ -1174,12 +1234,20 @@ export class ConfigPanel {
 
   _updateMeshWrapSummary() {
     if (!this._meshwrapSummary) return;
-    const depth = this._inputs.meshwrap_poisson_depth?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_depth);
-    const scale = this._inputs.meshwrap_poisson_scale?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_scale);
-    const iters = this._inputs.meshwrap_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_iterations);
-    const ratio = this._inputs.meshwrap_target_face_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_target_face_ratio);
-    this._meshwrapSummary.textContent =
-      `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}`;
+    const method = this._inputs.meshwrap_method?.value || MESHWRAP_DEFAULTS.meshwrap_method;
+    if (method === 'alpha_wrap') {
+      const alpha = this._inputs.meshwrap_alpha_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_alpha_ratio);
+      const offset = this._inputs.meshwrap_offset_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_offset_ratio);
+      this._meshwrapSummary.textContent = `method=alpha_wrap, alpha=${alpha}, offset=${offset}`;
+    } else {
+      const depth = this._inputs.meshwrap_poisson_depth?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_depth);
+      const scale = this._inputs.meshwrap_poisson_scale?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_scale);
+      const iters = this._inputs.meshwrap_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_iterations);
+      const ratio = this._inputs.meshwrap_target_face_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_target_face_ratio);
+      const smooth = this._inputs.meshwrap_smooth_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_smooth_iterations);
+      this._meshwrapSummary.textContent =
+        `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}, smooth=${smooth}`;
+    }
   }
 
   _applySuggestedObjectName(force = false) {
