@@ -520,8 +520,17 @@ ws.on('pi3x_preview_ready', () => {
 
 ws.on('mesh_repair_ready', async (msg) => {
   const autoAccepted = msg.auto_accepted === true;
+  const loopCount = Number(msg.candidate_count) || 0;
+  if (loopCount === 0) {
+    const prefix = autoAccepted ? '[Auto] ' : '';
+    appendLog(
+      'warn',
+      `${prefix}Mesh Repair: no closed surfaces found — skipped.\n`,
+      { stage: 7 },
+    );
+    return;
+  }
   if (autoAccepted) {
-    const loopCount = Number(msg.candidate_count) || 0;
     appendLog(
       'stdout',
       `[Auto] Mesh Repair: auto-selected all ${loopCount} closed surfaces.\n`,

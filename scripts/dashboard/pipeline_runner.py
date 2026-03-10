@@ -803,66 +803,94 @@ async def _run_mesh_repair_interactive(
         if not isinstance(candidates, list):
             raise ValueError("Mesh repair analysis returned invalid candidate data")
         if len(candidates) == 0:
-            raise ValueError("No selectable boundary loops found for mesh repair")
-
-        analysis_meta = {
-            "mesh_path": analysis.get("mesh_path"),
-            "vertex_count": analysis.get("vertex_count"),
-            "face_count": analysis.get("face_count"),
-            "bbox_min": analysis.get("bbox_min"),
-            "bbox_max": analysis.get("bbox_max"),
-            "bbox_center": analysis.get("bbox_center"),
-            "loop_count": analysis.get("loop_count"),
-            "stats": analysis.get("stats"),
-        }
-        session.set_mesh_repair_candidates(mesh_ply, candidates, analysis=analysis_meta)
-        session.stage_interactive(stage)
-        await _broadcast_stage_progress(
-            session,
-            stage,
-            progress=38.0,
-            detail="Waiting for repair-loop selection",
-        )
-        auto_accepted = session.config.auto_accept
-        await broadcast(
-            session,
-            {
-                "type": "mesh_repair_ready",
-                "stage": int(stage),
-                "candidate_count": len(candidates),
-                "auto_accepted": auto_accepted,
-                "overall_progress": session.overall_progress(),
-            },
-        )
-
-        if auto_accepted:
-            session.mesh_repair_selected_loop_ids = [
-                int(c["loop_id"]) for c in candidates if "loop_id" in c
-            ]
-            session.mesh_repair_confirm_event.set()
-        await session.mesh_repair_confirm_event.wait()
-        _check_cancelled(session)
-        selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]
-        if not selected_loop_ids:
+            # No closed surfaces — warn and skip repair
             await _broadcast_stage_progress(
                 session,
                 stage,
-                progress=40.0,
-                detail="No loops selected. Skipping repair",
+                progress=50.0,
+                detail="No boundary loops found — skipping repair",
+            )
+            await broadcast(
+                session,
+                {
+                    "type": "mesh_repair_ready",
+                    "stage": int(stage),
+                    "candidate_count": 0,
+                    "auto_accepted": session.config.auto_accept,
+                    "overall_progress": session.overall_progress(),
+                },
+            )
+            await asyncio.to_thread(
+                _stage_mesh_repair_selected,
+                mesh_ply,
+                output_dir,
+                [],
+                mesh_repair_enabled,
+                mesh_repair_max_diameter_ratio,
+                mesh_repair_y_band_ratio,
+                mesh_repair_smooth_iters,
+                _progress_cb,
+                _cancel_cb,
+            )
+        else:
+            analysis_meta = {
+                "mesh_path": analysis.get("mesh_path"),
+                "vertex_count": analysis.get("vertex_count"),
+                "face_count": analysis.get("face_count"),
+                "bbox_min": analysis.get("bbox_min"),
+                "bbox_max": analysis.get("bbox_max"),
+                "bbox_center": analysis.get("bbox_center"),
+                "loop_count": analysis.get("loop_count"),
+                "stats": analysis.get("stats"),
+            }
+            session.set_mesh_repair_candidates(mesh_ply, candidates, analysis=analysis_meta)
+            session.stage_interactive(stage)
+            await _broadcast_stage_progress(
+                session,
+                stage,
+                progress=38.0,
+                detail="Waiting for repair-loop selection",
+            )
+            auto_accepted = session.config.auto_accept
+            await broadcast(
+                session,
+                {
+                    "type": "mesh_repair_ready",
+                    "stage": int(stage),
+                    "candidate_count": len(candidates),
+                    "auto_accepted": auto_accepted,
+                    "overall_progress": session.overall_progress(),
+                },
             )
 
-        await asyncio.to_thread(
-            _stage_mesh_repair_selected,
-            mesh_ply,
-            output_dir,
-            selected_loop_ids,
-            mesh_repair_enabled,
-            mesh_repair_max_diameter_ratio,
-            mesh_repair_y_band_ratio,
-            mesh_repair_smooth_iters,
-            _progress_cb,
-            _cancel_cb,
-        )
+            if auto_accepted:
+                session.mesh_repair_selected_loop_ids = [
+                    int(c["loop_id"]) for c in candidates if "loop_id" in c
+                ]
+                session.mesh_repair_confirm_event.set()
+            await session.mesh_repair_confirm_event.wait()
+            _check_cancelled(session)
+            selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]
+            if not selected_loop_ids:
+                await _broadcast_stage_progress(
+                    session,
+                    stage,
+                    progress=40.0,
+                    detail="No loops selected. Skipping repair",
+                )
+
+            await asyncio.to_thread(
+                _stage_mesh_repair_selected,
+                mesh_ply,
+                output_dir,
+                selected_loop_ids,
+                mesh_repair_enabled,
+                mesh_repair_max_diameter_ratio,
+                mesh_repair_y_band_ratio,
+                mesh_repair_smooth_iters,
+                _progress_cb,
+                _cancel_cb,
+            )
     except _CancelledError:
         session.clear_mesh_repair_candidates()
         raise

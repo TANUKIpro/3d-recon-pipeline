@@ -228,6 +228,8 @@ export class LogViewer {
 
     if (entry.stream === 'stderr') {
       span.classList.add('log-stderr');
+    } else if (entry.stream === 'warn') {
+      span.classList.add('log-warn');
     } else if (/vram|gpu|cuda/i.test(entry.text)) {
       span.classList.add('log-vram');
     }
