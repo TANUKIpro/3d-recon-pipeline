@@ -20,6 +20,8 @@ from plyfile import PlyData
 
 from config_defaults import (
     TEXTURE_ANGLE_EXP,
+    TEXTURE_BLEND_HARD_RATIO,
+    TEXTURE_BLEND_TOPK,
     TEXTURE_DIST_POW,
     TEXTURE_MIN_COS,
     TEXTURE_OVERSAMPLE,
@@ -379,64 +381,6 @@ def _resolve_texture_size(
     return 2048, True
 
 
-def _build_face_charts(faces: np.ndarray) -> tuple[np.ndarray, int]:
-    """Group faces into UV charts by shared triangle edges."""
-    n_faces = int(len(faces))
-    if n_faces == 0:
-        return np.zeros(0, dtype=np.int32), 0
-
-    edge_to_faces: dict[tuple[int, int], list[int]] = defaultdict(list)
-    for fi, face in enumerate(faces):
-        a, b, c = int(face[0]), int(face[1]), int(face[2])
-        edges = ((a, b), (b, c), (c, a))
-        for v0, v1 in edges:
-            key = (v0, v1) if v0 < v1 else (v1, v0)
-            edge_to_faces[key].append(fi)
-
-    neighbors: list[list[int]] = [[] for _ in range(n_faces)]
-    for attached in edge_to_faces.values():
-        if len(attached) <= 1:
-            continue
-        root = attached[0]
-        for other in attached[1:]:
-            neighbors[root].append(other)
-            neighbors[other].append(root)
-
-    chart_ids = np.full(n_faces, -1, dtype=np.int32)
-    chart_count = 0
-    stack: list[int] = []
-    for start in range(n_faces):
-        if chart_ids[start] >= 0:
-            continue
-        chart_ids[start] = chart_count
-        stack.append(start)
-        while stack:
-            cur = stack.pop()
-            for nxt in neighbors[cur]:
-                if chart_ids[nxt] >= 0:
-                    continue
-                chart_ids[nxt] = chart_count
-                stack.append(nxt)
-        chart_count += 1
-
-    return chart_ids, chart_count
-
-
-def _group_texels_by_chart(
-    texel_chart_ids: np.ndarray,
-    n_charts: int,
-) -> tuple[list[np.ndarray], np.ndarray]:
-    counts = np.bincount(texel_chart_ids, minlength=n_charts).astype(np.int32, copy=False)
-    if n_charts == 0:
-        return [], counts
-    if texel_chart_ids.size == 0:
-        return [np.empty(0, dtype=np.int32) for _ in range(n_charts)], counts
-    order = np.argsort(texel_chart_ids, kind="stable")
-    splits = np.cumsum(counts[:-1], dtype=np.int64).tolist()
-    grouped = np.split(order, splits)
-    return [g.astype(np.int32, copy=False) for g in grouped], counts
-
-
 def _rasterize_view_depth(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -579,12 +523,13 @@ def _evaluate_view_samples(
         & (py_proj < img_h - 1)
     )
 
-    pxi = np.clip(px_proj.astype(np.int32), 0, img_w - 1)
-    pyi = np.clip(py_proj.astype(np.int32), 0, img_h - 1)
+    pxi = np.clip(np.rint(px_proj).astype(np.int32), 0, img_w - 1)
+    pyi = np.clip(np.rint(py_proj).astype(np.int32), 0, img_h - 1)
     mask_ok = mask_bool[pyi, pxi]
 
     depth_ref = depth_buffer[pyi, pxi].astype(np.float64)
-    visibility_eps = np.maximum(1e-4, 0.01 * depth_ref)
+    cos_safe = np.maximum(np.abs(cos_angle), 0.1)
+    visibility_eps = np.maximum(1e-4, 0.003 * depth_ref / cos_safe)
     visible = depths <= (depth_ref + visibility_eps)
 
     facing = cos_angle > min_cos
@@ -599,52 +544,67 @@ def _evaluate_view_samples(
     return valid, score, px_proj, py_proj
 
 
-def _rank_chart_view_candidates(
-    chart_candidates: list[list[tuple[float, float, int]]],
-    n_views: int,
-) -> tuple[np.ndarray, list[list[int]]]:
-    """Rank candidate views per chart by coverage, then by score."""
-    n_charts = len(chart_candidates)
-    primary_views = np.full(n_charts, -1, dtype=np.int32)
-    chart_view_orders: list[list[int]] = []
+def _update_topk_scores(
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    valid: np.ndarray,
+    score: np.ndarray,
+    vidx: int,
+) -> None:
+    """Update per-texel top-K view scores in-place.
 
-    for cid in range(n_charts):
-        ranked = sorted(
-            chart_candidates[cid],
-            key=lambda item: (item[0], item[1]),
-            reverse=True,
-        )
-        ordered = [int(v) for _, _, v in ranked]
-        if ordered:
-            primary_views[cid] = ordered[0]
-        if len(ordered) < n_views:
-            seen = set(ordered)
-            ordered.extend(vidx for vidx in range(n_views) if vidx not in seen)
-        chart_view_orders.append(ordered)
+    For texels where *valid* is True and *score* exceeds the current worst
+    entry in the top-K list, the worst slot is replaced and the array is
+    re-sorted to maintain descending order.
 
-    return primary_views, chart_view_orders
+    Args:
+        best_scores: (n_texels, K) float32 — scores kept in descending order.
+        best_views: (n_texels, K) int32 — corresponding view indices.
+        valid: (n_texels,) bool — which texels have a usable projection.
+        score: (n_texels,) float64 — per-texel score for view *vidx*.
+        vidx: View index to record.
+    """
+    K = best_scores.shape[1]
+    candidates = valid & (score > best_scores[:, K - 1])
+    idx = np.where(candidates)[0]
+    if idx.size == 0:
+        return
+
+    # Replace worst slot (last column)
+    best_scores[idx, K - 1] = score[idx].astype(np.float32)
+    best_views[idx, K - 1] = vidx
+
+    # Insert-sort: bubble the new element up from slot K-1
+    for j in range(K - 2, -1, -1):
+        swap = best_scores[idx, j] < best_scores[idx, j + 1]
+        swap_idx = idx[swap]
+        if swap_idx.size == 0:
+            break
+        tmp_s = best_scores[swap_idx, j].copy()
+        best_scores[swap_idx, j] = best_scores[swap_idx, j + 1]
+        best_scores[swap_idx, j + 1] = tmp_s
+        tmp_v = best_views[swap_idx, j].copy()
+        best_views[swap_idx, j] = best_views[swap_idx, j + 1]
+        best_views[swap_idx, j + 1] = tmp_v
+        idx = swap_idx
 
 
-def _secondary_min_cos_levels(min_cos: float) -> list[float]:
-    """Build progressively relaxed cosine thresholds for fallback sampling."""
-    raw_levels = [
-        min_cos * 0.5,
-        min_cos * 0.25,
-        min_cos - 0.1,
-        0.0,
-        -0.1,
-        -0.25,
-        -0.5,
-    ]
-    levels: list[float] = []
-    for level in raw_levels:
-        v = float(max(-1.0, min(1.0, level)))
-        if v >= min_cos - 1e-8:
-            continue
-        if any(abs(v - existing) <= 1e-8 for existing in levels):
-            continue
-        levels.append(v)
-    return levels
+def _apply_view_hardening(
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    hard_ratio: float,
+) -> int:
+    """Zero out non-dominant views when top-1 clearly wins."""
+    if best_scores.shape[1] <= 1 or hard_ratio <= 0:
+        return 0
+    s0 = best_scores[:, 0]
+    s1 = best_scores[:, 1]
+    dominant = (s0 > 0) & (s1 > 0) & (s0 > hard_ratio * s1)
+    n_hard = int(dominant.sum())
+    if n_hard > 0:
+        best_scores[dominant, 1:] = -1.0
+        best_views[dominant, 1:] = -1
+    return n_hard
 
 
 def bake_texture(
@@ -670,13 +630,16 @@ def bake_texture(
             sqrt(image_width * image_height), rounded to nearest int.
 
     Environment toggles for quality:
+        TEXTURE_BLEND_TOPK (int): Number of views to blend per texel (default 3, 1=no blend).
         TEXTURE_DEVICE (str): 'cuda' (default), 'auto', or 'cpu' request hint.
-            Current chart-selection path runs on CPU for deterministic z-buffering.
+            Current scoring path runs on CPU for deterministic z-buffering.
         TEXTURE_OVERSAMPLE (int): Internal supersampling multiplier (1=off, 2=default).
         TEXTURE_MIN_COS (float): Minimum normal·view cosine to accept a sample (default 0.2).
-        TEXTURE_ANGLE_EXP (float): Exponent on cosine score (default 2.0).
+        TEXTURE_ANGLE_EXP (float): Exponent on cosine score (default 4.0).
         TEXTURE_DIST_POW (float): Distance falloff power for score (default 1.0).
         TEXTURE_SHARPEN (float): Unsharp mask amount (0=off, 0.1–0.4 typical).
+        TEXTURE_BLEND_HARD_RATIO (float): When top-1/top-2 score ratio exceeds this,
+            use single dominant view (default 2.0, 0=disabled).
 
     Returns:
         Path to the output OBJ file.
@@ -688,6 +651,8 @@ def bake_texture(
     angle_exp = float(os.environ.get("TEXTURE_ANGLE_EXP", str(TEXTURE_ANGLE_EXP)))
     dist_pow = float(os.environ.get("TEXTURE_DIST_POW", str(TEXTURE_DIST_POW)))
     sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", str(TEXTURE_SHARPEN)))
+    blend_topk = max(1, int(os.environ.get("TEXTURE_BLEND_TOPK", str(TEXTURE_BLEND_TOPK))))
+    hard_ratio = float(os.environ.get("TEXTURE_BLEND_HARD_RATIO", str(TEXTURE_BLEND_HARD_RATIO)))
     texture_device = _resolve_texture_device()
 
     output_path = Path(output_dir)
@@ -796,11 +761,11 @@ def bake_texture(
         f"({tex_size}x{tex_size}, internal {tex_res}x{tex_res}, oversample x{oversample})"
     )
     print(
-        "  View scoring: chart-best, min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f"
-        % (min_cos, angle_exp, dist_pow, sharpen_amt)
+        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f"
+        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt)
     )
     if texture_device == "cuda":
-        print("  Projection backend request: CUDA (chart scoring currently uses CPU z-buffer)")
+        print("  Projection backend request: CUDA (scoring currently uses CPU z-buffer)")
     else:
         print("  Projection backend request: CPU")
     _emit_progress(progress_cb, 62.0, "Building texel mapping")
@@ -853,16 +818,13 @@ def bake_texture(
     if n_valid == 0:
         raise RuntimeError("No valid texels were generated from UV atlas.")
 
-    # --- UV chart grouping ---
-    face_chart_ids, n_charts = _build_face_charts(new_faces)
-    texel_chart_ids = face_chart_ids[fids]
-    chart_texel_indices, chart_texel_counts = _group_texels_by_chart(texel_chart_ids, n_charts)
-    print(f"  UV charts: {n_charts}")
+    # --- Per-texel top-K blend setup ---
+    best_scores = np.full((n_valid, blend_topk), -1.0, dtype=np.float32)
+    best_views = np.full((n_valid, blend_topk), -1, dtype=np.int32)
 
-    # --- Pass 1: score view candidates per chart ---
-    _emit_progress(progress_cb, 72.0, "Scoring camera views per UV chart")
+    # --- Pass 1: score all views per texel ---
+    _emit_progress(progress_cb, 72.0, "Scoring camera views per texel")
     emit_every_view = max(1, len(poses) // 40)
-    chart_candidates: list[list[tuple[float, float, int]]] = [[] for _ in range(n_charts)]
 
     # Depth buffer cache for reuse across passes (Optimization C)
     depth_buf_bytes = img_w * img_h * 4  # float32
@@ -899,25 +861,13 @@ def bake_texture(
             angle_exp=angle_exp,
             dist_pow=dist_pow,
         )
-        valid_idx = np.where(valid)[0]
-        if valid_idx.size > 0:
-            chart_hits = texel_chart_ids[valid_idx]
-            counts = np.bincount(chart_hits, minlength=n_charts)
-            score_sums = np.bincount(chart_hits, weights=score[valid_idx], minlength=n_charts)
-            active = np.where(counts > 0)[0]
-            for cid in active:
-                total_chart = max(int(chart_texel_counts[cid]), 1)
-                coverage = float(counts[cid]) / float(total_chart)
-                mean_score = float(score_sums[cid] / counts[cid])
-                chart_candidates[int(cid)].append((coverage, mean_score, vidx))
-            n_chart_hits = int(len(active))
-        else:
-            n_chart_hits = 0
+        _update_topk_scores(best_scores, best_views, valid, score, vidx)
 
         if vidx % 5 == 0 or vidx == len(poses) - 1:
+            covered = int(np.count_nonzero(best_views[:, 0] >= 0))
             print(
                 f"  Candidate scoring {vidx + 1}/{len(poses)}: "
-                f"texels={int(valid_idx.size)}, charts={n_chart_hits}"
+                f"texels_valid={int(valid.sum())}, covered={covered}/{n_valid}"
             )
         if vidx % emit_every_view == 0 or vidx == len(poses) - 1:
             ratio = (vidx + 1) / max(len(poses), 1)
@@ -927,24 +877,39 @@ def bake_texture(
                 f"Scoring views ({vidx + 1}/{len(poses)} views)",
             )
 
-    primary_chart_views, chart_view_orders = _rank_chart_view_candidates(chart_candidates, len(poses))
-    n_primary = int(np.count_nonzero(primary_chart_views >= 0))
-    print(f"Primary views assigned: {n_primary}/{n_charts} charts")
+    covered = int(np.count_nonzero(best_views[:, 0] >= 0))
+    print(f"  Per-texel scoring done: {covered}/{n_valid} texels have ≥1 valid view")
 
-    texture = np.zeros((tex_res, tex_res, 3), dtype=np.float32)
+    n_hard = _apply_view_hardening(best_scores, best_views, hard_ratio)
+    if n_hard > 0:
+        print(f"  View hardening: {n_hard}/{n_valid} texels use single dominant view (ratio>{hard_ratio:.1f})")
+
+    texture = np.zeros((tex_res, tex_res, 3), dtype=np.float64)
+    weight_sum = np.zeros(n_valid, dtype=np.float64)
     has_color = np.zeros(n_valid, dtype=bool)
 
-    # --- Pass 2: primary chart assignment ---
-    _emit_progress(progress_cb, 84.0, "Projecting primary chart textures")
-    charts_by_view: dict[int, list[int]] = defaultdict(list)
-    for cid, vidx in enumerate(primary_chart_views):
-        if int(chart_texel_counts[cid]) <= 0:
-            continue
-        if vidx >= 0:
-            charts_by_view[int(vidx)].append(cid)
+    # --- Pass 2: weighted multi-view blending ---
+    _emit_progress(progress_cb, 84.0, "Blending textures from top-K views")
 
-    primary_items = sorted(charts_by_view.items())
-    for order_idx, (vidx, chart_ids_for_view) in enumerate(primary_items):
+    # Group texels by view across all K slots
+    view_texels: dict[int, list[tuple[np.ndarray, np.ndarray]]] = defaultdict(list)
+    for k in range(blend_topk):
+        col_views = best_views[:, k]
+        col_scores = best_scores[:, k]
+        for vidx_val in np.unique(col_views):
+            if vidx_val < 0:
+                continue
+            mask_k = col_views == vidx_val
+            tidx = np.where(mask_k)[0]
+            view_texels[int(vidx_val)].append(
+                (tidx, col_scores[tidx].astype(np.float64))
+            )
+
+    sorted_views = sorted(view_texels.keys())
+    for order_idx, vidx in enumerate(sorted_views):
+        all_tidx = np.concatenate([t for t, _ in view_texels[vidx]])
+        all_weights = np.concatenate([w for _, w in view_texels[vidx]])
+
         src_idx = int(pose_frame_indices[vidx])
         c2w = poses[vidx]
         try:
@@ -971,128 +936,128 @@ def bake_texture(
             dist_pow=dist_pow,
         )
 
-        filled_view = 0
-        for cid in chart_ids_for_view:
-            texel_idx = chart_texel_indices[cid]
-            if texel_idx.size == 0:
-                continue
-            ok = valid[texel_idx]
-            if not np.any(ok):
-                continue
-            fill_idx = texel_idx[ok]
-            colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(np.float32)
-            texture[ys[fill_idx], xs[fill_idx]] = colors
-            has_color[fill_idx] = True
-            filled_view += int(fill_idx.size)
+        ok = valid[all_tidx]
+        fill_tidx = all_tidx[ok]
+        fill_weights = all_weights[ok]
 
-        print(
-            f"  Primary projection view {vidx + 1}/{len(poses)}: "
-            f"charts={len(chart_ids_for_view)}, filled={filled_view}"
-        )
-        ratio = (order_idx + 1) / max(len(primary_items), 1)
+        if fill_tidx.size > 0:
+            colors = _bilinear_sample(frame, px_proj[fill_tidx], py_proj[fill_tidx])
+            texture[ys[fill_tidx], xs[fill_tidx]] += fill_weights[:, None] * colors
+            weight_sum[fill_tidx] += fill_weights
+
+        if order_idx % 5 == 0 or order_idx == len(sorted_views) - 1:
+            print(
+                f"  Blend view {vidx + 1}/{len(poses)}: "
+                f"texels={int(fill_tidx.size)}"
+            )
+        ratio = (order_idx + 1) / max(len(sorted_views), 1)
         _emit_progress(
             progress_cb,
             84.0 + ratio * 6.0,
-            f"Applying primary views ({order_idx + 1}/{len(primary_items)})",
+            f"Blending views ({order_idx + 1}/{len(sorted_views)})",
         )
 
-    # --- Pass 3: secondary fallback with relaxed thresholds ---
-    secondary_levels = _secondary_min_cos_levels(min_cos)
-    chart_cursors = np.zeros(n_charts, dtype=np.int32)
-    for cid in range(n_charts):
-        primary_vidx = int(primary_chart_views[cid])
-        if primary_vidx < 0:
-            chart_cursors[cid] = 0
-            continue
-        order = chart_view_orders[cid]
-        try:
-            chart_cursors[cid] = int(order.index(primary_vidx)) + 1
-        except ValueError:
-            chart_cursors[cid] = 0
+    # Normalize blended colors
+    colored = np.where(weight_sum > 0)[0]
+    if colored.size > 0:
+        texture[ys[colored], xs[colored]] /= weight_sum[colored, None]
+    has_color[colored] = True
 
-    if secondary_levels:
-        _emit_progress(progress_cb, 90.0, "Secondary view search for uncovered texels")
+    # --- Pass 3: simple fallback for uncovered texels ---
+    missing = np.where(~has_color)[0]
+    if missing.size > 0 and missing.size > n_valid * 0.001:
+        _emit_progress(progress_cb, 90.0, "Fallback for uncovered texels")
+        fallback_min_cos = min(min_cos * 0.25, 0.0)
+        fb_best_score = np.full(len(missing), -1.0, dtype=np.float64)
+        fb_best_view = np.full(len(missing), -1, dtype=np.int32)
 
-    for level_idx, relaxed_min_cos in enumerate(secondary_levels):
-        if not np.any(~has_color):
-            break
-        level_filled = 0
+        for vidx in range(len(poses)):
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
+            try:
+                mask_bool = frame_cache.load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
+                continue
 
-        # Try two next-best rounds per relaxation level.
-        for _round in range(2):
-            missing_texels = np.where(~has_color)[0]
-            if missing_texels.size == 0:
-                break
-            missing_charts = np.unique(texel_chart_ids[missing_texels])
-            charts_for_view: dict[int, list[int]] = defaultdict(list)
+            if vidx in depth_cache:
+                depth_buffer = depth_cache[vidx]
+            else:
+                depth_buffer = _rasterize_view_depth(
+                    new_vertices, new_faces, c2w, K, img_w, img_h
+                )
+            valid_fb, score_fb, _, _ = _evaluate_view_samples(
+                pos3d=pos3d[missing],
+                normals=normals[missing],
+                c2w=c2w,
+                K=K,
+                img_w=img_w,
+                img_h=img_h,
+                mask_bool=mask_bool,
+                depth_buffer=depth_buffer,
+                min_cos=fallback_min_cos,
+                angle_exp=angle_exp,
+                dist_pow=dist_pow,
+            )
+            better = valid_fb & (score_fb > fb_best_score)
+            better_idx = np.where(better)[0]
+            if better_idx.size > 0:
+                fb_best_score[better_idx] = score_fb[better_idx]
+                fb_best_view[better_idx] = vidx
 
-            for cid in missing_charts.tolist():
-                cursor = int(chart_cursors[cid])
-                order = chart_view_orders[cid]
-                if cursor >= len(order):
-                    continue
-                vidx = int(order[cursor])
-                chart_cursors[cid] = cursor + 1
-                charts_for_view[vidx].append(cid)
+        fb_assigned = np.where(fb_best_view >= 0)[0]
+        fb_filled = 0
+        if fb_assigned.size > 0:
+            for vidx_val in np.unique(fb_best_view[fb_assigned]):
+                vidx_val = int(vidx_val)
+                fb_local = np.where(fb_best_view == vidx_val)[0]
+                fb_global = missing[fb_local]
 
-            if not charts_for_view:
-                break
-
-            for vidx, chart_ids_for_view in sorted(charts_for_view.items()):
-                src_idx = int(pose_frame_indices[vidx])
-                c2w = poses[vidx]
+                src_idx = int(pose_frame_indices[vidx_val])
+                c2w = poses[vidx_val]
                 try:
                     frame = frame_cache.load_frame(frames_dir, src_idx)
                     mask_bool = frame_cache.load_mask(mask_dir, src_idx)
                 except FileNotFoundError:
                     continue
 
-                if vidx in depth_cache:
-                    depth_buffer = depth_cache[vidx]
+                if vidx_val in depth_cache:
+                    depth_buffer = depth_cache[vidx_val]
                 else:
-                    depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
-                valid, _score, px_proj, py_proj = _evaluate_view_samples(
-                    pos3d=pos3d,
-                    normals=normals,
+                    depth_buffer = _rasterize_view_depth(
+                        new_vertices, new_faces, c2w, K, img_w, img_h
+                    )
+                valid_p, _, px_p, py_p = _evaluate_view_samples(
+                    pos3d=pos3d[fb_global],
+                    normals=normals[fb_global],
                     c2w=c2w,
                     K=K,
                     img_w=img_w,
                     img_h=img_h,
                     mask_bool=mask_bool,
                     depth_buffer=depth_buffer,
-                    min_cos=relaxed_min_cos,
+                    min_cos=fallback_min_cos,
                     angle_exp=angle_exp,
                     dist_pow=dist_pow,
                 )
-
-                for cid in chart_ids_for_view:
-                    texel_idx = chart_texel_indices[cid]
-                    if texel_idx.size == 0:
-                        continue
-                    pending = texel_idx[~has_color[texel_idx]]
-                    if pending.size == 0:
-                        continue
-                    ok = valid[pending]
-                    if not np.any(ok):
-                        continue
-                    fill_idx = pending[ok]
-                    colors = _bilinear_sample(frame, px_proj[fill_idx], py_proj[fill_idx]).astype(
-                        np.float32
-                    )
-                    texture[ys[fill_idx], xs[fill_idx]] = colors
-                    has_color[fill_idx] = True
-                    level_filled += int(fill_idx.size)
+                if np.any(valid_p):
+                    fill_global = fb_global[valid_p]
+                    colors = _bilinear_sample(
+                        frame, px_p[valid_p], py_p[valid_p]
+                    ).astype(np.float32)
+                    texture[ys[fill_global], xs[fill_global]] = colors
+                    has_color[fill_global] = True
+                    fb_filled += int(fill_global.size)
 
         remaining = int((~has_color).sum())
         print(
-            f"  Secondary pass {level_idx + 1}/{len(secondary_levels)}: "
-            f"min_cos={relaxed_min_cos:.3f}, filled={level_filled}, remaining={remaining}"
+            f"  Fallback pass: min_cos={fallback_min_cos:.3f}, "
+            f"filled={fb_filled}/{len(missing)}, remaining={remaining}"
         )
-        _emit_progress(
-            progress_cb,
-            90.0 + ((level_idx + 1) / max(len(secondary_levels), 1)) * 2.0,
-            f"Secondary view search ({level_idx + 1}/{len(secondary_levels)})",
-        )
+        _emit_progress(progress_cb, 92.0, "Fallback complete")
+    elif missing.size > 0:
+        print(f"  Skipping fallback: only {missing.size} uncovered texels (<0.1%)")
+
+    texture = texture.astype(np.float32)
 
     # Release caches to free memory before seam padding
     depth_cache.clear()

@@ -5,11 +5,10 @@ from unittest.mock import patch
 import numpy as np
 
 from scripts.stage_texture_bake import (
-    _build_face_charts,
-    _rank_chart_view_candidates,
+    _apply_view_hardening,
     _resolve_texture_device,
     _resolve_texture_size,
-    _secondary_min_cos_levels,
+    _update_topk_scores,
 )
 
 
@@ -78,46 +77,128 @@ class ResolveTextureDeviceTests(unittest.TestCase):
                 self.assertEqual(_resolve_texture_device(), "cuda")
 
 
-class BuildFaceChartsTests(unittest.TestCase):
-    def test_faces_connected_by_edge_share_chart(self) -> None:
-        faces = np.array(
-            [
-                [0, 1, 2],
-                [2, 1, 3],  # shares edge (1,2) with face 0
-                [4, 5, 6],  # separate island
-            ],
-            dtype=np.int32,
+class UpdateTopKScoresTests(unittest.TestCase):
+    def test_initial_insert_into_empty_slots(self) -> None:
+        K = 3
+        best_scores = np.full((5, K), -1.0, dtype=np.float32)
+        best_views = np.full((5, K), -1, dtype=np.int32)
+        valid = np.array([True, True, False, True, False])
+        score = np.array([0.8, 0.5, 0.9, 0.3, 0.7], dtype=np.float64)
+
+        _update_topk_scores(best_scores, best_views, valid, score, vidx=0)
+
+        # Valid texels should have score in slot 0
+        self.assertAlmostEqual(float(best_scores[0, 0]), 0.8, places=5)
+        self.assertEqual(int(best_views[0, 0]), 0)
+        self.assertAlmostEqual(float(best_scores[1, 0]), 0.5, places=5)
+        self.assertAlmostEqual(float(best_scores[3, 0]), 0.3, places=5)
+        # Invalid texels should remain empty
+        self.assertAlmostEqual(float(best_scores[2, 0]), -1.0, places=5)
+        self.assertEqual(int(best_views[2, 0]), -1)
+
+    def test_higher_score_replaces_lower(self) -> None:
+        K = 3
+        best_scores = np.array([[0.8, 0.5, 0.2]], dtype=np.float32)
+        best_views = np.array([[0, 1, 2]], dtype=np.int32)
+        valid = np.array([True])
+        score = np.array([0.6], dtype=np.float64)
+
+        _update_topk_scores(best_scores, best_views, valid, score, vidx=3)
+
+        # 0.6 > 0.2 (worst), so replaces slot 2 and re-sorts
+        np.testing.assert_array_almost_equal(
+            best_scores[0], [0.8, 0.6, 0.5], decimal=5
         )
-        chart_ids, n_charts = _build_face_charts(faces)
+        np.testing.assert_array_equal(best_views[0], [0, 3, 1])
 
-        self.assertEqual(n_charts, 2)
-        self.assertEqual(int(chart_ids[0]), int(chart_ids[1]))
-        self.assertNotEqual(int(chart_ids[0]), int(chart_ids[2]))
+    def test_lower_score_does_not_replace(self) -> None:
+        K = 3
+        best_scores = np.array([[0.8, 0.5, 0.3]], dtype=np.float32)
+        best_views = np.array([[0, 1, 2]], dtype=np.int32)
+        valid = np.array([True])
+        score = np.array([0.1], dtype=np.float64)
+
+        _update_topk_scores(best_scores, best_views, valid, score, vidx=3)
+
+        # 0.1 < 0.3 (worst), no change
+        np.testing.assert_array_almost_equal(
+            best_scores[0], [0.8, 0.5, 0.3], decimal=5
+        )
+        np.testing.assert_array_equal(best_views[0], [0, 1, 2])
+
+    def test_invalid_texels_excluded(self) -> None:
+        K = 2
+        best_scores = np.full((3, K), -1.0, dtype=np.float32)
+        best_views = np.full((3, K), -1, dtype=np.int32)
+        valid = np.array([False, True, False])
+        score = np.array([0.9, 0.4, 0.7], dtype=np.float64)
+
+        _update_topk_scores(best_scores, best_views, valid, score, vidx=0)
+
+        # Only texel 1 should be updated
+        self.assertAlmostEqual(float(best_scores[0, 0]), -1.0, places=5)
+        self.assertAlmostEqual(float(best_scores[1, 0]), 0.4, places=5)
+        self.assertAlmostEqual(float(best_scores[2, 0]), -1.0, places=5)
+
+    def test_k1_single_view(self) -> None:
+        K = 1
+        best_scores = np.full((2, K), -1.0, dtype=np.float32)
+        best_views = np.full((2, K), -1, dtype=np.int32)
+        valid = np.array([True, True])
+        score = np.array([0.5, 0.3], dtype=np.float64)
+
+        _update_topk_scores(best_scores, best_views, valid, score, vidx=0)
+
+        np.testing.assert_array_almost_equal(
+            best_scores[:, 0], [0.5, 0.3], decimal=5
+        )
+
+        # Second view with higher score for texel 1
+        score2 = np.array([0.4, 0.7], dtype=np.float64)
+        _update_topk_scores(best_scores, best_views, valid, score2, vidx=1)
+
+        np.testing.assert_array_almost_equal(
+            best_scores[:, 0], [0.5, 0.7], decimal=5
+        )
+        np.testing.assert_array_equal(best_views[:, 0], [0, 1])
 
 
-class RankChartViewCandidatesTests(unittest.TestCase):
-    def test_ranking_prioritizes_coverage_then_score(self) -> None:
-        chart_candidates = [
-            [(0.40, 10.0, 0), (0.60, 1.0, 1), (0.60, 0.5, 2)],
-            [],
-        ]
-        primary, orders = _rank_chart_view_candidates(chart_candidates, n_views=4)
+class BlendNormalizationTests(unittest.TestCase):
+    def test_equal_scores_average_colors(self) -> None:
+        """Two views with equal scores should produce average color."""
+        K = 2
+        n_texels = 4
+        best_scores = np.array([
+            [0.5, 0.5],
+            [0.5, 0.5],
+            [0.8, -1.0],
+            [0.5, 0.5],
+        ], dtype=np.float32)
 
-        self.assertEqual(int(primary[0]), 1)
-        self.assertEqual(orders[0][:3], [1, 2, 0])
-        self.assertEqual(int(primary[1]), -1)
-        self.assertEqual(orders[1][:4], [0, 1, 2, 3])
+        # Simulate weight accumulation and normalization
+        color_v0 = np.array([1.0, 0.0, 0.0])  # red
+        color_v1 = np.array([0.0, 0.0, 1.0])  # blue
 
+        texture = np.zeros((n_texels, 3), dtype=np.float64)
+        weight_sum = np.zeros(n_texels, dtype=np.float64)
 
-class SecondaryMinCosLevelsTests(unittest.TestCase):
-    def test_relaxed_levels_are_unique_and_strictly_lower(self) -> None:
-        levels = _secondary_min_cos_levels(0.2)
+        # Texels 0,1,3 have both views; texel 2 has only view 0
+        for i in [0, 1, 3]:
+            texture[i] += 0.5 * color_v0 + 0.5 * color_v1
+            weight_sum[i] += 1.0
+        texture[2] += 0.8 * color_v0
+        weight_sum[2] += 0.8
 
-        self.assertGreater(len(levels), 0)
-        self.assertEqual(levels, sorted(levels, reverse=True))
-        for level in levels:
-            self.assertLess(level, 0.2)
-        self.assertEqual(len(levels), len(set(levels)))
+        colored = weight_sum > 0
+        texture[colored] /= weight_sum[colored, None]
+
+        # Equal weight blend → average of red and blue = purple
+        expected_blend = np.array([0.5, 0.0, 0.5])
+        np.testing.assert_array_almost_equal(texture[0], expected_blend, decimal=5)
+        np.testing.assert_array_almost_equal(texture[1], expected_blend, decimal=5)
+        np.testing.assert_array_almost_equal(texture[3], expected_blend, decimal=5)
+        # Single view → just that color
+        np.testing.assert_array_almost_equal(texture[2], color_v0, decimal=5)
 
 
 class ResolveTextureSizeTests(unittest.TestCase):
@@ -147,3 +228,47 @@ class ResolveTextureSizeTests(unittest.TestCase):
             size, is_auto = _resolve_texture_size(None, 640, 360)
             self.assertEqual(size, 480)
             self.assertTrue(is_auto)
+
+
+class ViewHardeningTests(unittest.TestCase):
+    def test_dominant_texel_zeroed(self) -> None:
+        """Top-1 >> top-2 should zero out non-dominant slots."""
+        best_scores = np.array([[0.9, 0.3, 0.1]], dtype=np.float32)
+        best_views = np.array([[2, 5, 7]], dtype=np.int32)
+        n = _apply_view_hardening(best_scores, best_views, hard_ratio=2.0)
+        self.assertEqual(n, 1)
+        self.assertAlmostEqual(float(best_scores[0, 0]), 0.9, places=5)
+        self.assertAlmostEqual(float(best_scores[0, 1]), -1.0, places=5)
+        self.assertAlmostEqual(float(best_scores[0, 2]), -1.0, places=5)
+        self.assertEqual(int(best_views[0, 0]), 2)
+        self.assertEqual(int(best_views[0, 1]), -1)
+        self.assertEqual(int(best_views[0, 2]), -1)
+
+    def test_competitive_texel_unchanged(self) -> None:
+        """Close scores should not be hardened."""
+        best_scores = np.array([[0.5, 0.4, 0.1]], dtype=np.float32)
+        best_views = np.array([[1, 3, 6]], dtype=np.int32)
+        scores_orig = best_scores.copy()
+        views_orig = best_views.copy()
+        n = _apply_view_hardening(best_scores, best_views, hard_ratio=2.0)
+        self.assertEqual(n, 0)
+        np.testing.assert_array_equal(best_scores, scores_orig)
+        np.testing.assert_array_equal(best_views, views_orig)
+
+    def test_disabled_when_ratio_zero(self) -> None:
+        """hard_ratio=0 should disable hardening entirely."""
+        best_scores = np.array([[0.9, 0.1]], dtype=np.float32)
+        best_views = np.array([[0, 1]], dtype=np.int32)
+        scores_orig = best_scores.copy()
+        views_orig = best_views.copy()
+        n = _apply_view_hardening(best_scores, best_views, hard_ratio=0.0)
+        self.assertEqual(n, 0)
+        np.testing.assert_array_equal(best_scores, scores_orig)
+        np.testing.assert_array_equal(best_views, views_orig)
+
+    def test_single_view_k1_noop(self) -> None:
+        """K=1 should always be a no-op."""
+        best_scores = np.array([[0.9]], dtype=np.float32)
+        best_views = np.array([[2]], dtype=np.int32)
+        n = _apply_view_hardening(best_scores, best_views, hard_ratio=2.0)
+        self.assertEqual(n, 0)
