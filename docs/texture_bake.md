@@ -33,10 +33,10 @@
    - FOV グリッドサーチ
    - Nelder-Mead で `(fx, fy, cx, cy)` 最適化
 3. `xatlas.parametrize` で UV 展開。
-4. UVチャート（連結面）ごとに最適視点を選定。
+4. テクセル単位で Top-K ビューをスコア加重ブレンド。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
-   - チャート単位で primary 視点を貼り付け
-   - 未充填テクセルは次点視点を使って二次候補再探索
+   - 各テクセルの上位 K 個のビューからスコア加重平均で色を決定
+   - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
 5. UV seam 周辺を反復補間して隙間埋め。
 6. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
 7. OBJ/MTL を生成。
@@ -48,8 +48,8 @@
   - 距離減衰 (`TEXTURE_DIST_POW`) を適用
   - 可視性はビューごとの深度ラスタライズで判定
 - 貼り付け:
-  - UVチャート単位で最適視点を1つ選ぶ
-  - 欠損は二次候補で再探索してから seam padding
+  - テクセル単位で Top-K ビューのスコア加重平均で色を決定
+  - 未充填テクセルは relaxed 閾値でフォールバックしてから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
 
@@ -61,9 +61,11 @@
 | `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行のチャート選定処理は CPU で実行 |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
-| `TEXTURE_ANGLE_EXP` | `2.0` | 角度重み指数 |
+| `TEXTURE_ANGLE_EXP` | `4.0` | 角度重み指数 |
 | `TEXTURE_DIST_POW` | `1.0` | 距離減衰指数 |
 | `TEXTURE_SHARPEN` | `0.15` | 最終アンシャープ量 |
+| `TEXTURE_BLEND_TOPK` | `3` | テクセルあたりブレンドするビュー数 (1=ブレンドなし) |
+| `TEXTURE_BLEND_HARD_RATIO` | `2.0` | top-1 / top-2 スコア比がこの値を超えるテクセルはシングルビュー化 (0=無効) |
 
 既定値の定義元: `scripts/config_defaults.py`
 
