@@ -378,7 +378,7 @@ def _run_alpha_wrap(
                 "Mesh3.from_alpha_wrapping() found. Check seagullmesh version."
             )
 
-    _emit_progress(progress_cb, 75.0, "Mesh Wrap: converting alpha wrap result")
+    _emit_progress(progress_cb, 70.0, "Mesh Wrap: converting alpha wrap result")
 
     w_verts, w_faces = wrapped_sgm.to_vertices_and_faces()
     result = o3d.geometry.TriangleMesh()
@@ -394,6 +394,28 @@ def _run_alpha_wrap(
         f"Mesh Wrap alpha_wrap result: "
         f"{len(result.vertices):,} verts, {len(result.triangles):,} faces"
     )
+
+    # Face count adjustment (mirror _run_poisson_wrap pattern)
+    source_faces = int(len(source_mesh.triangles))
+    target_faces = int(round(float(source_faces) * params.target_face_ratio))
+    target_faces = max(params.min_faces, target_faces)
+    target_faces = min(params.max_faces, target_faces)
+    current_faces = int(len(result.triangles))
+    if current_faces > target_faces:
+        _emit_progress(progress_cb, 78.0, "Mesh Wrap: decimating alpha wrap result")
+        effective_target = min(max(4, target_faces), max(4, current_faces - 1))
+        simplified = result.simplify_quadric_decimation(effective_target)
+        if len(simplified.vertices) > 0 and len(simplified.triangles) > 0:
+            result = _clean_mesh(simplified)
+            print(
+                f"Mesh Wrap alpha_wrap face trim: {current_faces:,} -> "
+                f"{len(result.triangles):,} (target={target_faces:,})"
+            )
+
+    # Taubin smoothing (same as _run_poisson_wrap)
+    result = _apply_taubin_smoothing(result, params.smooth_iterations)
+    result.compute_vertex_normals()
+
     return result
 
 
