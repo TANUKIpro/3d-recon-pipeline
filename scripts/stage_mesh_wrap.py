@@ -229,6 +229,21 @@ def _clean_mesh(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
     return mesh
 
 
+def _clean_mesh_post_decimation(mesh: o3d.geometry.TriangleMesh) -> o3d.geometry.TriangleMesh:
+    """Lighter cleanup after quadric decimation — preserves watertightness.
+
+    Omits remove_non_manifold_edges() because it creates boundary holes
+    when applied to decimation artifacts. Downstream stages handle
+    non-manifold edges gracefully.
+    """
+    mesh.remove_degenerate_triangles()
+    mesh.remove_duplicated_triangles()
+    mesh.remove_duplicated_vertices()
+    mesh.remove_unreferenced_vertices()
+    mesh.compute_vertex_normals()
+    return mesh
+
+
 def _bbox_diag(mesh: o3d.geometry.TriangleMesh) -> float:
     if len(mesh.vertices) == 0:
         return 1e-6
@@ -364,23 +379,23 @@ def _run_alpha_wrap(
 
     _emit_progress(progress_cb, 30.0, "Mesh Wrap: running CGAL alpha wrapping")
 
-    # seagullmesh wraps CGAL alpha_wrap_3 — accepts vertices+faces or just vertices
+    # Use from_alpha_wrapping (face+point mode) — avoids from_polygon_soup's
+    # orient step which fails on large meshes ("Polygon orientation failed").
     try:
-        sgm_input = Mesh3.from_polygon_soup(vertices, triangles)
-        wrapped_sgm = Mesh3.alpha_wrap(sgm_input, alpha, offset)
-    except (TypeError, AttributeError):
-        # Fallback: try point-cloud-only API variant
-        try:
-            wrapped_sgm = Mesh3.from_alpha_wrapping(vertices, alpha, offset)
-        except AttributeError:
-            raise RuntimeError(
-                "seagullmesh API mismatch — neither Mesh3.alpha_wrap() nor "
-                "Mesh3.from_alpha_wrapping() found. Check seagullmesh version."
-            )
+        wrapped_sgm = Mesh3.from_alpha_wrapping(
+            vertices, triangles, alpha=alpha, offset=offset,
+        )
+    except Exception as e:
+        # Fallback: point-cloud-only wrapping (ignores face topology)
+        print(f"Mesh Wrap: face-based alpha wrapping failed ({e}), "
+              "falling back to point-cloud mode")
+        wrapped_sgm = Mesh3.from_alpha_wrapping(
+            vertices, alpha=alpha, offset=offset,
+        )
 
     _emit_progress(progress_cb, 70.0, "Mesh Wrap: converting alpha wrap result")
 
-    w_verts, w_faces = wrapped_sgm.to_vertices_and_faces()
+    w_verts, w_faces = wrapped_sgm.to_polygon_soup()
     result = o3d.geometry.TriangleMesh()
     result.vertices = o3d.utility.Vector3dVector(np.asarray(w_verts, dtype=np.float64))
     result.triangles = o3d.utility.Vector3iVector(np.asarray(w_faces, dtype=np.int32))
@@ -406,7 +421,7 @@ def _run_alpha_wrap(
         effective_target = min(max(4, target_faces), max(4, current_faces - 1))
         simplified = result.simplify_quadric_decimation(effective_target)
         if len(simplified.vertices) > 0 and len(simplified.triangles) > 0:
-            result = _clean_mesh(simplified)
+            result = _clean_mesh_post_decimation(simplified)
             print(
                 f"Mesh Wrap alpha_wrap face trim: {current_faces:,} -> "
                 f"{len(result.triangles):,} (target={target_faces:,})"
@@ -566,7 +581,7 @@ def _run_poisson_wrap(
         effective_target = min(max(4, target_faces), max(4, current_faces - 1))
         simplified = wrapped.simplify_quadric_decimation(effective_target)
         if len(simplified.vertices) > 0 and len(simplified.triangles) > 0:
-            wrapped = _clean_mesh(simplified)
+            wrapped = _clean_mesh_post_decimation(simplified)
             print(
                 f"Mesh Wrap face trim: {current_faces:,} -> {len(wrapped.triangles):,} "
                 f"(target={target_faces:,})"
