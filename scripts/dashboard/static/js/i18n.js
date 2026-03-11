@@ -29,6 +29,18 @@ const TRANSLATIONS = {
   'log.title': { en: 'Log', ja: 'ログ' },
   'checkpoint.title': { en: 'Checkpoint', ja: 'チェックポイント' },
 
+  // Overview
+  'overview.title': { en: 'Objects', ja: 'オブジェクト一覧' },
+  'overview.new_pipeline': { en: 'New Pipeline', ja: '新規パイプライン' },
+  'overview.empty': { en: 'No objects yet. Start a new pipeline to create one.', ja: 'オブジェクトがありません。新規パイプラインを開始してください。' },
+  'overview.open': { en: 'Open', ja: '開く' },
+  'overview.stages': { en: 'Stages', ja: 'ステージ' },
+  'overview.updated': { en: 'Updated', ja: '更新日時' },
+  'overview.artifacts': { en: 'Artifacts', ja: '生成物' },
+
+  // Breadcrumb
+  'header.back_to_overview': { en: 'Pipeline', ja: 'パイプライン' },
+
   // Settings panel
   'settings.title': { en: 'Settings', ja: '設定' },
   'settings.theme': { en: 'Theme', ja: 'テーマ' },

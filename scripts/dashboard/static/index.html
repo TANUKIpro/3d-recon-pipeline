@@ -10,8 +10,12 @@
   <!-- Header -->
   <header id="header">
     <div class="header-left">
-      <h1 data-i18n="header.title">clip2mesh</h1>
+      <h1 id="header-title" data-i18n="header.title">clip2mesh</h1>
       <span class="header-subtitle" data-i18n="header.subtitle">RGB Video &rarr; Textured 3D Mesh</span>
+      <span id="breadcrumb" class="header-breadcrumb">
+        <span class="breadcrumb-sep">&rsaquo;</span>
+        <span id="breadcrumb-text" data-i18n="header.back_to_overview">Pipeline</span>
+      </span>
     </div>
     <div class="header-right">
       <span id="vram-badge" class="badge" title="GPU VRAM">VRAM: --</span>
@@ -20,6 +24,18 @@
       <button id="settings-btn" class="settings-gear-btn" title="Settings">&#9881;</button>
     </div>
   </header>
+
+  <!-- Overview -->
+  <div id="overview-container">
+    <div class="overview-header">
+      <h2 data-i18n="overview.title">Objects</h2>
+      <button id="overview-new-btn" class="btn-primary btn-small" data-i18n="overview.new_pipeline">New Pipeline</button>
+    </div>
+    <div id="overview-grid"></div>
+    <div id="overview-empty" class="overview-empty" style="display:none">
+      <p data-i18n="overview.empty">No objects yet. Start a new pipeline to create one.</p>
+    </div>
+  </div>
 
   <!-- Stage Progress Bar -->
   <nav id="stage-bar">

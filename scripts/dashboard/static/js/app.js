@@ -5,6 +5,8 @@
 
 import { I18n } from './i18n.js';
 import { SettingsPanel } from './settings-panel.js';
+import { ViewRouter } from './router.js';
+import { OverviewPanel } from './overview.js';
 import { WsManager } from './ws.js';
 import { PipelineUI } from './pipeline.js';
 import { SAM2Canvas } from './sam2-canvas.js';
@@ -39,6 +41,11 @@ import {
 const i18n = new I18n();
 const settings = new SettingsPanel(i18n);
 i18n.apply();
+
+// ── Router & Overview ────────────────────────────────────────
+
+const router = new ViewRouter();
+const overview = new OverviewPanel();
 
 // ── Init modules ─────────────────────────────────────────────
 
@@ -613,6 +620,7 @@ ws.on('pipeline_complete', (msg) => {
   pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
+  overview.markStale();
   taskConfirm.waitingStage = null;
   taskConfirm.waitingToStage = null;
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
@@ -640,6 +648,7 @@ ws.on('pipeline_error', (msg) => {
   pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
+  overview.markStale();
   if (taskConfirm.waitingStage !== null) {
     taskConfirm.setState(
       taskConfirm.waitingStage,
@@ -705,6 +714,40 @@ async function pollVRAM() {
 setInterval(pollVRAM, 5000);
 pollVRAM();
 
+// ── Router & Overview wiring ─────────────────────────────────
+
+const headerTitle = document.getElementById('header-title');
+const breadcrumbText = document.getElementById('breadcrumb-text');
+
+// Title click → overview
+headerTitle?.addEventListener('click', () => router.navigate('overview'));
+
+// Router view change
+router.onChange = (view) => {
+  if (view === 'overview') {
+    overview.refreshIfStale();
+  }
+};
+
+// Overview: open an existing object
+overview.onOpenObject = async (objectName) => {
+  router.navigate('pipeline');
+  await config.onObjectSelected?.(objectName);
+  overview.setActiveObject(objectName);
+  if (breadcrumbText) breadcrumbText.textContent = objectName;
+};
+
+// Overview: start fresh pipeline
+overview.onNewPipeline = () => {
+  router.navigate('pipeline');
+  config.onObjectSelected?.(null);
+  overview.setActiveObject(null);
+  if (breadcrumbText) breadcrumbText.textContent = i18n.t('header.back_to_overview');
+};
+
 // ── Boot ─────────────────────────────────────────────────────
 
 ws.connect();
+
+// Trigger initial overview refresh if landing on overview
+if (router.view === 'overview') overview.refresh();
