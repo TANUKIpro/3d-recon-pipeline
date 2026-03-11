@@ -155,9 +155,14 @@
           </div>
         </div>
         <div id="sam2-toolbar">
+          <div id="sam2-mode-toggle" style="display:none">
+            <button id="sam2-mode-object" class="btn-small active" title="Segment the object">Object</button>
+            <button id="sam2-mode-ground" class="btn-small" title="Segment the ground plane">Ground</button>
+          </div>
           <button id="sam2-undo" disabled>Undo</button>
           <button id="sam2-clear" disabled>Clear</button>
           <span id="sam2-click-info"></span>
+          <button id="sam2-skip-ground" class="btn-small" style="display:none">Skip Ground</button>
           <button id="sam2-confirm" class="btn-primary" disabled>Confirm &amp; Propagate</button>
         </div>
         <div id="sam2-verification" style="display:none">
@@ -382,6 +387,13 @@
               <option value="small">Small</option>
               <option value="tiny">Tiny</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label" for="cfg-ground-plane-enabled">
+              <input type="checkbox" id="cfg-ground-plane-enabled" checked>
+              Ground Plane Segmentation
+            </label>
+            <div class="config-note">Segment the ground surface for better bottom repair.</div>
           </div>
         </div>
 

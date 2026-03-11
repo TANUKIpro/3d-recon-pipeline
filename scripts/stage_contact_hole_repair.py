@@ -693,6 +693,175 @@ def analyze_contact_hole_candidates(
     )
 
 
+def _clip_mesh_at_plane(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    offset: float = 0.002,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Clip mesh at a plane, keeping the 'above' side.
+
+    Vertices with ``dot(v, normal) + d - offset > 0`` are considered above.
+    Faces that straddle the plane are split so that only the above portion
+    remains.
+    """
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    dist = vertices @ plane_normal + plane_d
+    dist = dist - offset  # cut slightly above ground
+
+    above = dist > 0.0
+
+    new_vertices_list: list[np.ndarray] = []
+    new_vertex_count = int(vertices.shape[0])
+    # Cache for interpolated edge vertices: (min_idx, max_idx) -> new_vertex_index
+    edge_interp_cache: dict[tuple[int, int], int] = {}
+
+    def _get_interp_vertex(idx_a: int, idx_b: int) -> int:
+        nonlocal new_vertex_count
+        key = (min(idx_a, idx_b), max(idx_a, idx_b))
+        if key in edge_interp_cache:
+            return edge_interp_cache[key]
+        da = dist[idx_a]
+        db = dist[idx_b]
+        denom = da - db
+        if abs(denom) < 1e-15:
+            t = 0.5
+        else:
+            t = da / denom
+        t = max(0.0, min(1.0, t))
+        new_v = (1.0 - t) * vertices[idx_a] + t * vertices[idx_b]
+        new_vertices_list.append(new_v)
+        new_idx = new_vertex_count
+        new_vertex_count += 1
+        edge_interp_cache[key] = new_idx
+        return new_idx
+
+    kept_faces: list[list[int]] = []
+
+    for tri in faces:
+        i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
+        a0, a1, a2 = above[i0], above[i1], above[i2]
+        n_above = int(a0) + int(a1) + int(a2)
+
+        if n_above == 3:
+            # All above: keep as-is
+            kept_faces.append([i0, i1, i2])
+        elif n_above == 0:
+            # All below: discard
+            continue
+        elif n_above == 2:
+            # Two above, one below: produce two triangles
+            if not a0:
+                below_idx, above1, above2 = i0, i1, i2
+            elif not a1:
+                below_idx, above1, above2 = i1, i2, i0
+            else:
+                below_idx, above1, above2 = i2, i0, i1
+            m1 = _get_interp_vertex(above1, below_idx)
+            m2 = _get_interp_vertex(above2, below_idx)
+            kept_faces.append([above1, above2, m1])
+            kept_faces.append([above2, m2, m1])
+        else:
+            # One above, two below: produce one triangle
+            if a0:
+                above_idx, below1, below2 = i0, i1, i2
+            elif a1:
+                above_idx, below1, below2 = i1, i2, i0
+            else:
+                above_idx, below1, below2 = i2, i0, i1
+            m1 = _get_interp_vertex(above_idx, below1)
+            m2 = _get_interp_vertex(above_idx, below2)
+            kept_faces.append([above_idx, m1, m2])
+
+    if new_vertices_list:
+        all_vertices = np.vstack((vertices, np.array(new_vertices_list, dtype=np.float64)))
+    else:
+        all_vertices = vertices.copy()
+
+    if kept_faces:
+        all_faces = np.asarray(kept_faces, dtype=np.int64)
+    else:
+        all_faces = np.zeros((0, 3), dtype=np.int64)
+
+    return all_vertices, all_faces
+
+
+def _cap_boundary_at_plane(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    tolerance: float = 0.01,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Cap open boundary loops that lie near the ground plane.
+
+    Uses the existing boundary extraction and ear-clip triangulation helpers
+    to fill loops whose centroid is close to the clipping plane.
+    """
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+
+    boundary_edges = _extract_boundary_edges(faces)
+    if boundary_edges.size == 0:
+        return vertices, faces
+
+    raw_paths = _extract_boundary_paths(boundary_edges)
+    if not raw_paths:
+        return vertices, faces
+
+    bbox_diag = max(
+        float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))),
+        1e-6,
+    )
+    dist_threshold = tolerance * bbox_diag
+
+    added_face_lists: list[np.ndarray] = []
+
+    for path in raw_paths:
+        # Must be a closed loop
+        if len(path) < 4 or path[0] != path[-1]:
+            continue
+        loop_vertices = path[:-1]
+        if len(loop_vertices) < 3 or len(set(loop_vertices)) < 3:
+            continue
+
+        loop_indices = np.asarray(loop_vertices, dtype=np.int64)
+        loop_points = vertices[loop_indices]
+        centroid = loop_points.mean(axis=0)
+
+        # Check if centroid is close to the ground plane
+        plane_dist = abs(float(np.dot(centroid, plane_normal) + plane_d))
+        if plane_dist > dist_threshold:
+            continue
+
+        # Project loop vertices onto ground plane for 2D triangulation
+        loop_uv = _loop_projection_uv(loop_points, plane_normal)
+        local_tris = _triangulate_polygon_ear_clip(loop_uv)
+        if not local_tris:
+            continue
+
+        new_faces = np.asarray(
+            [[loop_vertices[a], loop_vertices[b], loop_vertices[c]] for a, b, c in local_tris],
+            dtype=np.int64,
+        )
+
+        # Validate: skip degenerate triangles
+        tri_pts = vertices[new_faces]
+        tri_cross = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
+        tri_area2 = np.linalg.norm(tri_cross, axis=1)
+        if np.any(tri_area2 <= 1e-11):
+            continue
+
+        added_face_lists.append(new_faces)
+
+    if added_face_lists:
+        augmented_faces = np.vstack([faces] + added_face_lists)
+    else:
+        augmented_faces = faces
+
+    return vertices, augmented_faces
+
+
 def _repair_contact_holes(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -876,6 +1045,7 @@ def run_contact_hole_repair(
     smooth_iters: int | None = None,
     selected_loop_ids: list[int] | None = None,
     require_selection: bool = False,
+    ground_plane: dict | None = None,
 ) -> Path:
     """Repair mesh holes and save object_mesh_repaired.ply.
 
@@ -922,6 +1092,65 @@ def run_contact_hole_repair(
         _emit_progress(progress_cb, 100.0, "Contact Hole Repair: skipped (disabled)")
         return repaired_path
 
+    # ------------------------------------------------------------------
+    # Ground-plane clipping path: skip Y-band heuristic entirely
+    # ------------------------------------------------------------------
+    if ground_plane is not None:
+        gp_normal = np.asarray(ground_plane["normal"], dtype=np.float64)
+        gp_d = float(ground_plane["d"])
+        print(
+            f"Ground-plane mode: normal=[{gp_normal[0]:.4f}, {gp_normal[1]:.4f}, {gp_normal[2]:.4f}], "
+            f"d={gp_d:.4f}"
+        )
+
+        _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
+        _check_cancel(cancel_cb)
+        clipped_verts, clipped_faces = _clip_mesh_at_plane(
+            vertices, faces, gp_normal, gp_d,
+        )
+        print(
+            f"  clip: {vertices.shape[0]} -> {clipped_verts.shape[0]} vertices, "
+            f"{faces.shape[0]} -> {clipped_faces.shape[0]} faces"
+        )
+
+        _emit_progress(progress_cb, 45.0, "Contact Hole Repair: capping ground boundary")
+        _check_cancel(cancel_cb)
+        capped_verts, capped_faces = _cap_boundary_at_plane(
+            clipped_verts, clipped_faces, gp_normal, gp_d,
+        )
+        cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
+        print(f"  cap: added {cap_added} faces")
+
+        _emit_progress(progress_cb, 70.0, "Contact Hole Repair: smoothing junction")
+        _check_cancel(cancel_cb)
+
+        # Collect vertices on newly added cap faces for local smoothing
+        smooth_seed: set[int] = set()
+        if cap_added > 0:
+            cap_face_block = capped_faces[clipped_faces.shape[0]:]
+            smooth_seed.update(int(v) for v in np.unique(cap_face_block))
+
+        repaired_vertices = _apply_local_smoothing(
+            capped_verts,
+            capped_faces,
+            smooth_seed,
+            iterations=params.smooth_iters,
+            lamb=params.smooth_lambda,
+        )
+        repaired_faces = capped_faces
+
+        _check_cancel(cancel_cb)
+        _emit_progress(progress_cb, 90.0, "Contact Hole Repair: writing repaired mesh")
+
+        _write_repaired_outputs(repaired_vertices, repaired_faces, repaired_path, repaired_copy_path)
+
+        print(f"Saved repaired mesh (ground-plane): {repaired_path}")
+        _emit_progress(progress_cb, 100.0, "Contact Hole Repair: complete")
+        return repaired_path
+
+    # ------------------------------------------------------------------
+    # Legacy Y-band + normal heuristic path
+    # ------------------------------------------------------------------
     if require_selection and selected_loop_ids is None:
         raise ValueError("selected_loop_ids is required for mesh repair")
 
@@ -990,6 +1219,7 @@ def run_selected_contact_hole_repair(
     max_diameter_ratio: float | None = None,
     y_band_ratio: float | None = None,
     smooth_iters: int | None = None,
+    ground_plane: dict | None = None,
 ) -> Path:
     """Explicit selected-loop entry point for dashboard interactive flow."""
     return run_contact_hole_repair(
@@ -1003,6 +1233,7 @@ def run_selected_contact_hole_repair(
         smooth_iters=smooth_iters,
         selected_loop_ids=selected_loop_ids,
         require_selection=True,
+        ground_plane=ground_plane,
     )
 
 

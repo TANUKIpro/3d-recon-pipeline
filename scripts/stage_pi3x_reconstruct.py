@@ -1229,6 +1229,175 @@ def run_pi3x(
     return ply_path, poses_path
 
 
+def extract_ground_plane(
+    cache_path: str,
+    ground_mask_dir: str,
+    output_dir: str,
+    progress_cb: ProgressCallback | None = None,
+    cancel_cb: CancelCallback | None = None,
+) -> dict | None:
+    """Extract ground plane from Pi3X cache using ground segmentation masks.
+
+    Loads the Pi3X cache and ground masks, extracts 3D points belonging to the
+    ground, fits a plane via RANSAC, and saves the result as ground_plane.json.
+
+    Args:
+        cache_path: Path to pi3x_cache.npz from run_pi3x_inference().
+        ground_mask_dir: Directory of ground mask PNGs.
+        output_dir: Output directory for ground_plane.json.
+        progress_cb: Optional progress callback.
+        cancel_cb: Optional cancel callback.
+
+    Returns:
+        Dict with plane parameters, or None if insufficient ground points.
+    """
+    import open3d as o3d
+
+    output_path = Path(output_dir)
+    ground_mask_dir = Path(ground_mask_dir)
+    _check_cancel(cancel_cb)
+    _emit_progress(progress_cb, 5.0, "Loading Pi3X cache for ground plane")
+
+    # Load cache
+    cache = np.load(str(cache_path))
+    points = cache["points"]  # (N, H, W, 3) float16
+    conf_edge_mask = cache["conf_edge_mask"]  # (N, H, W) bool
+    colors = cache["colors"]  # (N, H, W, 3) float
+    N = int(cache["N"])
+    H = int(cache["H"])
+    W = int(cache["W"])
+    if "frame_indices" in cache.files:
+        frame_indices = cache["frame_indices"].astype(np.int64).tolist()
+    elif "source_indices" in cache.files:
+        frame_indices = cache["source_indices"].astype(np.int64).tolist()
+    else:
+        frame_indices = list(range(N))
+    if len(frame_indices) != N:
+        print(
+            f"Warning: cache frame_indices length {len(frame_indices)} != N={N}. "
+            "Falling back to 0..N-1."
+        )
+        frame_indices = list(range(N))
+    _emit_progress(progress_cb, 15.0, f"Loaded cache for {N} frames")
+
+    # Load ground masks
+    mask_files = sorted(ground_mask_dir.glob("*.png"))
+    if len(mask_files) < N:
+        print(f"Warning: {len(mask_files)} ground masks available for {N} Pi3X frames.")
+
+    ground_masks = []
+    missing_masks = 0
+    emit_every = max(1, N // 40)
+    for i, frame_idx in enumerate(frame_indices):
+        _check_cancel(cancel_cb)
+        mask_path = ground_mask_dir / f"{int(frame_idx):05d}.png"
+        if not mask_path.exists() and 0 <= int(frame_idx) < len(mask_files):
+            mask_path = mask_files[int(frame_idx)]
+
+        if not mask_path.exists():
+            missing_masks += 1
+            ground_masks.append(np.zeros((H, W), dtype=bool))
+        else:
+            mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+            if mask_img is None:
+                missing_masks += 1
+                ground_masks.append(np.zeros((H, W), dtype=bool))
+            else:
+                mask_resized = cv2.resize(mask_img, (W, H), interpolation=cv2.INTER_NEAREST)
+                ground_masks.append(mask_resized > 127)
+        if i % emit_every == 0 or i == N - 1:
+            ratio = (i + 1) / max(N, 1)
+            _emit_progress(
+                progress_cb,
+                15.0 + ratio * 35.0,
+                f"Loading ground masks ({i + 1}/{N})",
+            )
+
+    if missing_masks > 0:
+        print(f"Warning: {missing_masks}/{N} ground masks missing or unreadable.")
+
+    ground_mask = np.stack(ground_masks)
+    # Combine with confidence/edge mask to get valid ground points
+    final_ground_mask = conf_edge_mask & ground_mask
+    ground_count = final_ground_mask.sum()
+    _check_cancel(cancel_cb)
+    _emit_progress(progress_cb, 55.0, f"Ground points: {ground_count:,}")
+
+    if ground_count < 100:
+        print(f"Not enough ground points ({ground_count} < 100). Skipping plane fitting.")
+        _emit_progress(progress_cb, 100.0, "Insufficient ground points")
+        return None
+
+    # Extract ground 3D points
+    ground_pts = points[final_ground_mask].astype(np.float32)
+
+    # Also extract non-ground (object) points for normal orientation
+    object_mask = conf_edge_mask & ~ground_mask
+    object_count = object_mask.sum()
+    if object_count > 0:
+        object_pts = points[object_mask].astype(np.float32)
+        object_centroid = object_pts.mean(axis=0)
+    else:
+        # Fallback: use all non-ground cached points
+        object_centroid = points[conf_edge_mask].astype(np.float32).mean(axis=0)
+    _emit_progress(progress_cb, 60.0, "Fitting ground plane (RANSAC)")
+
+    # Build Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(ground_pts.astype(np.float64))
+
+    # Compute bounding box diagonal for adaptive distance threshold
+    bbox = pcd.get_axis_aligned_bounding_box()
+    bbox_diag = np.linalg.norm(bbox.get_max_bound() - bbox.get_min_bound())
+    distance_threshold = 0.01 * bbox_diag
+
+    # Fit plane via RANSAC
+    plane_model, inliers = pcd.segment_plane(
+        distance_threshold=distance_threshold,
+        ransac_n=3,
+        num_iterations=1000,
+    )
+    a, b, c, d = plane_model
+    normal = np.array([a, b, c], dtype=np.float64)
+    _check_cancel(cancel_cb)
+    _emit_progress(progress_cb, 80.0, "Orienting ground plane normal")
+
+    # Compute ground center from inlier points
+    inlier_pts = ground_pts[inliers]
+    ground_center = inlier_pts.mean(axis=0).astype(np.float64)
+
+    # Ensure normal points toward the object centroid
+    obj_c = object_centroid.astype(np.float64)
+    to_object = obj_c - ground_center
+    if np.dot(normal, to_object) < 0:
+        normal = -normal
+        d = -d
+
+    inlier_ratio = len(inliers) / ground_count
+
+    print(f"Ground plane: normal=({normal[0]:.4f}, {normal[1]:.4f}, {normal[2]:.4f}), d={d:.4f}")
+    print(f"  Inliers: {len(inliers):,}/{ground_count:,} ({100*inlier_ratio:.1f}%)")
+    print(f"  Distance threshold: {distance_threshold:.5f} (bbox_diag={bbox_diag:.4f})")
+
+    result = {
+        "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
+        "d": float(d),
+        "center": [float(ground_center[0]), float(ground_center[1]), float(ground_center[2])],
+        "point_count": int(len(inliers)),
+        "inlier_ratio": float(inlier_ratio),
+    }
+
+    # Save ground_plane.json
+    output_path.mkdir(parents=True, exist_ok=True)
+    json_path = output_path / "ground_plane.json"
+    with open(json_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"Saved ground plane: {json_path}")
+    _emit_progress(progress_cb, 100.0, "Ground plane extraction complete")
+
+    return result
+
+
 if __name__ == "__main__":
     import argparse
 

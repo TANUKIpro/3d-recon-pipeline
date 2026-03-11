@@ -503,6 +503,16 @@ ws.on('sam2_ready', (msg) => {
   appendLog('stdout', 'Click on the object to segment. Right-click for negative points.\n', { stage: 3 });
 });
 
+ws.on('sam2_ground_phase', (msg) => {
+  sam2.enterGroundPhase();
+  appendLog('stdout', 'Ground plane mode: click on the ground/contact surface. Skip if not visible.\n', { stage: 3 });
+});
+
+ws.on('sam2_ground_skipped', () => {
+  sam2.exitGroundPhase();
+  appendLog('stdout', 'Ground plane segmentation skipped.\n', { stage: 3 });
+});
+
 ws.on('sam2_propagating', () => {
   sam2.deactivate();
   appendLog('stdout', 'Propagating masks to all frames...\n', { stage: 3 });
@@ -513,7 +523,8 @@ ws.on('sam2_propagate_progress', (msg) => {
 });
 
 ws.on('sam2_verification_ready', (msg) => {
-  sam2Verify.show(msg.frame_count);
+  sam2.exitGroundPhase();
+  sam2Verify.show(msg.frame_count, msg.has_ground === true);
   appendLog('stdout', 'Mask propagation complete. Please verify the results.\n', { stage: 3 });
 });
 

@@ -222,6 +222,7 @@ def _stage_mesh_repair(
     mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO,
     mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO,
     mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
+    ground_plane: dict | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -239,6 +240,7 @@ def _stage_mesh_repair(
         max_diameter_ratio=mesh_repair_max_diameter_ratio,
         y_band_ratio=mesh_repair_y_band_ratio,
         smooth_iters=mesh_repair_smooth_iters,
+        ground_plane=ground_plane,
     )
 
 
@@ -268,6 +270,7 @@ def _stage_mesh_repair_selected(
     mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
     progress_cb=None,
     cancel_cb=None,
+    ground_plane: dict | None = None,
 ) -> None:
     from stage_contact_hole_repair import run_selected_contact_hole_repair
 
@@ -282,6 +285,22 @@ def _stage_mesh_repair_selected(
             max_diameter_ratio=mesh_repair_max_diameter_ratio,
             y_band_ratio=mesh_repair_y_band_ratio,
             smooth_iters=mesh_repair_smooth_iters,
+            ground_plane=ground_plane,
+        )
+
+
+def _stage_extract_ground_plane(
+    cache_path: str,
+    ground_mask_dir: str,
+    output_dir: str,
+) -> dict | None:
+    from stage_pi3x_reconstruct import extract_ground_plane
+
+    with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
+        return extract_ground_plane(
+            cache_path,
+            ground_mask_dir,
+            output_dir,
         )
 
 

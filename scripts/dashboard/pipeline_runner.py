@@ -30,6 +30,7 @@ from scripts.dashboard.stage_wrappers import (
     _stage_denoise,
     _stage_diffcd,
     _stage_extract_frames,
+    _stage_extract_ground_plane,
     _stage_mesh_repair,
     _stage_mesh_repair_analyze,
     _stage_mesh_repair_selected,
@@ -237,6 +238,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
             with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
                 # SAM2 interact → propagate → verify loop (supports redo)
+                ground_mask_dir: str | None = None
                 while True:
                     # Initialize SAM2 model in a thread
                     meta = await asyncio.to_thread(
@@ -265,10 +267,47 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                         "height": meta["height"],
                     })
 
-                    # Wait for user to confirm segmentation via REST API
+                    # Wait for user to confirm object segmentation via REST API
                     session.sam2_confirm_event.clear()
                     await session.sam2_confirm_event.wait()
                     _check_cancelled(session)
+
+                    # Ground plane segmentation phase
+                    if cfg.ground_plane_enabled and not cfg.auto_accept:
+                        # Switch service to ground mode
+                        sam2_service.set_mode("ground")
+                        session.sam2_confirm_event.clear()
+                        session.sam2_ground_skip_event.clear()
+
+                        await _broadcast_stage_progress(
+                            session,
+                            PipelineStage.SAM2_SEGMENT,
+                            progress=22.0,
+                            detail="Waiting for ground plane segmentation",
+                        )
+                        await broadcast(session, {
+                            "type": "sam2_ground_phase",
+                            "frame_count": meta["frame_count"],
+                            "width": meta["width"],
+                            "height": meta["height"],
+                        })
+
+                        # Wait for confirm OR skip
+                        confirm_task = asyncio.create_task(session.sam2_confirm_event.wait())
+                        skip_task = asyncio.create_task(session.sam2_ground_skip_event.wait())
+                        done, pending = await asyncio.wait(
+                            {confirm_task, skip_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        for t in pending:
+                            t.cancel()
+                        _check_cancelled(session)
+
+                        if session.sam2_ground_skip_event.is_set():
+                            await broadcast(session, {"type": "sam2_ground_skipped"})
+
+                        # Switch back to object mode
+                        sam2_service.set_mode("object")
 
                     # Propagate masks
                     await _broadcast_stage_progress(
@@ -311,11 +350,13 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
                         loop.call_soon_threadsafe(_push)
 
-                    mask_dir = await asyncio.to_thread(
+                    propagate_result = await asyncio.to_thread(
                         sam2_service.propagate_and_save, _propagate_cb
                     )
+                    mask_dir, ground_mask_dir = propagate_result
                     session.mask_dir = mask_dir
                     session.mask_count = len(list(Path(mask_dir).glob("*.png")))
+                    session.ground_mask_dir = ground_mask_dir
 
                     # Release SAM2 model
                     await asyncio.to_thread(sam2_service.release)
@@ -334,6 +375,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     await broadcast(session, {
                         "type": "sam2_verification_ready",
                         "frame_count": meta["frame_count"],
+                        "has_ground": ground_mask_dir is not None,
                     })
 
                     # Wait for user to approve or redo
@@ -378,6 +420,26 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     progress_cb=_mask_progress_cb,
                 )
             session.ply_path = str(Path(output_dir) / "object.ply")
+
+            # Extract ground plane if ground masks exist
+            if session.ground_mask_dir and session.pi3x_cache_path:
+                await _broadcast_stage_progress(
+                    session,
+                    PipelineStage.SAM2_SEGMENT,
+                    progress=96.0,
+                    detail="Extracting ground plane from masks",
+                )
+                ground_plane = await asyncio.to_thread(
+                    _stage_extract_ground_plane,
+                    session.pi3x_cache_path,
+                    session.ground_mask_dir,
+                    output_dir,
+                )
+                if ground_plane is not None:
+                    session.ground_plane_path = str(Path(output_dir) / "ground_plane.json")
+                    print(f"Ground plane extracted: {ground_plane}")
+                else:
+                    print("Ground plane extraction returned None (too few points)")
 
             session.stage_complete(PipelineStage.SAM2_SEGMENT)
             await broadcast(session, {
@@ -501,6 +563,14 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
         if start_stage <= int(PipelineStage.MESH_REPAIR):
             _require_file(session.mesh_ply, "Wrapped mesh")
+            # Load ground plane if available
+            ground_plane: dict | None = None
+            gp_path = Path(output_dir) / "ground_plane.json"
+            if gp_path.is_file():
+                try:
+                    ground_plane = json.loads(gp_path.read_text(encoding="utf-8"))
+                except Exception:
+                    ground_plane = None
             # ── Stage 7: Mesh Repair ──────────────────────────────
             await _run_mesh_repair_interactive(
                 session,
@@ -510,6 +580,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.mesh_repair_max_diameter_ratio,
                 cfg.mesh_repair_y_band_ratio,
                 cfg.mesh_repair_smooth_iters,
+                ground_plane=ground_plane,
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh_repaired.ply")
             _check_cancelled(session)
@@ -757,6 +828,7 @@ async def _run_mesh_repair_interactive(
     mesh_repair_max_diameter_ratio: float,
     mesh_repair_y_band_ratio: float,
     mesh_repair_smooth_iters: int,
+    ground_plane: dict | None = None,
 ) -> None:
     stage = PipelineStage.MESH_REPAIR
 
@@ -771,6 +843,7 @@ async def _run_mesh_repair_interactive(
             mesh_repair_max_diameter_ratio,
             mesh_repair_y_band_ratio,
             mesh_repair_smooth_iters,
+            ground_plane,
         )
         return
 
@@ -833,6 +906,7 @@ async def _run_mesh_repair_interactive(
                 mesh_repair_smooth_iters,
                 _progress_cb,
                 _cancel_cb,
+                ground_plane,
             )
         else:
             analysis_meta = {
@@ -892,6 +966,7 @@ async def _run_mesh_repair_interactive(
                 mesh_repair_smooth_iters,
                 _progress_cb,
                 _cancel_cb,
+                ground_plane,
             )
     except _CancelledError:
         session.clear_mesh_repair_candidates()

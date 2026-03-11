@@ -28,6 +28,7 @@ from scripts.config_defaults import (
     DIFFCD_RESOLUTION,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
+    GROUND_PLANE_ENABLED,
     MESH_DEFAULT_METHOD,
     MESHWRAP_ALPHA_RATIO,
     MESHWRAP_CROP_SCALE,
@@ -181,6 +182,7 @@ class PipelineConfig:
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
+    ground_plane_enabled: bool = GROUND_PLANE_ENABLED
     auto_accept: bool = False
 
     @classmethod
@@ -231,6 +233,7 @@ class PipelineSession:
     sam2_frame_count: int = 0
     sam2_width: int = 0
     sam2_height: int = 0
+    sam2_ground_skip_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     # Global stage-to-stage approval
     next_stage_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -256,6 +259,8 @@ class PipelineSession:
     # Artifacts produced by each stage
     frames_dir: str | None = None
     mask_dir: str | None = None
+    ground_mask_dir: str | None = None
+    ground_plane_path: str | None = None
     ply_full_path: str | None = None    # full (unmasked) PLY from Pi3X
     pi3x_cache_path: str | None = None  # cache for mask filtering
     ply_path: str | None = None
@@ -283,6 +288,7 @@ class PipelineSession:
         self.sam2_confirm_event = asyncio.Event()
         self.sam2_approve_event = asyncio.Event()
         self.sam2_approved = False
+        self.sam2_ground_skip_event = asyncio.Event()
         self.next_stage_confirm_event = asyncio.Event()
         self.next_stage_confirmation_required = False
         self.next_stage_confirmation_from = None
@@ -301,6 +307,8 @@ class PipelineSession:
         self._active_process_lock = threading.Lock()
         self.frames_dir = None
         self.mask_dir = None
+        self.ground_mask_dir = None
+        self.ground_plane_path = None
         self.ply_full_path = None
         self.pi3x_cache_path = None
         self.ply_path = None
@@ -327,6 +335,10 @@ class PipelineSession:
         self.mask_count = mask_count
         self.frames_dir = str(out / "frames") if frame_count > 0 else None
         self.mask_dir = str(out / "masks") if mask_count > 0 else None
+        ground_mask_dir = out / "masks_ground"
+        self.ground_mask_dir = str(ground_mask_dir) if ground_mask_dir.is_dir() and any(ground_mask_dir.glob("*.png")) else None
+        ground_plane_path = out / "ground_plane.json"
+        self.ground_plane_path = str(ground_plane_path) if ground_plane_path.is_file() else None
         self.ply_full_path = str(out / "object_full.ply") if (out / "object_full.ply").is_file() else None
         self.pi3x_cache_path = str(out / "pi3x_cache.npz") if (out / "pi3x_cache.npz").is_file() else None
         self.poses_path = str(out / "camera_poses.json") if (out / "camera_poses.json").is_file() else None
@@ -380,6 +392,7 @@ class PipelineSession:
         self.sam2_frame_count = 0
         self.sam2_width = 0
         self.sam2_height = 0
+        self.sam2_ground_skip_event = asyncio.Event()
         self.next_stage_confirmation_required = False
         self.next_stage_confirmation_from = None
         self.next_stage_confirmation_to = None
