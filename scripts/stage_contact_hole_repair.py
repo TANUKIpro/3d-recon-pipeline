@@ -21,6 +21,7 @@ from config_defaults import (
     REPAIR_MAX_DIAMETER_RATIO as _DEFAULT_MAX_DIAMETER_RATIO,
     REPAIR_SMOOTH_ITERS as _DEFAULT_SMOOTH_ITERS,
     REPAIR_Y_BAND_RATIO as _DEFAULT_Y_BAND_RATIO,
+    _REPAIR_GROUND_SECTION_MIN_AREA_RATIO as _GROUND_SECTION_MIN_AREA_RATIO,
     _REPAIR_MIN_DOWNWARD_NORMAL_Y as _MIN_DOWNWARD_NORMAL_Y,
     _REPAIR_MIN_LOOP_VERTICES as _MIN_LOOP_VERTICES,
     _REPAIR_SMOOTH_LAMBDA as _DEFAULT_SMOOTH_LAMBDA,
@@ -127,9 +128,10 @@ class RepairCandidateAnalysis:
 @dataclass(frozen=True)
 class GroundPlaneProbe:
     shift: float
-    plane_loop_count: int
-    plane_boundary_edges_before: int
-    plane_boundary_edges_after: int
+    section_loop_count: int
+    selected_loop_area: float
+    matched_boundary_area_before: float
+    matched_boundary_area_after: float
     cap_added: int
     valid: bool
 
@@ -140,13 +142,30 @@ class GroundPlaneSearchResult:
     scanned_count: int
     first_valid_shift: float | None
     lowest_valid_shift: float | None
+    selected_loop_area: float
 
 
 @dataclass(frozen=True)
 class GroundPlaneValidation:
     plane_loop_count: int
     plane_boundary_edges: int
+    matched_loop_present: bool
+    matched_loop_area: float
     valid: bool
+
+
+@dataclass(frozen=True)
+class GroundPlaneSectionLoop:
+    point_indices: tuple[int, ...]
+    points: np.ndarray
+    area: float
+
+
+@dataclass(frozen=True)
+class GroundPlaneBoundaryLoop:
+    vertex_indices: tuple[int, ...]
+    points: np.ndarray
+    area: float
 
 
 def _emit_progress(
@@ -718,12 +737,53 @@ def analyze_contact_hole_candidates(
     )
 
 
+def _normalize_plane(
+    plane_normal: np.ndarray,
+    plane_d: float,
+) -> tuple[np.ndarray, float]:
+    plane_normal = np.asarray(plane_normal, dtype=np.float64)
+    norm = max(float(np.linalg.norm(plane_normal)), 1e-12)
+    return plane_normal / norm, float(plane_d) / norm
+
+
 def _plane_distance_threshold(vertices: np.ndarray, tolerance_ratio: float) -> float:
     bbox_diag = max(
         float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))),
         1e-6,
     )
     return tolerance_ratio * bbox_diag
+
+
+def _projected_bbox_area_on_plane(vertices: np.ndarray, plane_normal: np.ndarray) -> float:
+    plane_normal, _ = _normalize_plane(plane_normal, 0.0)
+    uv = _loop_projection_uv(vertices, plane_normal)
+    span = uv.max(axis=0) - uv.min(axis=0)
+    return max(float(span[0] * span[1]), 1e-12)
+
+
+def _ground_section_min_area(vertices: np.ndarray, plane_normal: np.ndarray) -> float:
+    return _projected_bbox_area_on_plane(vertices, plane_normal) * _GROUND_SECTION_MIN_AREA_RATIO
+
+
+def _orient_ground_plane_toward_mesh(
+    vertices: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+) -> tuple[np.ndarray, float, bool, int, int]:
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    signed_dist = vertices @ plane_normal + plane_d
+    above_count = int((signed_dist > 0).sum())
+    below_count = int(vertices.shape[0] - above_count)
+    mean_signed = float(signed_dist.mean())
+    flipped = False
+    if mean_signed < 0.0 or (abs(mean_signed) <= 1e-10 and above_count < below_count):
+        plane_normal = -plane_normal
+        plane_d = -plane_d
+        flipped = True
+        signed_dist = -signed_dist
+        above_count = int((signed_dist > 0).sum())
+        below_count = int(vertices.shape[0] - above_count)
+    return plane_normal, plane_d, flipped, above_count, below_count
 
 
 def _collect_plane_boundary_loops(
@@ -736,7 +796,7 @@ def _collect_plane_boundary_loops(
     tolerance_ratio: float = 0.01,
     snap_ratio: float = 0.0001,
 ) -> tuple[list[list[int]], np.ndarray]:
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     boundary_edges = _extract_boundary_edges(faces)
     if boundary_edges.size == 0:
         return [], boundary_edges
@@ -771,6 +831,80 @@ def _collect_plane_boundary_loops(
     return plane_loops, boundary_edges
 
 
+def _collect_plane_boundary_loop_infos(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    original_vertex_count: int | None = None,
+    tolerance_ratio: float = 0.01,
+) -> list[GroundPlaneBoundaryLoop]:
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    plane_loops, _boundary_edges = _collect_plane_boundary_loops(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance_ratio,
+    )
+    loop_infos: list[GroundPlaneBoundaryLoop] = []
+    for path in plane_loops:
+        loop_points = vertices[np.asarray(path[:-1], dtype=np.int64)]
+        area = abs(_polygon_area_2d(_loop_projection_uv(loop_points, plane_normal)))
+        if area <= 1e-12:
+            continue
+        loop_infos.append(
+            GroundPlaneBoundaryLoop(
+                vertex_indices=tuple(int(idx) for idx in path[:-1]),
+                points=loop_points,
+                area=float(area),
+            )
+        )
+    return loop_infos
+
+
+def _select_matching_plane_boundary_loop(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    original_vertex_count: int | None = None,
+    tolerance_ratio: float = 0.01,
+    target_loop: GroundPlaneSectionLoop | None = None,
+) -> GroundPlaneBoundaryLoop | None:
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    loop_infos = _collect_plane_boundary_loop_infos(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance_ratio,
+    )
+    if not loop_infos:
+        return None
+    if target_loop is None:
+        return max(loop_infos, key=lambda loop: loop.area)
+
+    target_centroid = target_loop.points.mean(axis=0)
+    bbox_diag = max(float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))), 1e-6)
+
+    def _score(loop: GroundPlaneBoundaryLoop) -> float:
+        area_error = abs(loop.area - target_loop.area) / max(target_loop.area, 1e-9)
+        centroid_error = float(np.linalg.norm(loop.points.mean(axis=0) - target_centroid)) / bbox_diag
+        return area_error + 0.25 * centroid_error
+
+    best_loop = min(loop_infos, key=_score)
+    best_area_error = abs(best_loop.area - target_loop.area) / max(target_loop.area, 1e-9)
+    best_centroid_error = float(np.linalg.norm(best_loop.points.mean(axis=0) - target_centroid)) / bbox_diag
+    if best_area_error > 0.15 or best_centroid_error > 0.08:
+        return None
+    return best_loop
+
+
 def _count_plane_boundary_edges(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -781,7 +915,7 @@ def _count_plane_boundary_edges(
     tolerance_ratio: float = 0.01,
     snap_ratio: float = 0.0001,
 ) -> int:
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     boundary_edges = _extract_boundary_edges(faces)
     if boundary_edges.size == 0:
         return 0
@@ -808,12 +942,177 @@ def _project_vertices_to_plane(
     if not vertex_ids:
         return vertices
 
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     updated = vertices.copy()
     indices = np.asarray(sorted(int(idx) for idx in vertex_ids), dtype=np.int64)
     signed = updated[indices] @ plane_normal + plane_d
     updated[indices] = updated[indices] - signed[:, None] * plane_normal[None, :]
     return updated
+
+
+def _extract_plane_intersection_segments(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+) -> tuple[np.ndarray, list[tuple[int, int]]]:
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    signed_dist = vertices @ plane_normal + plane_d
+    eps = max(_plane_distance_threshold(vertices, 1e-7), 1e-9)
+
+    section_points: list[np.ndarray] = []
+    edge_cache: dict[tuple[str, int, int], int] = {}
+
+    def _point_from_vertex(idx: int) -> int:
+        key = ("v", int(idx), int(idx))
+        if key in edge_cache:
+            return edge_cache[key]
+        section_points.append(vertices[int(idx)].astype(np.float64))
+        point_idx = len(section_points) - 1
+        edge_cache[key] = point_idx
+        return point_idx
+
+    def _point_from_edge(a: int, b: int) -> int:
+        ai = int(a)
+        bi = int(b)
+        key = ("e", min(ai, bi), max(ai, bi))
+        cached = edge_cache.get(key)
+        if cached is not None:
+            return cached
+        da = float(signed_dist[ai])
+        db = float(signed_dist[bi])
+        denom = da - db
+        if abs(denom) <= 1e-15:
+            t = 0.5
+        else:
+            t = da / denom
+        t = max(0.0, min(1.0, t))
+        point = (1.0 - t) * vertices[ai] + t * vertices[bi]
+        section_points.append(point.astype(np.float64))
+        point_idx = len(section_points) - 1
+        edge_cache[key] = point_idx
+        return point_idx
+
+    segments: list[tuple[int, int]] = []
+    for tri in np.asarray(faces, dtype=np.int64):
+        i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
+        tri_points: list[int] = []
+        for a, b in ((i0, i1), (i1, i2), (i2, i0)):
+            da = float(signed_dist[a])
+            db = float(signed_dist[b])
+            if abs(da) <= eps and abs(db) <= eps:
+                continue
+            if abs(da) <= eps:
+                tri_points.append(_point_from_vertex(a))
+            if abs(db) <= eps:
+                tri_points.append(_point_from_vertex(b))
+            if da * db < -(eps * eps):
+                tri_points.append(_point_from_edge(a, b))
+
+        unique_points: list[int] = []
+        seen: set[int] = set()
+        for idx in tri_points:
+            if idx not in seen:
+                unique_points.append(idx)
+                seen.add(idx)
+
+        if len(unique_points) == 2:
+            a_idx, b_idx = unique_points
+            if a_idx != b_idx:
+                segments.append((a_idx, b_idx))
+        elif len(unique_points) > 2:
+            best_pair: tuple[int, int] | None = None
+            best_dist = -1.0
+            for i in range(len(unique_points)):
+                for j in range(i + 1, len(unique_points)):
+                    pa = section_points[unique_points[i]]
+                    pb = section_points[unique_points[j]]
+                    dist = float(np.linalg.norm(pa - pb))
+                    if dist > best_dist:
+                        best_dist = dist
+                        best_pair = (unique_points[i], unique_points[j])
+            if best_pair is not None and best_pair[0] != best_pair[1]:
+                segments.append(best_pair)
+
+    if not section_points:
+        return np.zeros((0, 3), dtype=np.float64), []
+    return np.asarray(section_points, dtype=np.float64), segments
+
+
+def _extract_closed_section_loops(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+) -> list[GroundPlaneSectionLoop]:
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    points, segments = _extract_plane_intersection_segments(vertices, faces, plane_normal, plane_d)
+    if points.size == 0 or not segments:
+        return []
+
+    adjacency: dict[int, set[int]] = {}
+    for a, b in segments:
+        if a == b:
+            continue
+        adjacency.setdefault(int(a), set()).add(int(b))
+        adjacency.setdefault(int(b), set()).add(int(a))
+    if not adjacency:
+        return []
+
+    visited: set[int] = set()
+    loops: list[GroundPlaneSectionLoop] = []
+    for start in sorted(adjacency):
+        if start in visited:
+            continue
+
+        stack = [start]
+        component: set[int] = set()
+        while stack:
+            cur = stack.pop()
+            if cur in component:
+                continue
+            component.add(cur)
+            stack.extend(int(n) for n in adjacency.get(cur, ()))
+        visited |= component
+
+        if len(component) < 3 or any(len(adjacency.get(node, ())) != 2 for node in component):
+            continue
+
+        ordered = [min(component)]
+        prev: int | None = None
+        cur = ordered[0]
+        while True:
+            neighbors = sorted(int(n) for n in adjacency[cur])
+            nxt = neighbors[0] if prev is None or neighbors[1] == prev else neighbors[1]
+            if nxt == ordered[0]:
+                break
+            if nxt in ordered:
+                ordered = []
+                break
+            ordered.append(nxt)
+            prev, cur = cur, nxt
+            if len(ordered) > len(component):
+                ordered = []
+                break
+
+        if len(ordered) != len(component):
+            continue
+        if ordered[0] not in adjacency[ordered[-1]]:
+            continue
+
+        loop_points = points[np.asarray(ordered, dtype=np.int64)]
+        area = abs(_polygon_area_2d(_loop_projection_uv(loop_points, plane_normal)))
+        if area <= 1e-12:
+            continue
+        loops.append(
+            GroundPlaneSectionLoop(
+                point_indices=tuple(int(idx) for idx in ordered),
+                points=loop_points,
+                area=float(area),
+            )
+        )
+
+    return loops
 
 
 def _validate_ground_plane_output(
@@ -823,6 +1122,7 @@ def _validate_ground_plane_output(
     plane_d: float,
     *,
     tolerance_ratio: float = 0.01,
+    target_loop: GroundPlaneSectionLoop | None = None,
 ) -> GroundPlaneValidation:
     plane_loops, _boundary_edges = _collect_plane_boundary_loops(
         vertices,
@@ -838,10 +1138,21 @@ def _validate_ground_plane_output(
         plane_d,
         tolerance_ratio=tolerance_ratio,
     )
+    matched_loop = _select_matching_plane_boundary_loop(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        tolerance_ratio=tolerance_ratio,
+        target_loop=target_loop,
+    )
+    matched_loop_present = matched_loop is not None if target_loop is not None else plane_boundary_edges > 0
     return GroundPlaneValidation(
         plane_loop_count=len(plane_loops),
         plane_boundary_edges=int(plane_boundary_edges),
-        valid=plane_boundary_edges == 0,
+        matched_loop_present=matched_loop_present,
+        matched_loop_area=0.0 if matched_loop is None else float(matched_loop.area),
+        valid=not matched_loop_present,
     )
 
 
@@ -858,7 +1169,7 @@ def _clip_mesh_at_plane(
     Faces that straddle the plane are split so that only the above portion
     remains.
     """
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     dist = vertices @ plane_normal + plane_d
     dist = dist - offset  # cut slightly above ground
 
@@ -947,59 +1258,52 @@ def _cap_boundary_at_plane(
     *,
     original_vertex_count: int | None = None,
     tolerance: float = 0.01,
-) -> tuple[np.ndarray, np.ndarray]:
+    target_loop: GroundPlaneSectionLoop | None = None,
+) -> tuple[np.ndarray, np.ndarray, set[int], float]:
     """Cap open boundary loops that lie near the ground plane.
 
     Uses the existing boundary extraction and ear-clip triangulation helpers
     to fill loops whose centroid is close to the clipping plane.
     """
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
 
-    raw_paths, _boundary_edges = _collect_plane_boundary_loops(
+    selected_loop = _select_matching_plane_boundary_loop(
         vertices,
         faces,
         plane_normal,
         plane_d,
         original_vertex_count=original_vertex_count,
         tolerance_ratio=tolerance,
+        target_loop=target_loop,
     )
-    if not raw_paths:
-        return vertices, faces
+    if selected_loop is None:
+        return vertices, faces, set(), 0.0
 
-    added_face_lists: list[np.ndarray] = []
+    loop_vertices = list(selected_loop.vertex_indices)
+    loop_indices = np.asarray(loop_vertices, dtype=np.int64)
+    loop_points = vertices[loop_indices]
+    loop_uv = _loop_projection_uv(loop_points, plane_normal)
+    local_tris = _triangulate_polygon_ear_clip(loop_uv)
+    if not local_tris:
+        return vertices, faces, set(), float(selected_loop.area)
 
-    for path in raw_paths:
-        loop_vertices = path[:-1]
+    new_faces = np.asarray(
+        [[loop_vertices[a], loop_vertices[b], loop_vertices[c]] for a, b, c in local_tris],
+        dtype=np.int64,
+    )
+    tri_pts = vertices[new_faces]
+    tri_cross = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
+    tri_area2 = np.linalg.norm(tri_cross, axis=1)
+    if np.any(tri_area2 <= 1e-11):
+        return vertices, faces, set(), float(selected_loop.area)
 
-        loop_indices = np.asarray(loop_vertices, dtype=np.int64)
-        loop_points = vertices[loop_indices]
+    desired_normal = -plane_normal
+    mean_dot = float(np.mean(tri_cross @ desired_normal))
+    if mean_dot < 0.0:
+        new_faces = new_faces[:, [0, 2, 1]]
 
-        # Project loop vertices onto ground plane for 2D triangulation
-        loop_uv = _loop_projection_uv(loop_points, plane_normal)
-        local_tris = _triangulate_polygon_ear_clip(loop_uv)
-        if not local_tris:
-            continue
-
-        new_faces = np.asarray(
-            [[loop_vertices[a], loop_vertices[b], loop_vertices[c]] for a, b, c in local_tris],
-            dtype=np.int64,
-        )
-
-        # Validate: skip degenerate triangles
-        tri_pts = vertices[new_faces]
-        tri_cross = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
-        tri_area2 = np.linalg.norm(tri_cross, axis=1)
-        if np.any(tri_area2 <= 1e-11):
-            continue
-
-        added_face_lists.append(new_faces)
-
-    if added_face_lists:
-        augmented_faces = np.vstack([faces] + added_face_lists)
-    else:
-        augmented_faces = faces
-
-    return vertices, augmented_faces
+    augmented_faces = np.vstack((faces, new_faces))
+    return vertices, augmented_faces, {int(idx) for idx in loop_vertices}, float(selected_loop.area)
 
 
 def _probe_ground_plane_shift(
@@ -1010,8 +1314,40 @@ def _probe_ground_plane_shift(
     shift: float,
     *,
     tolerance_ratio: float = 0.01,
+    min_section_area: float | None = None,
 ) -> GroundPlaneProbe:
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    actual_plane_d = plane_d - shift
+    section_loops = _extract_closed_section_loops(
+        vertices,
+        faces,
+        plane_normal,
+        actual_plane_d,
+    )
+    if not section_loops:
+        return GroundPlaneProbe(
+            shift=float(shift),
+            section_loop_count=0,
+            selected_loop_area=0.0,
+            matched_boundary_area_before=0.0,
+            matched_boundary_area_after=0.0,
+            cap_added=0,
+            valid=False,
+        )
+
+    selected_loop = max(section_loops, key=lambda loop: loop.area)
+    required_area = max(0.0, 0.0 if min_section_area is None else float(min_section_area))
+    if selected_loop.area < required_area:
+        return GroundPlaneProbe(
+            shift=float(shift),
+            section_loop_count=len(section_loops),
+            selected_loop_area=float(selected_loop.area),
+            matched_boundary_area_before=0.0,
+            matched_boundary_area_after=0.0,
+            cap_added=0,
+            valid=False,
+        )
+
     original_vertex_count = int(vertices.shape[0])
     clipped_verts, clipped_faces = _clip_mesh_at_plane(
         vertices,
@@ -1020,52 +1356,51 @@ def _probe_ground_plane_shift(
         plane_d,
         offset=shift,
     )
-    actual_plane_d = plane_d - shift
-    plane_loops, _boundary_edges = _collect_plane_boundary_loops(
+    matched_boundary_before = _select_matching_plane_boundary_loop(
         clipped_verts,
         clipped_faces,
         plane_normal,
         actual_plane_d,
         original_vertex_count=original_vertex_count,
         tolerance_ratio=tolerance_ratio,
-    )
-    plane_boundary_before = _count_plane_boundary_edges(
-        clipped_verts,
-        clipped_faces,
-        plane_normal,
-        actual_plane_d,
-        original_vertex_count=original_vertex_count,
-        tolerance_ratio=tolerance_ratio,
+        target_loop=selected_loop,
     )
 
-    capped_verts, capped_faces = _cap_boundary_at_plane(
+    capped_verts, capped_faces, _cap_vertex_ids, matched_boundary_area_before = _cap_boundary_at_plane(
         clipped_verts,
         clipped_faces,
         plane_normal,
         actual_plane_d,
         original_vertex_count=original_vertex_count,
         tolerance=tolerance_ratio,
+        target_loop=selected_loop,
     )
     cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
-    plane_boundary_after = _count_plane_boundary_edges(
+    matched_boundary_after = _select_matching_plane_boundary_loop(
         capped_verts,
         capped_faces,
         plane_normal,
         actual_plane_d,
         original_vertex_count=original_vertex_count,
         tolerance_ratio=tolerance_ratio,
+        target_loop=selected_loop,
     )
     valid = (
-        len(plane_loops) > 0
-        and plane_boundary_before > 0
+        matched_boundary_before is not None
+        and matched_boundary_area_before >= required_area
         and cap_added > 0
-        and plane_boundary_after == 0
+        and matched_boundary_after is None
     )
     return GroundPlaneProbe(
         shift=float(shift),
-        plane_loop_count=len(plane_loops),
-        plane_boundary_edges_before=int(plane_boundary_before),
-        plane_boundary_edges_after=int(plane_boundary_after),
+        section_loop_count=len(section_loops),
+        selected_loop_area=float(selected_loop.area),
+        matched_boundary_area_before=(
+            0.0 if matched_boundary_before is None else float(matched_boundary_before.area)
+        ),
+        matched_boundary_area_after=(
+            0.0 if matched_boundary_after is None else float(matched_boundary_after.area)
+        ),
         cap_added=int(cap_added),
         valid=bool(valid),
     )
@@ -1078,53 +1413,31 @@ def _find_ground_plane_shift(
     plane_d: float,
     *,
     tolerance_ratio: float = 0.01,
-    coarse_steps: int = 81,
-    refine_iters: int = 10,
 ) -> GroundPlaneSearchResult:
-    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     dists = vertices @ plane_normal + plane_d
     dist_min = float(dists.min())
     dist_max = float(dists.max())
-    epsilon = 0.002
+    bbox_diag = max(float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))), 1e-6)
+    interval_pad = max(1e-6, 1e-4 * bbox_diag)
+    min_section_area = _ground_section_min_area(vertices, plane_normal)
 
-    lower_shift = min(0.0, dist_min - epsilon)
-    upper_shift = dist_max - epsilon
-    if upper_shift <= lower_shift:
-        probe = _probe_ground_plane_shift(
-            vertices,
-            faces,
-            plane_normal,
-            plane_d,
-            lower_shift,
-            tolerance_ratio=tolerance_ratio,
-        )
-        selected_shift = probe.shift if probe.valid else None
-        return GroundPlaneSearchResult(
-            selected_shift=selected_shift,
-            scanned_count=1,
-            first_valid_shift=selected_shift,
-            lowest_valid_shift=selected_shift,
-        )
+    boundaries = [min(0.0, dist_min) - interval_pad]
+    boundaries.extend(float(v) for v in np.unique(dists))
+    boundaries.append(float(dist_max + interval_pad))
 
-    coarse_candidates = np.linspace(lower_shift, upper_shift, max(coarse_steps, 3))
-    candidate_shifts = {float(shift) for shift in coarse_candidates.tolist()}
-    candidate_shifts.add(0.0)
-    candidate_shifts.add(lower_shift)
-    candidate_shifts.add(upper_shift)
-
-    for vertex_dist in np.unique(dists):
-        for delta in (-epsilon, 0.0, epsilon):
-            shift = float(vertex_dist + delta)
-            if lower_shift <= shift <= upper_shift:
-                candidate_shifts.add(shift)
-
-    probes: dict[float, GroundPlaneProbe] = {}
+    scanned_count = 0
+    first_valid_shift: float | None = None
+    selected_shift: float | None = None
+    selected_loop_area = 0.0
+    probe_cache: dict[float, GroundPlaneProbe] = {}
 
     def _probe(shift: float) -> GroundPlaneProbe:
+        nonlocal scanned_count
         key = float(shift)
-        existing = probes.get(key)
-        if existing is not None:
-            return existing
+        cached = probe_cache.get(key)
+        if cached is not None:
+            return cached
         probe = _probe_ground_plane_shift(
             vertices,
             faces,
@@ -1132,47 +1445,53 @@ def _find_ground_plane_shift(
             plane_d,
             key,
             tolerance_ratio=tolerance_ratio,
+            min_section_area=min_section_area,
         )
-        probes[key] = probe
+        probe_cache[key] = probe
+        scanned_count += 1
         return probe
 
-    ordered_candidates = sorted(candidate_shifts)
-    first_valid: GroundPlaneProbe | None = None
-    low = ordered_candidates[0]
+    for idx in range(len(boundaries) - 1):
+        low = float(boundaries[idx])
+        high = float(boundaries[idx + 1])
+        if high - low <= 1e-12:
+            continue
+        sample_shift = 0.5 * (low + high)
+        sample_probe = _probe(sample_shift)
+        if not sample_probe.valid:
+            continue
 
-    for shift in ordered_candidates:
-        probe = _probe(shift)
-        if probe.valid:
-            first_valid = probe
-            break
-        low = shift
+        margin = min(interval_pad, 0.25 * (high - low))
+        if margin <= 0.0 or low + margin >= high:
+            lower_shift = sample_shift
+            upper_shift = sample_shift
+        else:
+            lower_shift = low + margin
+            upper_shift = high - margin
+            if upper_shift <= lower_shift:
+                lower_shift = sample_shift
+                upper_shift = sample_shift
 
-    if first_valid is None:
-        return GroundPlaneSearchResult(
-            selected_shift=None,
-            scanned_count=len(probes),
-            first_valid_shift=None,
-            lowest_valid_shift=None,
-        )
+        stability_probe = _probe(upper_shift)
+        if not stability_probe.valid:
+            continue
 
-    high = first_valid.shift
-
-    best_valid = first_valid
-    if low < high and not probes[low].valid:
-        for _ in range(max(refine_iters, 0)):
-            mid = 0.5 * (low + high)
-            probe = _probe(mid)
-            if probe.valid:
-                best_valid = probe
-                high = mid
-            else:
-                low = mid
+        first_valid_shift = sample_shift
+        lower_probe = _probe(lower_shift)
+        if lower_probe.valid:
+            selected_shift = float(lower_shift)
+            selected_loop_area = float(lower_probe.selected_loop_area)
+        else:
+            selected_shift = float(sample_shift)
+            selected_loop_area = float(sample_probe.selected_loop_area)
+        break
 
     return GroundPlaneSearchResult(
-        selected_shift=float(best_valid.shift),
-        scanned_count=len(probes),
-        first_valid_shift=float(first_valid.shift),
-        lowest_valid_shift=float(best_valid.shift),
+        selected_shift=selected_shift,
+        scanned_count=scanned_count,
+        first_valid_shift=first_valid_shift,
+        lowest_valid_shift=selected_shift,
+        selected_loop_area=float(selected_loop_area),
     )
 
 
@@ -1458,6 +1777,7 @@ def _finalize_ground_plane_outputs(
     capped_faces: np.ndarray,
     *,
     cap_vertex_ids: set[int],
+    target_loop: GroundPlaneSectionLoop,
     plane_normal: np.ndarray,
     plane_d: float,
     smooth_iters: int,
@@ -1491,7 +1811,13 @@ def _finalize_ground_plane_outputs(
         ("flat-cap+preserve-cap", projected_capped, False),
     ]
 
-    last_validation = GroundPlaneValidation(plane_loop_count=0, plane_boundary_edges=0, valid=False)
+    last_validation = GroundPlaneValidation(
+        plane_loop_count=0,
+        plane_boundary_edges=0,
+        matched_loop_present=False,
+        matched_loop_area=0.0,
+        valid=False,
+    )
     for label, candidate_vertices, remove_non_manifold in attempts:
         repaired_mesh, final_vertices, final_faces = _prepare_repaired_mesh(
             candidate_vertices,
@@ -1503,6 +1829,7 @@ def _finalize_ground_plane_outputs(
             final_faces,
             plane_normal,
             plane_d,
+            target_loop=target_loop,
         )
         last_validation = validation
         if validation.valid:
@@ -1513,7 +1840,9 @@ def _finalize_ground_plane_outputs(
     raise ValueError(
         "Ground-plane repaired mesh failed post-save validation "
         f"(plane_loops={last_validation.plane_loop_count}, "
-        f"plane_boundary_edges={last_validation.plane_boundary_edges})"
+        f"plane_boundary_edges={last_validation.plane_boundary_edges}, "
+        f"matched_loop_present={last_validation.matched_loop_present}, "
+        f"matched_loop_area={last_validation.matched_loop_area:.6f})"
     )
 
 
@@ -1574,25 +1903,19 @@ def run_contact_hole_repair(
     if ground_plane is not None:
         gp_normal = np.asarray(ground_plane["normal"], dtype=np.float64)
         gp_d = float(ground_plane["d"])
-
-        # Ensure normal points toward the mesh majority (the object side).
-        # extract_ground_plane may orient incorrectly when background points
-        # skew the object centroid estimate.
-        gp_normal_unit = gp_normal / max(float(np.linalg.norm(gp_normal)), 1e-12)
-        signed_dist = vertices @ gp_normal_unit + gp_d
-        above_count = int((signed_dist > 0).sum())
-        below_count = int(vertices.shape[0] - above_count)
-        if above_count < below_count:
-            gp_normal = -gp_normal
-            gp_d = -gp_d
-            print(
-                f"Ground-plane mode: flipped normal (above={above_count}, below={below_count})"
-            )
+        gp_normal, gp_d, flipped, above_count, below_count = _orient_ground_plane_toward_mesh(
+            vertices,
+            gp_normal,
+            gp_d,
+        )
+        if flipped:
+            print(f"Ground-plane mode: flipped normal (above={above_count}, below={below_count})")
 
         print(
             f"Ground-plane mode: normal=[{gp_normal[0]:.4f}, {gp_normal[1]:.4f}, {gp_normal[2]:.4f}], "
             f"d={gp_d:.4f}"
         )
+        print(f"  minimum stable section area: {_ground_section_min_area(vertices, gp_normal):.6f}")
 
         _emit_progress(progress_cb, 12.0, "Contact Hole Repair: scanning clip heights")
         _check_cancel(cancel_cb)
@@ -1602,28 +1925,42 @@ def run_contact_hole_repair(
             print(f"  first closed offset: {search.first_valid_shift:.4f}")
         if search.lowest_valid_shift is not None:
             print(f"  lowest valid closed offset: {search.lowest_valid_shift:.4f}")
+        if search.selected_loop_area > 0.0:
+            print(f"  selected section area: {search.selected_loop_area:.6f}")
 
-        fallback_label: str | None = None
         selected_shift = search.selected_shift
         if selected_shift is None:
-            zero_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, 0.0)
-            print(
-                "  fallback probe at current plane: "
-                f"loops={zero_probe.plane_loop_count}, "
-                f"bottom_edges={zero_probe.plane_boundary_edges_before}"
-                f"->{zero_probe.plane_boundary_edges_after}, "
-                f"cap_added={zero_probe.cap_added}"
+            raise ValueError(
+                "Ground-plane repair could not find a stable closed section loop "
+                "of sufficient area while moving the plane toward the mesh"
             )
-            fallback_label = "legacy clip offset"
-            selected_shift = _find_optimal_clip_offset(vertices, faces, gp_normal, gp_d)
-            print(f"  fallback offset: {selected_shift:.4f}")
-        else:
-            final_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, selected_shift)
-            print(
-                "  bottom-boundary edges: "
-                f"{final_probe.plane_boundary_edges_before}->{final_probe.plane_boundary_edges_after}, "
-                f"cap_added={final_probe.cap_added}"
+
+        actual_clip_d = gp_d - selected_shift
+        section_loops = _extract_closed_section_loops(
+            vertices,
+            faces,
+            gp_normal,
+            actual_clip_d,
+        )
+        if not section_loops:
+            raise ValueError(
+                "Ground-plane repair selected a clip shift but no closed section loop "
+                "was present at the chosen plane"
             )
+        selected_section_loop = max(section_loops, key=lambda loop: loop.area)
+        final_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, selected_shift)
+        if not final_probe.valid:
+            raise ValueError(
+                "Ground-plane repair selected a clip shift but the matching section loop "
+                "could not be capped consistently"
+            )
+        print(
+            "  section-loop probe: "
+            f"count={final_probe.section_loop_count}, "
+            f"matched_area={final_probe.matched_boundary_area_before:.6f}"
+            f"->{final_probe.matched_boundary_area_after:.6f}, "
+            f"cap_added={final_probe.cap_added}"
+        )
 
         _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
         _check_cancel(cancel_cb)
@@ -1637,27 +1974,25 @@ def run_contact_hole_repair(
 
         _emit_progress(progress_cb, 45.0, "Contact Hole Repair: capping ground boundary")
         _check_cancel(cancel_cb)
-        actual_clip_d = gp_d - selected_shift
-        capped_verts, capped_faces = _cap_boundary_at_plane(
+        capped_verts, capped_faces, cap_vertex_ids, matched_boundary_area = _cap_boundary_at_plane(
             clipped_verts,
             clipped_faces,
             gp_normal,
             actual_clip_d,
             original_vertex_count=vertices.shape[0],
+            target_loop=selected_section_loop,
         )
         cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
+        if cap_added <= 0:
+            raise ValueError(
+                "Ground-plane repair found a closed section loop but failed to cap the "
+                "matching clipped boundary"
+            )
         print(f"  cap: added {cap_added} faces")
-        if fallback_label is not None:
-            print(f"  fallback used: {fallback_label}")
+        print(f"  matched boundary area: {matched_boundary_area:.6f}")
 
         _emit_progress(progress_cb, 70.0, "Contact Hole Repair: smoothing junction")
         _check_cancel(cancel_cb)
-
-        # Collect vertices on newly added cap faces for local smoothing
-        smooth_seed: set[int] = set()
-        if cap_added > 0:
-            cap_face_block = capped_faces[clipped_faces.shape[0]:]
-            smooth_seed.update(int(v) for v in np.unique(cap_face_block))
 
         _check_cancel(cancel_cb)
         _emit_progress(progress_cb, 90.0, "Contact Hole Repair: writing repaired mesh")
@@ -1665,7 +2000,8 @@ def run_contact_hole_repair(
         repaired_vertices, repaired_faces, finalize_mode, post_validation = _finalize_ground_plane_outputs(
             capped_verts,
             capped_faces,
-            cap_vertex_ids=smooth_seed,
+            cap_vertex_ids=cap_vertex_ids,
+            target_loop=selected_section_loop,
             plane_normal=gp_normal,
             plane_d=actual_clip_d,
             smooth_iters=params.smooth_iters,
@@ -1676,7 +2012,9 @@ def run_contact_hole_repair(
         print(
             "  saved mesh validation: "
             f"plane_loops={post_validation.plane_loop_count}, "
-            f"plane_boundary_edges={post_validation.plane_boundary_edges}"
+            f"plane_boundary_edges={post_validation.plane_boundary_edges}, "
+            f"matched_loop_present={post_validation.matched_loop_present}, "
+            f"matched_loop_area={post_validation.matched_loop_area:.6f}"
         )
         print(f"  finalize mode: {finalize_mode}")
 

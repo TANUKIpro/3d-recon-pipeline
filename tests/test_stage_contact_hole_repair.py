@@ -29,8 +29,11 @@ from stage_contact_hole_repair import (
     _evaluate_loop,
     _extract_boundary_edges,
     _extract_boundary_paths,
+    _extract_closed_section_loops,
+    _clip_mesh_at_plane,
     _find_ground_plane_shift,
     _find_optimal_clip_offset,
+    _normalize_plane,
     _project_vertices_to_plane,
     _probe_ground_plane_shift,
     _resolve_params,
@@ -346,7 +349,9 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
         self.assertLess(result.selected_shift, 0.06)
         probe = _probe_ground_plane_shift(vertices, faces, plane_normal, plane_d, result.selected_shift)
         self.assertTrue(probe.valid)
-        self.assertEqual(probe.plane_boundary_edges_after, 0)
+        self.assertGreater(probe.matched_boundary_area_before, 0.0)
+        self.assertEqual(probe.matched_boundary_area_after, 0.0)
+        self.assertGreater(probe.cap_added, 0)
 
     def test_probe_rejects_hole_that_is_only_near_plane(self) -> None:
         vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
@@ -356,7 +361,39 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
         probe = _probe_ground_plane_shift(vertices, faces, plane_normal, plane_d, 0.0483)
 
         self.assertFalse(probe.valid)
-        self.assertEqual(probe.plane_loop_count, 0)
+        self.assertEqual(probe.section_loop_count, 0)
+        self.assertEqual(probe.cap_added, 0)
+        self.assertEqual(probe.matched_boundary_area_before, 0.0)
+
+    def test_probe_rejects_tiny_section_loop_relative_to_mesh_scale(self) -> None:
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.01)
+        vertices = np.vstack(
+            (
+                vertices,
+                np.array(
+                    [
+                        [2.0, 0.0, 2.0],
+                        [-2.0, 1.0, -2.0],
+                    ],
+                    dtype=np.float64,
+                ),
+            )
+        )
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0
+
+        probe = _probe_ground_plane_shift(
+            vertices,
+            faces,
+            plane_normal,
+            plane_d,
+            0.0501,
+            min_section_area=0.01,
+        )
+
+        self.assertFalse(probe.valid)
+        self.assertEqual(probe.section_loop_count, 1)
+        self.assertGreater(probe.selected_loop_area, 0.0)
         self.assertEqual(probe.cap_added, 0)
 
     def test_search_lowers_already_closed_plane_to_lowest_valid_shift(self) -> None:
@@ -377,7 +414,8 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
         self.assertLess(result.selected_shift, -0.02)
         probe = _probe_ground_plane_shift(vertices, faces, plane_normal, plane_d, result.selected_shift)
         self.assertTrue(probe.valid)
-        self.assertEqual(probe.plane_boundary_edges_after, 0)
+        self.assertEqual(probe.matched_boundary_area_after, 0.0)
+        self.assertGreater(probe.cap_added, 0)
 
     def test_search_handles_tilted_ground_plane_normal(self) -> None:
         vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
@@ -399,7 +437,115 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
             result.selected_shift,
         )
         self.assertTrue(probe.valid)
-        self.assertEqual(probe.plane_boundary_edges_after, 0)
+        self.assertEqual(probe.matched_boundary_area_after, 0.0)
+
+    def test_search_is_invariant_to_plane_normal_scaling(self) -> None:
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
+        unit_result = _find_ground_plane_shift(
+            vertices,
+            faces,
+            np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            0.0,
+        )
+        scaled_result = _find_ground_plane_shift(
+            vertices,
+            faces,
+            np.array([0.0, 5.0, 0.0], dtype=np.float64),
+            0.0,
+        )
+
+        self.assertIsNotNone(unit_result.selected_shift)
+        self.assertIsNotNone(scaled_result.selected_shift)
+        assert unit_result.selected_shift is not None
+        assert scaled_result.selected_shift is not None
+        self.assertAlmostEqual(unit_result.selected_shift, scaled_result.selected_shift, places=6)
+
+    def test_search_requires_stable_second_valid_probe(self) -> None:
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
+        plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+        def _fake_probe(*args, **kwargs):
+            shift = float(args[4])
+            if 0.4 < shift < 0.6:
+                return GroundPlaneProbe(
+                    shift=shift,
+                    section_loop_count=1,
+                    selected_loop_area=1.0,
+                    matched_boundary_area_before=1.0,
+                    matched_boundary_area_after=0.0,
+                    cap_added=2,
+                    valid=True,
+                )
+            if shift > 0.9:
+                return GroundPlaneProbe(
+                    shift=shift,
+                    section_loop_count=0,
+                    selected_loop_area=0.0,
+                    matched_boundary_area_before=0.0,
+                    matched_boundary_area_after=0.0,
+                    cap_added=0,
+                    valid=False,
+                )
+            return GroundPlaneProbe(
+                shift=shift,
+                section_loop_count=0,
+                selected_loop_area=0.0,
+                matched_boundary_area_before=0.0,
+                matched_boundary_area_after=0.0,
+                cap_added=0,
+                valid=False,
+            )
+
+        with mock.patch("stage_contact_hole_repair._probe_ground_plane_shift", side_effect=_fake_probe):
+            result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
+
+        self.assertIsNone(result.selected_shift)
+
+    def test_extract_closed_section_loops_prefers_largest_loop(self) -> None:
+        small_vertices, small_faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.25)
+        large_vertices, large_faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.60)
+        large_vertices = large_vertices + np.array([2.0, 0.0, 0.0], dtype=np.float64)
+        large_faces = large_faces + small_vertices.shape[0]
+
+        vertices = np.vstack((small_vertices, large_vertices))
+        faces = np.vstack((small_faces, large_faces))
+        plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        shift = 0.0501
+        actual_plane_d = -shift
+
+        loops = _extract_closed_section_loops(vertices, faces, plane_normal, actual_plane_d)
+
+        self.assertEqual(len(loops), 2)
+        selected_loop = max(loops, key=lambda loop: loop.area)
+        self.assertGreater(selected_loop.area, 1.3)
+        probe = _probe_ground_plane_shift(vertices, faces, plane_normal, 0.0, shift)
+        self.assertTrue(probe.valid)
+        self.assertEqual(probe.section_loop_count, 2)
+        self.assertAlmostEqual(probe.selected_loop_area, selected_loop.area, places=6)
+
+    def test_search_returns_none_when_only_tiny_section_loops_exist(self) -> None:
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.01)
+        vertices = np.vstack(
+            (
+                vertices,
+                np.array(
+                    [
+                        [2.0, 0.0, 2.0],
+                        [-2.0, 1.0, -2.0],
+                    ],
+                    dtype=np.float64,
+                ),
+            )
+        )
+
+        result = _find_ground_plane_shift(
+            vertices,
+            faces,
+            np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            0.0,
+        )
+
+        self.assertIsNone(result.selected_shift)
 
 
 class GroundPlaneValidationTests(unittest.TestCase):
@@ -469,6 +615,7 @@ class GroundPlaneValidationTests(unittest.TestCase):
         self.assertIsInstance(validation, GroundPlaneValidation)
         self.assertFalse(validation.valid)
         self.assertGreater(validation.plane_boundary_edges, 0)
+        self.assertTrue(validation.matched_loop_present)
 
     def test_validate_ground_plane_output_accepts_closed_bottom(self) -> None:
         vertices, faces = self._make_open_bottom_box(bottom_y=0.0, top_y=1.0)
@@ -484,10 +631,39 @@ class GroundPlaneValidationTests(unittest.TestCase):
 
         self.assertTrue(validation.valid)
         self.assertEqual(validation.plane_boundary_edges, 0)
+        self.assertFalse(validation.matched_loop_present)
+
+    def test_validate_ground_plane_output_uses_target_loop_matching(self) -> None:
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
+        plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        plane_d = -0.10
+        clipped_vertices, clipped_faces = _clip_mesh_at_plane(
+            vertices,
+            faces,
+            plane_normal,
+            0.0,
+            offset=0.10,
+        )
+        target_loop = max(
+            _extract_closed_section_loops(vertices, faces, plane_normal, plane_d),
+            key=lambda loop: loop.area,
+        )
+
+        validation = _validate_ground_plane_output(
+            clipped_vertices,
+            clipped_faces,
+            plane_normal,
+            plane_d,
+            target_loop=target_loop,
+        )
+
+        self.assertFalse(validation.valid)
+        self.assertTrue(validation.matched_loop_present)
+        self.assertGreater(validation.matched_loop_area, 0.0)
 
 
-class GroundPlaneFallbackTests(unittest.TestCase):
-    def test_run_contact_hole_repair_falls_back_to_legacy_offset(self) -> None:
+class GroundPlaneRunTests(unittest.TestCase):
+    def test_run_contact_hole_repair_raises_when_no_closed_section_loop_exists(self) -> None:
         vertices = np.array(
             [
                 [0.0, 0.0, 0.0],
@@ -498,41 +674,86 @@ class GroundPlaneFallbackTests(unittest.TestCase):
         )
         faces = np.array([[0, 1, 2]], dtype=np.int64)
         ground_plane = {"normal": [0.0, 1.0, 0.0], "d": 0.0}
-        invalid_probe = GroundPlaneProbe(
-            shift=0.0,
-            plane_loop_count=0,
-            plane_boundary_edges_before=0,
-            plane_boundary_edges_after=0,
-            cap_added=0,
-            valid=False,
-        )
         search = GroundPlaneSearchResult(
             selected_shift=None,
             scanned_count=3,
             first_valid_shift=None,
             lowest_valid_shift=None,
+            selected_loop_area=0.0,
         )
 
-        with mock.patch("stage_contact_hole_repair._load_mesh_arrays", return_value=(object(), vertices, faces)), \
-             mock.patch("stage_contact_hole_repair._find_ground_plane_shift", return_value=search), \
-             mock.patch("stage_contact_hole_repair._probe_ground_plane_shift", return_value=invalid_probe), \
-             mock.patch("stage_contact_hole_repair._find_optimal_clip_offset", return_value=0.123) as legacy_mock, \
-             mock.patch("stage_contact_hole_repair._clip_mesh_at_plane", return_value=(vertices, faces)) as clip_mock, \
-             mock.patch("stage_contact_hole_repair._cap_boundary_at_plane", return_value=(vertices, faces)), \
-             mock.patch("stage_contact_hole_repair._finalize_ground_plane_outputs", return_value=(
-                 vertices,
-                 faces,
-                 "flat-cap+preserve-cap",
-                 GroundPlaneValidation(plane_loop_count=0, plane_boundary_edges=0, valid=True),
-             )):
+        with mock.patch(
+            "stage_contact_hole_repair._load_mesh_arrays",
+            return_value=(object(), vertices, faces),
+        ), mock.patch(
+            "stage_contact_hole_repair._find_ground_plane_shift",
+            return_value=search,
+        ):
+            with self.assertRaisesRegex(ValueError, "could not find a stable closed section loop"):
+                run_contact_hole_repair(
+                    "dummy_mesh.ply",
+                    str(Path("/tmp") / "repair-fallback-test"),
+                    ground_plane=ground_plane,
+                )
+
+    def test_run_contact_hole_repair_passes_selected_target_loop_to_finalize(self) -> None:
+        vertices, faces = GroundPlaneShiftSearchTests()._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
+        ground_plane = {"normal": [0.0, 1.0, 0.0], "d": 0.0}
+        search = GroundPlaneSearchResult(
+            selected_shift=0.0501,
+            scanned_count=2,
+            first_valid_shift=0.525,
+            lowest_valid_shift=0.0501,
+            selected_loop_area=0.9998,
+        )
+        probe = GroundPlaneProbe(
+            shift=0.0501,
+            section_loop_count=1,
+            selected_loop_area=0.9998,
+            matched_boundary_area_before=0.9998,
+            matched_boundary_area_after=0.0,
+            cap_added=2,
+            valid=True,
+        )
+        finalized_validation = GroundPlaneValidation(
+            plane_loop_count=0,
+            plane_boundary_edges=0,
+            matched_loop_present=False,
+            matched_loop_area=0.0,
+            valid=True,
+        )
+
+        with mock.patch(
+            "stage_contact_hole_repair._load_mesh_arrays",
+            return_value=(object(), vertices, faces),
+        ), mock.patch(
+            "stage_contact_hole_repair._find_ground_plane_shift",
+            return_value=search,
+        ), mock.patch(
+            "stage_contact_hole_repair._probe_ground_plane_shift",
+            return_value=probe,
+        ), mock.patch(
+            "stage_contact_hole_repair._clip_mesh_at_plane",
+            return_value=(vertices, faces),
+        ), mock.patch(
+            "stage_contact_hole_repair._cap_boundary_at_plane",
+            return_value=(vertices, np.vstack((faces, faces[:2])), {0, 1, 2, 3}, 0.9998),
+        ), mock.patch(
+            "stage_contact_hole_repair._finalize_ground_plane_outputs",
+            return_value=(
+                vertices,
+                faces,
+                "flat-cap+preserve-cap",
+                finalized_validation,
+            ),
+        ) as finalize_mock:
             repaired = run_contact_hole_repair(
                 "dummy_mesh.ply",
-                str(Path("/tmp") / "repair-fallback-test"),
+                str(Path("/tmp") / "repair-run-test"),
                 ground_plane=ground_plane,
             )
 
-        legacy_mock.assert_called_once()
-        clip_mock.assert_called_once()
-        clip_kwargs = clip_mock.call_args.kwargs
-        self.assertAlmostEqual(clip_kwargs["offset"], 0.123, places=6)
+        finalize_kwargs = finalize_mock.call_args.kwargs
+        self.assertIn("target_loop", finalize_kwargs)
+        self.assertGreater(finalize_kwargs["target_loop"].area, 0.0)
         self.assertEqual(repaired.name, "object_mesh_repaired.ply")
