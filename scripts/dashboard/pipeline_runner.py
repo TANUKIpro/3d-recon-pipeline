@@ -240,6 +240,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 # SAM2 interact → propagate → verify loop (supports redo)
                 ground_mask_dir: str | None = None
                 while True:
+                    # Clear all SAM2 events at redo loop top
+                    session.sam2_confirm_event.clear()
+                    session.sam2_ground_skip_event.clear()
+                    session.sam2_approve_event.clear()
+                    session.sam2_approved = False
+
                     # Initialize SAM2 model in a thread
                     meta = await asyncio.to_thread(
                         sam2_service.initialize,
@@ -268,7 +274,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     })
 
                     # Wait for user to confirm object segmentation via REST API
-                    session.sam2_confirm_event.clear()
                     await session.sam2_confirm_event.wait()
                     _check_cancelled(session)
 
@@ -277,7 +282,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                         # Switch service to ground mode
                         sam2_service.set_mode("ground")
                         session.sam2_confirm_event.clear()
-                        session.sam2_ground_skip_event.clear()
 
                         await _broadcast_stage_progress(
                             session,

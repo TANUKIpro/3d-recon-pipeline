@@ -88,6 +88,8 @@ export class SAM2Canvas {
 
   /** Called when sam2_ground_phase WS message arrives */
   enterGroundPhase() {
+    this._active = true;      // Ensure active (may have been cleared by reconnect)
+    this._loading = false;    // Ensure not loading
     this._groundPhase = true;
     this._mode = 'ground';
     this._setModeToggleVisible(true);
@@ -231,15 +233,20 @@ export class SAM2Canvas {
   async _confirm() {
     if (!this._active) return;
     this._confirmBtn.disabled = true;
+    const prevText = this._confirmBtn.textContent;
     this._confirmBtn.textContent = 'Propagating...';
     try {
       const res = await fetch('/api/sam2/confirm', { method: 'POST' });
       if (!res.ok) {
-        const data = await res.json();
-        console.error('Confirm failed:', data.error);
+        const data = await res.json().catch(() => ({}));
+        console.error('Confirm failed:', data.error || res.status);
+        this._confirmBtn.disabled = false;
+        this._confirmBtn.textContent = prevText;
       }
     } catch (e) {
       console.error('Confirm error:', e);
+      this._confirmBtn.disabled = false;
+      this._confirmBtn.textContent = prevText;
     }
   }
 

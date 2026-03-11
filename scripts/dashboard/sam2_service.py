@@ -199,12 +199,12 @@ class SAM2Service:
                     stale_path.unlink()
                 except OSError:
                     pass
-            if has_ground:
-                for stale_path in s.ground_mask_dir.glob("*.png"):
-                    try:
-                        stale_path.unlink()
-                    except OSError:
-                        pass
+            # Always clean ground masks (prevent stale files on redo skip)
+            for stale_path in s.ground_mask_dir.glob("*.png"):
+                try:
+                    stale_path.unlink()
+                except OSError:
+                    pass
 
             # Ensure frame 0 masks are on disk
             if self._current_mask is None:
