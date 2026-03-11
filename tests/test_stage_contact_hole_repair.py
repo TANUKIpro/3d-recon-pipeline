@@ -25,6 +25,7 @@ from stage_contact_hole_repair import (
     _evaluate_loop,
     _extract_boundary_edges,
     _extract_boundary_paths,
+    _find_optimal_clip_offset,
     _resolve_params,
 )
 
@@ -127,3 +128,149 @@ class StageContactHoleRepairDefaultsTests(unittest.TestCase):
         self.assertTrue(bottom_eval.candidate)
         self.assertEqual(upper_eval.reason, "not_downward_facing")
         self.assertFalse(upper_eval.candidate)
+
+
+class FindOptimalClipOffsetTests(unittest.TestCase):
+    """Tests for _find_optimal_clip_offset."""
+
+    def _make_open_bottom_box(
+        self, bottom_y: float = 0.0, top_y: float = 1.0, half: float = 0.5
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Create a box open at the bottom (y=bottom_y).
+
+        The box has 5 faces (top + 4 sides) and the bottom is a hole,
+        producing a boundary loop at y=bottom_y.
+        """
+        # 8 vertices of a box
+        vertices = np.array(
+            [
+                [-half, bottom_y, -half],  # 0  bottom
+                [half, bottom_y, -half],   # 1  bottom
+                [half, bottom_y, half],    # 2  bottom
+                [-half, bottom_y, half],   # 3  bottom
+                [-half, top_y, -half],     # 4  top
+                [half, top_y, -half],      # 5  top
+                [half, top_y, half],       # 6  top
+                [-half, top_y, half],      # 7  top
+            ],
+            dtype=np.float64,
+        )
+        # Faces: top face + 4 side faces (each side = 2 triangles), no bottom face
+        faces = np.array(
+            [
+                # Top
+                [4, 5, 6],
+                [4, 6, 7],
+                # Front (z = -half)
+                [0, 5, 4],
+                [0, 1, 5],
+                # Right (x = half)
+                [1, 6, 5],
+                [1, 2, 6],
+                # Back (z = half)
+                [2, 7, 6],
+                [2, 3, 7],
+                # Left (x = -half)
+                [3, 4, 7],
+                [3, 0, 4],
+            ],
+            dtype=np.int64,
+        )
+        return vertices, faces
+
+    def test_open_bottom_box_plane_below(self) -> None:
+        """Ground plane below the box: offset should push above boundary vertices."""
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
+        # Ground plane at y=0 (normal pointing up = toward the object)
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0  # plane equation: y + 0 = 0, i.e. y = 0
+
+        offset = _find_optimal_clip_offset(vertices, faces, plane_normal, plane_d)
+
+        # Bottom boundary vertices are at y=0.05, so signed dist = 0.05
+        # The offset should be at least 0.05 + epsilon (0.002)
+        self.assertGreaterEqual(offset, 0.05 + 0.002 - 1e-9)
+        # But not excessively large
+        self.assertLess(offset, 0.30)
+
+    def test_watertight_mesh_returns_epsilon(self) -> None:
+        """A watertight mesh (no boundary edges) returns epsilon."""
+        vertices, faces = self._make_open_bottom_box(bottom_y=0.0, top_y=1.0)
+        # Add the bottom face to make it watertight
+        bottom_faces = np.array([[0, 2, 1], [0, 3, 2]], dtype=np.int64)
+        faces = np.vstack([faces, bottom_faces])
+
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0
+        offset = _find_optimal_clip_offset(vertices, faces, plane_normal, plane_d)
+        self.assertAlmostEqual(offset, 0.002, places=6)
+
+    def test_watertight_mesh_above_plane(self) -> None:
+        """A watertight mesh above the plane clips at model bottom, not ground."""
+        vertices, faces = self._make_open_bottom_box(bottom_y=1.3, top_y=1.8)
+        # Add bottom face to make it watertight
+        bottom_faces = np.array([[0, 2, 1], [0, 3, 2]], dtype=np.int64)
+        faces = np.vstack([faces, bottom_faces])
+
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0
+        offset = _find_optimal_clip_offset(vertices, faces, plane_normal, plane_d)
+
+        # dist_min = 1.3, so offset should be 1.3 + 0.002
+        self.assertGreaterEqual(offset, 1.3 + 0.002 - 1e-9)
+
+    def test_model_entirely_above_plane(self) -> None:
+        """Model sits entirely above the ground plane (all dists positive).
+
+        This is the case where the ground plane normal was flipped because
+        all vertices were on one side.  The bottom boundary loop should
+        still be detected and the offset should push past it.
+        """
+        # Box bottom at y=1.3, top at y=1.8, plane at y=0
+        vertices, faces = self._make_open_bottom_box(bottom_y=1.3, top_y=1.8)
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0
+
+        offset = _find_optimal_clip_offset(vertices, faces, plane_normal, plane_d)
+
+        # Bottom boundary vertices at y=1.3, signed dist=1.3
+        # Offset must be >= 1.3 + epsilon
+        self.assertGreaterEqual(offset, 1.3 + 0.002 - 1e-9)
+        self.assertLess(offset, 2.0)
+
+    def test_no_bottom_loops_with_two_holes(self) -> None:
+        """Only holes near the mesh bottom are considered; upper holes are ignored."""
+        # Create a box open at both top and bottom
+        half = 0.5
+        vertices = np.array(
+            [
+                [-half, 0.0, -half],   # 0  bottom
+                [half, 0.0, -half],    # 1
+                [half, 0.0, half],     # 2
+                [-half, 0.0, half],    # 3
+                [-half, 1.0, -half],   # 4  top
+                [half, 1.0, -half],    # 5
+                [half, 1.0, half],     # 6
+                [-half, 1.0, half],    # 7
+            ],
+            dtype=np.float64,
+        )
+        # 4 sides only — both top and bottom are open
+        faces = np.array(
+            [
+                [0, 5, 4], [0, 1, 5],
+                [1, 6, 5], [1, 2, 6],
+                [2, 7, 6], [2, 3, 7],
+                [3, 4, 7], [3, 0, 4],
+            ],
+            dtype=np.int64,
+        )
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        plane_d = 0.0
+
+        offset = _find_optimal_clip_offset(vertices, faces, plane_normal, plane_d)
+
+        # Bottom loop at y=0 (dist=0), top loop at y=1 (dist=1).
+        # Only the bottom loop (within 20% of bbox_height=1.0) should be used.
+        # Bottom loop max dist = 0, so offset = 0 + epsilon = epsilon.
+        self.assertAlmostEqual(offset, 0.002, places=6)

@@ -862,6 +862,91 @@ def _cap_boundary_at_plane(
     return vertices, augmented_faces
 
 
+def _find_optimal_clip_offset(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    bottom_threshold_ratio: float = 0.20,
+    epsilon: float = 0.002,
+) -> float:
+    """Find the minimum plane offset that eliminates all bottom-hole boundary edges.
+
+    Moves the ground plane along its normal (toward the object) until the
+    cross-section no longer intersects any boundary edges of existing holes.
+    The resulting clip produces only closed contour loops that can be cleanly
+    capped to form the model's bottom face.
+
+    Returns the optimal offset value (>= 0) to pass to ``_clip_mesh_at_plane``.
+    """
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+
+    # Signed distance of each vertex from the plane (positive = above/object side)
+    dists = vertices @ plane_normal + plane_d
+    dist_min = float(dists.min())
+
+    boundary_edges = _extract_boundary_edges(faces)
+    if boundary_edges.size == 0:
+        # Mesh is already watertight; clip at model bottom + epsilon
+        return max(dist_min + epsilon, epsilon)
+
+    raw_paths = _extract_boundary_paths(boundary_edges)
+    if not raw_paths:
+        return max(dist_min + epsilon, epsilon)
+
+    # Bounding-box height along the plane normal direction
+    bbox_height = max(float(dists.max()) - dist_min, 1e-6)
+
+    # Identify "bottom" loops: closed loops whose centroid is near the
+    # bottom of the mesh (closest to the ground plane).  We measure from
+    # `dist_min` rather than from 0 so that models sitting entirely above
+    # (or below) the plane are handled correctly.
+    bottom_max_dists: list[float] = []
+    for path in raw_paths:
+        if len(path) < 4 or path[0] != path[-1]:
+            continue
+        loop_vertices = path[:-1]
+        if len(loop_vertices) < 3 or len(set(loop_vertices)) < 3:
+            continue
+
+        loop_indices = np.asarray(loop_vertices, dtype=np.int64)
+        loop_dists = dists[loop_indices]
+        centroid_dist = float(loop_dists.mean())
+
+        # A "bottom" loop has its centroid within bottom_threshold_ratio of
+        # the bbox height, measured from the mesh's lowest point along the
+        # plane normal.
+        dist_from_bottom = centroid_dist - dist_min
+        if dist_from_bottom > bottom_threshold_ratio * bbox_height:
+            continue
+
+        # Record the maximum signed distance among this loop's vertices —
+        # the plane must be pushed at least past this point
+        bottom_max_dists.append(float(loop_dists.max()))
+
+    if not bottom_max_dists:
+        # No bottom loops found; clip at model bottom + epsilon
+        return max(dist_min + epsilon, epsilon)
+
+    # The plane must be above ALL bottom-loop boundary vertices
+    critical_offset = max(bottom_max_dists) + epsilon
+
+    # Clamp so we don't cut away more than 30% of the mesh height.
+    # The cut depth into the mesh is (offset - dist_min).
+    max_cut_depth = 0.30 * bbox_height
+    max_allowed = dist_min + max_cut_depth
+    if critical_offset > max_allowed:
+        print(
+            f"  warning: optimal clip offset {critical_offset:.4f} exceeds "
+            f"30% cut depth ({max_cut_depth:.4f}), clamping to {max_allowed:.4f}"
+        )
+        critical_offset = max_allowed
+
+    # Ensure offset is non-negative
+    return max(critical_offset, epsilon)
+
+
 def _repair_contact_holes(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -1110,10 +1195,15 @@ def run_contact_hole_repair(
             f"d={gp_d:.4f}"
         )
 
+        _emit_progress(progress_cb, 12.0, "Contact Hole Repair: finding optimal clip height")
+        _check_cancel(cancel_cb)
+        optimal_offset = _find_optimal_clip_offset(vertices, faces, gp_normal, gp_d)
+        print(f"  optimal clip offset: {optimal_offset:.4f}")
+
         _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
         _check_cancel(cancel_cb)
         clipped_verts, clipped_faces = _clip_mesh_at_plane(
-            vertices, faces, gp_normal, gp_d,
+            vertices, faces, gp_normal, gp_d, offset=optimal_offset,
         )
         print(
             f"  clip: {vertices.shape[0]} -> {clipped_verts.shape[0]} vertices, "
@@ -1122,8 +1212,9 @@ def run_contact_hole_repair(
 
         _emit_progress(progress_cb, 45.0, "Contact Hole Repair: capping ground boundary")
         _check_cancel(cancel_cb)
+        actual_clip_d = gp_d - optimal_offset
         capped_verts, capped_faces = _cap_boundary_at_plane(
-            clipped_verts, clipped_faces, gp_normal, gp_d,
+            clipped_verts, clipped_faces, gp_normal, actual_clip_d,
         )
         cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
         print(f"  cap: added {cap_added} faces")
