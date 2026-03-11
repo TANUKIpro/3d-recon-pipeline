@@ -1308,10 +1308,21 @@ export class PreviewPanel {
     const quat = new THREE.Quaternion().setFromUnitVectors(from, to);
     mesh.quaternion.copy(quat);
 
-    // Position at ground center, adjusted for stage offset
-    const adjusted = this._applyStageCenterOffset(stage, data.center);
-    if (adjusted) {
-      mesh.position.set(adjusted[0], adjusted[1], adjusted[2]);
+    // Position: project the model center (origin in display space) onto the
+    // ground plane so the plane always appears directly under the model,
+    // regardless of how far the ground centroid is from the object.
+    const offset = stage?.centerOffset;
+    if (offset) {
+      const nx = normal[0], ny = normal[1], nz = normal[2];
+      const d = Number(data.d) || 0;
+      // Plane in display coords: n·p + (n·offset + d) = 0
+      const dAdj = nx * offset.x + ny * offset.y + nz * offset.z + d;
+      // Closest point on plane to origin: -dAdj * n  (n is unit length)
+      mesh.position.set(-dAdj * nx, -dAdj * ny, -dAdj * nz);
+    } else {
+      // No centering offset — fall back to raw ground center
+      const c = data.center || [0, 0, 0];
+      mesh.position.set(c[0], c[1], c[2]);
     }
 
     mesh.renderOrder = -1;
