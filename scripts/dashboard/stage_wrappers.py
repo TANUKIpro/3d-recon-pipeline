@@ -288,8 +288,8 @@ def _stage_mesh_repair_selected(
 def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
-    texture_view_assign_mode: str = "legacy",
-    texture_quality_boost: bool = False,
+    texture_view_assign_mode: str = "region_gc",
+    texture_quality_boost: bool = True,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
