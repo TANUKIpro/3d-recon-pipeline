@@ -43,6 +43,7 @@ services:
       - MESH_REPAIR_Y_BAND_RATIO=${MESH_REPAIR_Y_BAND_RATIO:-0.06}
       - MESH_REPAIR_SMOOTH_ITERS=${MESH_REPAIR_SMOOTH_ITERS:-3}
       - TEXTURE_SIZE=${TEXTURE_SIZE:-0}
+      - TEXTURE_VIEW_ASSIGN_MODE=${TEXTURE_VIEW_ASSIGN_MODE:-legacy}
     # stdin_open/tty removed — dashboard is non-interactive
 
 volumes:

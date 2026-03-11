@@ -104,13 +104,19 @@ class TestPipelineConfig(unittest.TestCase):
         self.assertEqual(cfg.video_path, "")
         self.assertEqual(cfg.output_dir, "/data/output")
         self.assertEqual(cfg.object_name, "")
+        self.assertEqual(cfg.texture_view_assign_mode, "legacy")
 
     def test_from_dict_roundtrip(self) -> None:
-        original = PipelineConfig(video_path="/tmp/v.mp4", max_frames=99)
+        original = PipelineConfig(
+            video_path="/tmp/v.mp4",
+            max_frames=99,
+            texture_view_assign_mode="region_gc",
+        )
         d = original.to_dict()
         restored = PipelineConfig.from_dict(d)
         self.assertEqual(restored.video_path, "/tmp/v.mp4")
         self.assertEqual(restored.max_frames, 99)
+        self.assertEqual(restored.texture_view_assign_mode, "region_gc")
 
     def test_to_dict_contains_all_fields(self) -> None:
         cfg = PipelineConfig()

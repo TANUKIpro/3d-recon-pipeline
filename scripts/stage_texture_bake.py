@@ -26,6 +26,7 @@ from config_defaults import (
     TEXTURE_MIN_COS,
     TEXTURE_OVERSAMPLE,
     TEXTURE_SHARPEN,
+    TEXTURE_VIEW_ASSIGN_MODE,
     _TEXTURE_CACHE_SAFETY_MB,
     _TEXTURE_FRAME_BUDGET_RATIO,
     _TEXTURE_MASK_BUDGET_RATIO,
@@ -48,6 +49,17 @@ _TEXTURE_CONFLICT_FACE_MIN_COVERAGE = 0.7
 _TEXTURE_CONFLICT_SMOOTH_DOT = 0.95
 _TEXTURE_CONFLICT_SMOOTH_GAIN = 1.05
 _TEXTURE_CONFLICT_SMOOTH_MIN_NEIGHBORS = 2
+_TEXTURE_REGION_NORMAL_DOT = 0.92
+_TEXTURE_REGION_MIN_FACES = 3
+_TEXTURE_REGION_TOP_LABELS = 4
+_TEXTURE_REGION_MAX_ITERS = 4
+_TEXTURE_REGION_SMOOTHNESS = 0.55
+_TEXTURE_REGION_MIN_LABEL_COVERAGE = 0.15
+_TEXTURE_REGION_MISSING_COST = 1.5
+_TEXTURE_REGION_LOW_COVERAGE_PENALTY = 0.35
+_TEXTURE_SEAM_LEVEL_BLEND = 0.35
+_TEXTURE_SEAM_LEVEL_DILATE = 2
+_TEXTURE_SEAM_LEVEL_SIGMA = 0.8
 
 
 def _emit_progress(
@@ -388,6 +400,16 @@ def _resolve_texture_size(
 
     # Last-resort safety fallback when image metadata is unavailable.
     return 2048, True
+
+
+def _resolve_texture_view_assign_mode(requested: str | None = None) -> str:
+    mode = (requested or os.environ.get("TEXTURE_VIEW_ASSIGN_MODE", TEXTURE_VIEW_ASSIGN_MODE)).strip().lower()
+    if mode == "region":
+        mode = "region_gc"
+    if mode not in {"legacy", "region_gc"}:
+        print(f"Warning: invalid TEXTURE_VIEW_ASSIGN_MODE='{mode}', falling back to {TEXTURE_VIEW_ASSIGN_MODE}")
+        return TEXTURE_VIEW_ASSIGN_MODE
+    return mode
 
 
 def _rasterize_view_depth(
@@ -829,6 +851,364 @@ def _compute_face_locked_views(
     return face_locked_view, face_support
 
 
+
+def _aggregate_face_view_stats(
+    fids: np.ndarray,
+    n_faces: int,
+    n_views: int,
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    face_mask: np.ndarray,
+) -> tuple[dict[int, list[tuple[int, float, int]]], np.ndarray]:
+    """Aggregate per-face view support from texel-level top-K scores."""
+    face_texel_count = np.bincount(fids, minlength=n_faces).astype(np.int32)
+    if n_faces == 0 or n_views <= 0 or best_scores.size == 0 or not np.any(face_mask):
+        return {}, face_texel_count
+
+    active_faces_parts: list[np.ndarray] = []
+    active_views_parts: list[np.ndarray] = []
+    active_scores_parts: list[np.ndarray] = []
+    for k in range(best_scores.shape[1]):
+        views_k = best_views[:, k]
+        active = face_mask[fids] & (views_k >= 0) & (best_scores[:, k] > 0)
+        if not np.any(active):
+            continue
+        active_faces_parts.append(fids[active].astype(np.int32, copy=False))
+        active_views_parts.append(views_k[active].astype(np.int32, copy=False))
+        active_scores_parts.append(best_scores[active, k].astype(np.float32, copy=False))
+
+    if not active_faces_parts:
+        return {}, face_texel_count
+
+    active_faces = np.concatenate(active_faces_parts)
+    active_views = np.concatenate(active_views_parts)
+    active_scores = np.concatenate(active_scores_parts)
+    pair_keys = active_faces.astype(np.int64) * np.int64(n_views) + active_views.astype(np.int64)
+    order = np.argsort(pair_keys, kind="stable")
+    pair_keys = pair_keys[order]
+    active_faces = active_faces[order]
+    active_views = active_views[order]
+    active_scores = active_scores[order]
+
+    run_starts = np.flatnonzero(np.r_[True, pair_keys[1:] != pair_keys[:-1]])
+    run_ends = np.r_[run_starts[1:], len(pair_keys)]
+    pair_faces = active_faces[run_starts]
+    pair_views = active_views[run_starts]
+    pair_support = np.add.reduceat(active_scores, run_starts).astype(np.float32, copy=False)
+    pair_coverage = (run_ends - run_starts).astype(np.int32, copy=False)
+
+    face_view_stats: dict[int, list[tuple[int, float, int]]] = defaultdict(list)
+    for face_i, view_i, support_i, coverage_i in zip(
+        pair_faces.tolist(),
+        pair_views.tolist(),
+        pair_support.tolist(),
+        pair_coverage.tolist(),
+        strict=False,
+    ):
+        face_view_stats[int(face_i)].append((int(view_i), float(support_i), int(coverage_i)))
+
+    for face_i, stats in face_view_stats.items():
+        face_view_stats[face_i] = sorted(stats, key=lambda item: item[1], reverse=True)
+    return dict(face_view_stats), face_texel_count
+
+
+def _collect_region_components(
+    seed_faces: np.ndarray,
+    adjacency: list[np.ndarray],
+    face_normals: np.ndarray,
+    face_label_sets: dict[int, set[int]],
+    min_normal_dot: float = _TEXTURE_REGION_NORMAL_DOT,
+) -> list[np.ndarray]:
+    if seed_faces.size == 0:
+        return []
+
+    visited = np.zeros(len(face_normals), dtype=bool)
+    components: list[np.ndarray] = []
+
+    for start in seed_faces.tolist():
+        start_i = int(start)
+        if visited[start_i]:
+            continue
+        stack = [start_i]
+        visited[start_i] = True
+        faces_in_component: list[int] = []
+        while stack:
+            fi = stack.pop()
+            faces_in_component.append(fi)
+            for nb in adjacency[fi].tolist():
+                nb_i = int(nb)
+                if visited[nb_i]:
+                    continue
+                if float(np.dot(face_normals[fi], face_normals[nb_i])) < min_normal_dot:
+                    continue
+                labels_fi = face_label_sets.get(fi)
+                labels_nb = face_label_sets.get(nb_i)
+                if not labels_fi or not labels_nb or labels_fi.isdisjoint(labels_nb):
+                    continue
+                visited[nb_i] = True
+                stack.append(nb_i)
+        components.append(np.array(faces_in_component, dtype=np.int32))
+    return components
+
+
+def _compute_region_gc_locked_views(
+    fids: np.ndarray,
+    n_faces: int,
+    n_views: int,
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    conflict_texels: np.ndarray,
+    face_normals: np.ndarray,
+    faces: np.ndarray,
+    base_locked_view: np.ndarray,
+    min_conflict_texels: int = _TEXTURE_CONFLICT_FACE_MIN_TEXELS,
+    min_conflict_frac: float = _TEXTURE_CONFLICT_FACE_MIN_FRAC,
+    min_region_faces: int = _TEXTURE_REGION_MIN_FACES,
+    max_region_labels: int = _TEXTURE_REGION_TOP_LABELS,
+    max_iters: int = _TEXTURE_REGION_MAX_ITERS,
+    smoothness: float = _TEXTURE_REGION_SMOOTHNESS,
+    min_label_coverage: float = _TEXTURE_REGION_MIN_LABEL_COVERAGE,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Smooth ambiguous curved regions with face-graph label optimization."""
+    face_locked_view = base_locked_view.copy()
+    face_support = np.zeros(n_faces, dtype=np.float32)
+    region_id_per_face = np.full(n_faces, -1, dtype=np.int32)
+    if n_faces == 0 or n_views <= 0 or best_scores.size == 0 or not np.any(conflict_texels):
+        return face_locked_view, face_support, region_id_per_face
+
+    face_texel_count = np.bincount(fids, minlength=n_faces).astype(np.int32)
+    face_conflict_count = np.bincount(fids[conflict_texels], minlength=n_faces).astype(np.int32)
+    face_conflict_frac = np.divide(
+        face_conflict_count,
+        np.maximum(face_texel_count, 1),
+        dtype=np.float32,
+    )
+    candidate_faces = np.where(
+        (face_conflict_count >= min_conflict_texels)
+        & (face_conflict_frac >= min_conflict_frac)
+    )[0]
+    if candidate_faces.size == 0:
+        return face_locked_view, face_support, region_id_per_face
+
+    textured_face_mask = face_texel_count > 0
+    face_view_stats, face_texel_count = _aggregate_face_view_stats(
+        fids=fids,
+        n_faces=n_faces,
+        n_views=n_views,
+        best_scores=best_scores,
+        best_views=best_views,
+        face_mask=textured_face_mask,
+    )
+    if not face_view_stats:
+        return face_locked_view, face_support, region_id_per_face
+
+    adjacency = _build_face_adjacency(faces)
+    face_label_sets = {
+        int(face_i): {int(view_i) for view_i, _support_i, _coverage_i in stats[:max_region_labels]}
+        for face_i, stats in face_view_stats.items()
+    }
+    components = _collect_region_components(
+        seed_faces=candidate_faces,
+        adjacency=adjacency,
+        face_normals=face_normals,
+        face_label_sets=face_label_sets,
+    )
+    region_counter = 0
+
+    for component in components:
+        if component.size < min_region_faces:
+            continue
+
+        component_views: dict[int, float] = defaultdict(float)
+        face_costs: dict[int, dict[int, float]] = {}
+        face_coverages: dict[int, dict[int, float]] = {}
+        init_labels: dict[int, int] = {}
+        eligible_faces: list[int] = []
+
+        for face_i in component.tolist():
+            stats = face_view_stats.get(int(face_i), [])
+            if not stats:
+                continue
+            max_support_local = max(float(item[1]) for item in stats)
+            if max_support_local <= 0.0:
+                continue
+            eligible_faces.append(int(face_i))
+            local_costs: dict[int, float] = {}
+            local_coverages: dict[int, float] = {}
+            for view_i, support_i, coverage_i in stats[:max_region_labels]:
+                component_views[int(view_i)] += float(support_i)
+                coverage_ratio = float(coverage_i) / max(float(face_texel_count[int(face_i)]), 1.0)
+                cost = 1.0 - (float(support_i) / max_support_local)
+                if coverage_ratio < min_label_coverage:
+                    ratio = coverage_ratio / max(min_label_coverage, 1e-6)
+                    cost += _TEXTURE_REGION_LOW_COVERAGE_PENALTY * (1.0 - max(0.0, min(1.0, ratio)))
+                local_costs[int(view_i)] = float(cost)
+                local_coverages[int(view_i)] = coverage_ratio
+            face_costs[int(face_i)] = local_costs
+            face_coverages[int(face_i)] = local_coverages
+            base_label = int(base_locked_view[int(face_i)])
+            if base_label >= 0 and base_label in local_costs:
+                init_labels[int(face_i)] = base_label
+
+        if len(eligible_faces) < min_region_faces or len(component_views) < 2:
+            continue
+
+        allowed_labels = [
+            int(view_i)
+            for view_i, _support_i in sorted(component_views.items(), key=lambda item: item[1], reverse=True)[:max_region_labels]
+        ]
+        if len(allowed_labels) < 2:
+            continue
+
+        face_indices = np.array(sorted(eligible_faces), dtype=np.int32)
+        face_set = set(face_indices.tolist())
+        face_update_order: list[tuple[float, int]] = []
+        current_labels: dict[int, int] = {}
+        for face_i in face_indices.tolist():
+            costs = face_costs[int(face_i)]
+            ranked_local = sorted(
+                (
+                    costs.get(label, _TEXTURE_REGION_MISSING_COST),
+                    -face_coverages[int(face_i)].get(label, 0.0),
+                    int(label),
+                )
+                for label in allowed_labels
+            )
+            if len(ranked_local) >= 2:
+                margin = float(ranked_local[1][0] - ranked_local[0][0])
+            else:
+                margin = _TEXTURE_REGION_MISSING_COST
+            face_update_order.append((margin, int(face_i)))
+            best_label = min(
+                allowed_labels,
+                key=lambda label: (
+                    costs.get(label, _TEXTURE_REGION_MISSING_COST),
+                    -face_coverages[int(face_i)].get(label, 0.0),
+                    label,
+                ),
+            )
+            current_labels[int(face_i)] = init_labels.get(int(face_i), int(best_label))
+        ordered_faces = [face_i for _margin, face_i in sorted(face_update_order, key=lambda item: (item[0], item[1]))]
+
+        edge_weights: dict[tuple[int, int], float] = {}
+        for face_i in face_indices.tolist():
+            for nb in adjacency[int(face_i)].tolist():
+                nb_i = int(nb)
+                if nb_i not in face_set or nb_i <= int(face_i):
+                    continue
+                normal_dot = float(np.clip(np.dot(face_normals[int(face_i)], face_normals[nb_i]), -1.0, 1.0))
+                if normal_dot < _TEXTURE_REGION_NORMAL_DOT:
+                    continue
+                smooth_weight = smoothness * (
+                    0.25 + 0.75 * (normal_dot - _TEXTURE_REGION_NORMAL_DOT) / max(1e-6, 1.0 - _TEXTURE_REGION_NORMAL_DOT)
+                )
+                edge_weights[(int(face_i), nb_i)] = max(0.0, float(smooth_weight))
+
+        if not edge_weights:
+            continue
+
+        for _iter_idx in range(max_iters):
+            changed = False
+            for face_i in ordered_faces:
+                costs = face_costs[int(face_i)]
+                best_energy: tuple[float, float, int] | None = None
+                best_label = current_labels[int(face_i)]
+                for label in allowed_labels:
+                    local_cost = costs.get(label, _TEXTURE_REGION_MISSING_COST)
+                    smooth_cost = 0.0
+                    for nb in adjacency[int(face_i)].tolist():
+                        nb_i = int(nb)
+                        if nb_i not in face_set:
+                            continue
+                        edge_key = (min(int(face_i), nb_i), max(int(face_i), nb_i))
+                        weight = edge_weights.get(edge_key, 0.0)
+                        if weight <= 0.0:
+                            continue
+                        if label != current_labels[nb_i]:
+                            smooth_cost += weight
+                    energy = (local_cost + smooth_cost, local_cost, int(label))
+                    if best_energy is None or energy < best_energy:
+                        best_energy = energy
+                        best_label = int(label)
+                if best_label != current_labels[int(face_i)]:
+                    current_labels[int(face_i)] = best_label
+                    changed = True
+            if not changed:
+                break
+
+        assigned = 0
+        for face_i in face_indices.tolist():
+            chosen_label = current_labels[int(face_i)]
+            coverage_ratio = face_coverages[int(face_i)].get(chosen_label, 0.0)
+            if coverage_ratio < min_label_coverage:
+                continue
+            support_candidates = {view_i: support_i for view_i, support_i, _cov_i in face_view_stats.get(int(face_i), [])}
+            support_i = float(support_candidates.get(chosen_label, 0.0))
+            if support_i <= 0.0:
+                continue
+            face_locked_view[int(face_i)] = int(chosen_label)
+            face_support[int(face_i)] = support_i
+            region_id_per_face[int(face_i)] = region_counter
+            assigned += 1
+
+        if assigned >= min_region_faces:
+            region_counter += 1
+        else:
+            for face_i in face_indices.tolist():
+                face_locked_view[int(face_i)] = int(base_locked_view[int(face_i)])
+                face_support[int(face_i)] = 0.0
+            region_id_per_face[face_indices] = -1
+
+    return face_locked_view, face_support, region_id_per_face
+
+
+def _apply_narrow_seam_leveling(
+    texture: np.ndarray,
+    valid_mask: np.ndarray,
+    label_buffer: np.ndarray,
+    blend: float = _TEXTURE_SEAM_LEVEL_BLEND,
+    dilate_iters: int = _TEXTURE_SEAM_LEVEL_DILATE,
+    sigma: float = _TEXTURE_SEAM_LEVEL_SIGMA,
+) -> tuple[np.ndarray, int]:
+    """Soften region-label seams without blurring the full texture."""
+    valid_labels = label_buffer >= 0
+    if texture.size == 0 or not np.any(valid_mask & valid_labels):
+        return texture, 0
+
+    boundary = np.zeros(label_buffer.shape, dtype=bool)
+    diff_x = valid_labels[:, 1:] & valid_labels[:, :-1] & (label_buffer[:, 1:] != label_buffer[:, :-1])
+    diff_y = valid_labels[1:, :] & valid_labels[:-1, :] & (label_buffer[1:, :] != label_buffer[:-1, :])
+    boundary[:, 1:] |= diff_x
+    boundary[:, :-1] |= diff_x
+    boundary[1:, :] |= diff_y
+    boundary[:-1, :] |= diff_y
+    if not np.any(boundary):
+        return texture, 0
+
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    band = cv2.dilate(boundary.astype(np.uint8), kernel, iterations=max(1, int(dilate_iters))).astype(bool)
+    editable = band & valid_mask & valid_labels
+    if not np.any(editable):
+        return texture, int(boundary.sum())
+
+    result = texture.copy()
+    valid_weight = valid_mask.astype(np.float32)
+    for _iter_idx in range(2):
+        blurred_num = cv2.GaussianBlur(
+            result * valid_weight[:, :, None],
+            (0, 0),
+            sigmaX=sigma,
+        )
+        blurred_den = cv2.GaussianBlur(valid_weight, (0, 0), sigmaX=sigma)
+        blurred = blurred_num / np.maximum(blurred_den[:, :, None], 1e-6)
+        result[editable] = np.clip(
+            (1.0 - blend) * result[editable] + blend * blurred[editable],
+            0.0,
+            1.0,
+        )
+    return result, int(boundary.sum())
+
+
 def bake_texture(
     mesh_ply: str,
     poses_path: str,
@@ -836,6 +1216,7 @@ def bake_texture(
     mask_dir: str,
     output_dir: str,
     tex_size: int | None = None,
+    view_assign_mode: str | None = None,
     progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Full texture baking pipeline: intrinsics → UV atlas → bake → export.
@@ -876,6 +1257,7 @@ def bake_texture(
     blend_topk = max(1, int(os.environ.get("TEXTURE_BLEND_TOPK", str(TEXTURE_BLEND_TOPK))))
     hard_ratio = float(os.environ.get("TEXTURE_BLEND_HARD_RATIO", str(TEXTURE_BLEND_HARD_RATIO)))
     texture_device = _resolve_texture_device()
+    texture_view_assign_mode = _resolve_texture_view_assign_mode(view_assign_mode)
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -983,8 +1365,8 @@ def bake_texture(
         f"({tex_size}x{tex_size}, internal {tex_res}x{tex_res}, oversample x{oversample})"
     )
     print(
-        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f"
-        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt)
+        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f, mode=%s"
+        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt, texture_view_assign_mode)
     )
     if texture_device == "cuda":
         print("  Projection backend request: CUDA (scoring currently uses CPU z-buffer)")
@@ -1124,9 +1506,30 @@ def bake_texture(
             face_normals=face_normals,
             faces=new_faces,
         )
+        region_id_per_face = np.full(len(new_faces), -1, dtype=np.int32)
+        if texture_view_assign_mode == "region_gc":
+            face_locked_view, _face_lock_support, region_id_per_face = _compute_region_gc_locked_views(
+                fids=fids,
+                n_faces=len(new_faces),
+                n_views=len(poses),
+                best_scores=best_scores,
+                best_views=best_views,
+                conflict_texels=conflict_texels,
+                face_normals=face_normals,
+                faces=new_faces,
+                base_locked_view=face_locked_view,
+            )
+            n_region_faces = int(np.count_nonzero(region_id_per_face >= 0))
+            n_regions = int(region_id_per_face.max()) + 1 if np.any(region_id_per_face >= 0) else 0
+            if n_region_faces > 0:
+                print(
+                    "  Region labeling: %d faces optimized across %d curved regions"
+                    % (n_region_faces, n_regions)
+                )
         locked_faces = face_locked_view >= 0
         n_locked_faces = int(locked_faces.sum())
         locked_view_per_texel = face_locked_view[fids]
+        region_id_per_texel = region_id_per_face[fids]
         n_locked_texels = int(np.count_nonzero(locked_view_per_texel >= 0))
         if n_locked_faces > 0:
             print(
@@ -1141,6 +1544,8 @@ def bake_texture(
     else:
         face_locked_view = np.full(len(new_faces), -1, dtype=np.int32)
         locked_view_per_texel = np.full(n_valid, -1, dtype=np.int32)
+        region_id_per_face = np.full(len(new_faces), -1, dtype=np.int32)
+        region_id_per_texel = np.full(n_valid, -1, dtype=np.int32)
         print("  Conflict locking: no ambiguous texels detected")
 
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float64)
@@ -1336,6 +1741,21 @@ def bake_texture(
         print(f"  Skipping fallback: only {missing.size} uncovered texels (<0.1%)")
 
     texture = texture.astype(np.float32)
+
+    if texture_view_assign_mode == "region_gc" and np.any(region_id_per_texel >= 0):
+        _emit_progress(progress_cb, 92.0, "Leveling region seams")
+        valid_color_mask = np.zeros((tex_res, tex_res), dtype=bool)
+        valid_color_mask[ys, xs] = has_color
+        label_buffer = np.full((tex_res, tex_res), -1, dtype=np.int32)
+        region_mask = (region_id_per_texel >= 0) & (locked_view_per_texel >= 0)
+        label_buffer[ys[region_mask], xs[region_mask]] = locked_view_per_texel[region_mask]
+        texture, seam_texels = _apply_narrow_seam_leveling(
+            texture=texture,
+            valid_mask=valid_color_mask,
+            label_buffer=label_buffer,
+        )
+        if seam_texels > 0:
+            print(f"  Narrow seam leveling: softened {seam_texels} boundary texels")
 
     # Release caches to free memory before seam padding
     depth_cache.clear()

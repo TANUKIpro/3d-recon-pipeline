@@ -18,7 +18,7 @@ graph TD
     S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
     S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>外皮化で UV 展開を安定化"]
     S7["Stage 7: メッシュ補修<br/><i>CPU</i><br/>接地候補穴を局所補修"]
-    S8["Stage 8: テクスチャベイキング<br/><i>CPU / GPU要求ヒント</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → conflict face単一視点化 + non-conflict多視点合成"]
+    S8["Stage 8: テクスチャベイキング<br/><i>CPU / GPU要求ヒント</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → conflict face/region単一視点化 + non-conflict多視点合成"]
     OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
 
     INPUT --> S1 --> S2 --> S3 --> S4 --> S5

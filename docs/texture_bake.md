@@ -36,13 +36,15 @@
 4. 全テクセルで Top-K ビューをスコアリング。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
    - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
-   - conflict が多い face は face 単位で dominant view に固定
+   - `TEXTURE_VIEW_ASSIGN_MODE=legacy` では conflict が多い face を face 単位で dominant view に固定
+   - `TEXTURE_VIEW_ASSIGN_MODE=region_gc` では conflict face を連続曲面 region にまとめ、region 内の face label を最適化
 5. non-conflict texel は Top-K ビューをスコア加重ブレンド。
-   - conflict face は single-view、その他は上位 K 個のビューから色を決定
+   - conflict face / region は single-view、その他は上位 K 個のビューから色を決定
    - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
-6. UV seam 周辺を反復補間して隙間埋め。
-7. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
-8. OBJ/MTL を生成。
+6. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
+7. UV seam 周辺を反復補間して隙間埋め。
+8. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
+9. OBJ/MTL を生成。
 
 ## アルゴリズム要点
 
@@ -52,7 +54,9 @@
   - 可視性はビューごとの深度ラスタライズで判定
 - 貼り付け:
   - 競合が弱い領域はテクセル単位 Top-K ブレンド
-  - 円筒面のような競合が強い領域は face 単位の single-view 貼り付けに切り替え
+  - `legacy`: 円筒面のような競合が強い領域は face 単位の single-view 貼り付けに切り替え
+  - `region_gc`: 円筒面のような競合が強い領域は face graph を region 化し、region 内の label を揃えて single-view 貼り付けに切り替え
+  - `region_gc` の境界は narrow seam leveling を挟み、hard seam を少し抑えてから seam padding に入る
   - 未充填テクセルは relaxed 閾値でフォールバックしてから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
@@ -62,6 +66,7 @@
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
 | `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下は `round(sqrt(video_width * video_height))` の正方形を自動適用 |
+| `TEXTURE_VIEW_ASSIGN_MODE` | `legacy` | view 割当モード。`legacy` は従来の face lock、`region_gc` は曖昧な連続曲面を region 最適化して single-view 化 |
 | `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行のチャート選定処理は CPU で実行 |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
