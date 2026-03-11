@@ -167,6 +167,18 @@ describe('CheckpointPanel', () => {
       expect(states[1]).toBe('running');
     });
 
+    it('stage 7 ground-plane detail advances to repair checkpoint', () => {
+      panel.applyStatusSnapshot({
+        stages: {
+          '7': { status: 'running', detail: 'Contact Hole Repair: scanning clip heights' },
+        },
+      });
+      panel.setActiveStage(7);
+      const states = readStates();
+      expect(states[0]).toBe('complete');
+      expect(states[1]).toBe('running');
+    });
+
     it('"complete" in detail resolves to maxIndex', () => {
       // Use applyStatusSnapshot with detail containing "complete" but no checkpoint_id,
       // so _resolveCurrentIndex falls through to the /complete/i fallback -> maxIndex.

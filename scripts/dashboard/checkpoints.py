@@ -238,10 +238,15 @@ _CHECKPOINTS: dict[int, Any] = {
         ),
         _checkpoint(
             "s7.find_loops",
-            label="Find and evaluate boundary loops",
+            label="Analyze and repair bottom surface",
             patterns=_patterns(
                 r"contact hole repair: extracting boundary loops|"
-                r"contact hole repair: evaluating boundary loop",
+                r"contact hole repair: extracting selectable loops|"
+                r"contact hole repair: evaluating boundary loop|"
+                r"contact hole repair: scanning clip heights|"
+                r"contact hole repair: clipping at ground plane|"
+                r"contact hole repair: capping ground boundary|"
+                r"contact hole repair: smoothing junction",
             ),
         ),
         _checkpoint(

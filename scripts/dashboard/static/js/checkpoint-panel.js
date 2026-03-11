@@ -69,7 +69,7 @@ const CHECKPOINT_TEMPLATES = {
   ],
   7: [
     'Load wrapped mesh',
-    'Find and evaluate boundary loops',
+    'Analyze and repair bottom surface',
     'Save repaired mesh',
   ],
   8: [
@@ -187,7 +187,7 @@ const DETAIL_MATCHERS = {
   ],
   7: [
     { re: /contact hole repair: loading mesh/i, idx: 0 },
-    { re: /contact hole repair: extracting boundary loops|contact hole repair: extracting selectable loops|contact hole repair: analyzing boundary loop|contact hole repair: evaluating boundary loop|waiting for repair-loop selection/i, idx: 1 },
+    { re: /contact hole repair: extracting boundary loops|contact hole repair: extracting selectable loops|contact hole repair: analyzing boundary loop|contact hole repair: evaluating boundary loop|contact hole repair: scanning clip heights|contact hole repair: clipping at ground plane|contact hole repair: capping ground boundary|contact hole repair: smoothing junction|waiting for repair-loop selection/i, idx: 1 },
     { re: /contact hole repair: writing repaired mesh|saved repaired mesh|contact hole repair: complete|contact hole repair: skipped/i, idx: 2 },
   ],
   8: [

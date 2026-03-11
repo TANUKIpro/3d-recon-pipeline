@@ -124,6 +124,24 @@ class RepairCandidateAnalysis:
         }
 
 
+@dataclass(frozen=True)
+class GroundPlaneProbe:
+    shift: float
+    plane_loop_count: int
+    plane_boundary_edges_before: int
+    plane_boundary_edges_after: int
+    cap_added: int
+    valid: bool
+
+
+@dataclass(frozen=True)
+class GroundPlaneSearchResult:
+    selected_shift: float | None
+    scanned_count: int
+    first_valid_shift: float | None
+    lowest_valid_shift: float | None
+
+
 def _emit_progress(
     progress_cb: ProgressCallback | None,
     progress: float,
@@ -693,6 +711,87 @@ def analyze_contact_hole_candidates(
     )
 
 
+def _plane_distance_threshold(vertices: np.ndarray, tolerance_ratio: float) -> float:
+    bbox_diag = max(
+        float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))),
+        1e-6,
+    )
+    return tolerance_ratio * bbox_diag
+
+
+def _collect_plane_boundary_loops(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    original_vertex_count: int | None = None,
+    tolerance_ratio: float = 0.01,
+    snap_ratio: float = 0.0001,
+) -> tuple[list[list[int]], np.ndarray]:
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    boundary_edges = _extract_boundary_edges(faces)
+    if boundary_edges.size == 0:
+        return [], boundary_edges
+
+    raw_paths = _extract_boundary_paths(boundary_edges)
+    if not raw_paths:
+        return [], boundary_edges
+
+    dist_threshold = _plane_distance_threshold(vertices, tolerance_ratio)
+    snap_threshold = max(_plane_distance_threshold(vertices, snap_ratio), 1e-6)
+    plane_loops: list[list[int]] = []
+    for path in raw_paths:
+        if len(path) < 4 or path[0] != path[-1]:
+            continue
+        loop_vertices = path[:-1]
+        if len(loop_vertices) < 3 or len(set(loop_vertices)) < 3:
+            continue
+
+        loop_indices = np.asarray(loop_vertices, dtype=np.int64)
+        loop_dists = np.abs(vertices[loop_indices] @ plane_normal + plane_d)
+        max_dist = float(loop_dists.max())
+        if max_dist > dist_threshold:
+            continue
+
+        if original_vertex_count is not None:
+            has_clip_vertex = any(int(idx) >= int(original_vertex_count) for idx in loop_vertices)
+            if not has_clip_vertex and max_dist > snap_threshold:
+                continue
+
+        plane_loops.append(path)
+
+    return plane_loops, boundary_edges
+
+
+def _count_plane_boundary_edges(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    original_vertex_count: int | None = None,
+    tolerance_ratio: float = 0.01,
+    snap_ratio: float = 0.0001,
+) -> int:
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    boundary_edges = _extract_boundary_edges(faces)
+    if boundary_edges.size == 0:
+        return 0
+
+    dist_threshold = _plane_distance_threshold(vertices, tolerance_ratio)
+    snap_threshold = max(_plane_distance_threshold(vertices, snap_ratio), 1e-6)
+    edge_indices = np.asarray(boundary_edges, dtype=np.int64)
+    edge_vertices = vertices[edge_indices]
+    edge_dists = np.abs(edge_vertices @ plane_normal + plane_d)
+    edge_mask = np.all(edge_dists <= dist_threshold, axis=1)
+    if original_vertex_count is not None:
+        has_clip_vertex = np.any(edge_indices >= int(original_vertex_count), axis=1)
+        snapped_to_plane = np.all(edge_dists <= snap_threshold, axis=1)
+        edge_mask &= has_clip_vertex | snapped_to_plane
+    return int(np.count_nonzero(edge_mask))
+
+
 def _clip_mesh_at_plane(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -792,6 +891,8 @@ def _cap_boundary_at_plane(
     faces: np.ndarray,
     plane_normal: np.ndarray,
     plane_d: float,
+    *,
+    original_vertex_count: int | None = None,
     tolerance: float = 0.01,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Cap open boundary loops that lie near the ground plane.
@@ -801,38 +902,24 @@ def _cap_boundary_at_plane(
     """
     plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
 
-    boundary_edges = _extract_boundary_edges(faces)
-    if boundary_edges.size == 0:
-        return vertices, faces
-
-    raw_paths = _extract_boundary_paths(boundary_edges)
+    raw_paths, _boundary_edges = _collect_plane_boundary_loops(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance,
+    )
     if not raw_paths:
         return vertices, faces
-
-    bbox_diag = max(
-        float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))),
-        1e-6,
-    )
-    dist_threshold = tolerance * bbox_diag
 
     added_face_lists: list[np.ndarray] = []
 
     for path in raw_paths:
-        # Must be a closed loop
-        if len(path) < 4 or path[0] != path[-1]:
-            continue
         loop_vertices = path[:-1]
-        if len(loop_vertices) < 3 or len(set(loop_vertices)) < 3:
-            continue
 
         loop_indices = np.asarray(loop_vertices, dtype=np.int64)
         loop_points = vertices[loop_indices]
-        centroid = loop_points.mean(axis=0)
-
-        # Check if centroid is close to the ground plane
-        plane_dist = abs(float(np.dot(centroid, plane_normal) + plane_d))
-        if plane_dist > dist_threshold:
-            continue
 
         # Project loop vertices onto ground plane for 2D triangulation
         loop_uv = _loop_projection_uv(loop_points, plane_normal)
@@ -860,6 +947,176 @@ def _cap_boundary_at_plane(
         augmented_faces = faces
 
     return vertices, augmented_faces
+
+
+def _probe_ground_plane_shift(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    shift: float,
+    *,
+    tolerance_ratio: float = 0.01,
+) -> GroundPlaneProbe:
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    original_vertex_count = int(vertices.shape[0])
+    clipped_verts, clipped_faces = _clip_mesh_at_plane(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        offset=shift,
+    )
+    actual_plane_d = plane_d - shift
+    plane_loops, _boundary_edges = _collect_plane_boundary_loops(
+        clipped_verts,
+        clipped_faces,
+        plane_normal,
+        actual_plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance_ratio,
+    )
+    plane_boundary_before = _count_plane_boundary_edges(
+        clipped_verts,
+        clipped_faces,
+        plane_normal,
+        actual_plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance_ratio,
+    )
+
+    capped_verts, capped_faces = _cap_boundary_at_plane(
+        clipped_verts,
+        clipped_faces,
+        plane_normal,
+        actual_plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance=tolerance_ratio,
+    )
+    cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
+    plane_boundary_after = _count_plane_boundary_edges(
+        capped_verts,
+        capped_faces,
+        plane_normal,
+        actual_plane_d,
+        original_vertex_count=original_vertex_count,
+        tolerance_ratio=tolerance_ratio,
+    )
+    valid = (
+        len(plane_loops) > 0
+        and plane_boundary_before > 0
+        and cap_added > 0
+        and plane_boundary_after == 0
+    )
+    return GroundPlaneProbe(
+        shift=float(shift),
+        plane_loop_count=len(plane_loops),
+        plane_boundary_edges_before=int(plane_boundary_before),
+        plane_boundary_edges_after=int(plane_boundary_after),
+        cap_added=int(cap_added),
+        valid=bool(valid),
+    )
+
+
+def _find_ground_plane_shift(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    tolerance_ratio: float = 0.01,
+    coarse_steps: int = 81,
+    refine_iters: int = 10,
+) -> GroundPlaneSearchResult:
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    dists = vertices @ plane_normal + plane_d
+    dist_min = float(dists.min())
+    dist_max = float(dists.max())
+    epsilon = 0.002
+
+    lower_shift = min(0.0, dist_min - epsilon)
+    upper_shift = dist_max - epsilon
+    if upper_shift <= lower_shift:
+        probe = _probe_ground_plane_shift(
+            vertices,
+            faces,
+            plane_normal,
+            plane_d,
+            lower_shift,
+            tolerance_ratio=tolerance_ratio,
+        )
+        selected_shift = probe.shift if probe.valid else None
+        return GroundPlaneSearchResult(
+            selected_shift=selected_shift,
+            scanned_count=1,
+            first_valid_shift=selected_shift,
+            lowest_valid_shift=selected_shift,
+        )
+
+    coarse_candidates = np.linspace(lower_shift, upper_shift, max(coarse_steps, 3))
+    candidate_shifts = {float(shift) for shift in coarse_candidates.tolist()}
+    candidate_shifts.add(0.0)
+    candidate_shifts.add(lower_shift)
+    candidate_shifts.add(upper_shift)
+
+    for vertex_dist in np.unique(dists):
+        for delta in (-epsilon, 0.0, epsilon):
+            shift = float(vertex_dist + delta)
+            if lower_shift <= shift <= upper_shift:
+                candidate_shifts.add(shift)
+
+    probes: dict[float, GroundPlaneProbe] = {}
+
+    def _probe(shift: float) -> GroundPlaneProbe:
+        key = float(shift)
+        existing = probes.get(key)
+        if existing is not None:
+            return existing
+        probe = _probe_ground_plane_shift(
+            vertices,
+            faces,
+            plane_normal,
+            plane_d,
+            key,
+            tolerance_ratio=tolerance_ratio,
+        )
+        probes[key] = probe
+        return probe
+
+    ordered_candidates = sorted(candidate_shifts)
+    valid_candidates = [probe for probe in (_probe(shift) for shift in ordered_candidates) if probe.valid]
+    if not valid_candidates:
+        return GroundPlaneSearchResult(
+            selected_shift=None,
+            scanned_count=len(probes),
+            first_valid_shift=None,
+            lowest_valid_shift=None,
+        )
+
+    first_valid = valid_candidates[0]
+    low = ordered_candidates[0]
+    high = first_valid.shift
+    for shift in ordered_candidates:
+        if shift < first_valid.shift and not probes[shift].valid:
+            low = shift
+
+    best_valid = first_valid
+    if low < high and not probes[low].valid:
+        for _ in range(max(refine_iters, 0)):
+            mid = 0.5 * (low + high)
+            probe = _probe(mid)
+            if probe.valid:
+                best_valid = probe
+                high = mid
+            else:
+                low = mid
+
+    return GroundPlaneSearchResult(
+        selected_shift=float(best_valid.shift),
+        scanned_count=len(probes),
+        first_valid_shift=float(first_valid.shift),
+        lowest_valid_shift=float(best_valid.shift),
+    )
 
 
 def _find_optimal_clip_offset(
@@ -1195,15 +1452,41 @@ def run_contact_hole_repair(
             f"d={gp_d:.4f}"
         )
 
-        _emit_progress(progress_cb, 12.0, "Contact Hole Repair: finding optimal clip height")
+        _emit_progress(progress_cb, 12.0, "Contact Hole Repair: scanning clip heights")
         _check_cancel(cancel_cb)
-        optimal_offset = _find_optimal_clip_offset(vertices, faces, gp_normal, gp_d)
-        print(f"  optimal clip offset: {optimal_offset:.4f}")
+        search = _find_ground_plane_shift(vertices, faces, gp_normal, gp_d)
+        print(f"  candidate offsets scanned: {search.scanned_count}")
+        if search.first_valid_shift is not None:
+            print(f"  first closed offset: {search.first_valid_shift:.4f}")
+        if search.lowest_valid_shift is not None:
+            print(f"  lowest valid closed offset: {search.lowest_valid_shift:.4f}")
+
+        fallback_label: str | None = None
+        selected_shift = search.selected_shift
+        if selected_shift is None:
+            zero_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, 0.0)
+            print(
+                "  fallback probe at current plane: "
+                f"loops={zero_probe.plane_loop_count}, "
+                f"bottom_edges={zero_probe.plane_boundary_edges_before}"
+                f"->{zero_probe.plane_boundary_edges_after}, "
+                f"cap_added={zero_probe.cap_added}"
+            )
+            fallback_label = "legacy clip offset"
+            selected_shift = _find_optimal_clip_offset(vertices, faces, gp_normal, gp_d)
+            print(f"  fallback offset: {selected_shift:.4f}")
+        else:
+            final_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, selected_shift)
+            print(
+                "  bottom-boundary edges: "
+                f"{final_probe.plane_boundary_edges_before}->{final_probe.plane_boundary_edges_after}, "
+                f"cap_added={final_probe.cap_added}"
+            )
 
         _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
         _check_cancel(cancel_cb)
         clipped_verts, clipped_faces = _clip_mesh_at_plane(
-            vertices, faces, gp_normal, gp_d, offset=optimal_offset,
+            vertices, faces, gp_normal, gp_d, offset=selected_shift,
         )
         print(
             f"  clip: {vertices.shape[0]} -> {clipped_verts.shape[0]} vertices, "
@@ -1212,12 +1495,18 @@ def run_contact_hole_repair(
 
         _emit_progress(progress_cb, 45.0, "Contact Hole Repair: capping ground boundary")
         _check_cancel(cancel_cb)
-        actual_clip_d = gp_d - optimal_offset
+        actual_clip_d = gp_d - selected_shift
         capped_verts, capped_faces = _cap_boundary_at_plane(
-            clipped_verts, clipped_faces, gp_normal, actual_clip_d,
+            clipped_verts,
+            clipped_faces,
+            gp_normal,
+            actual_clip_d,
+            original_vertex_count=vertices.shape[0],
         )
         cap_added = int(capped_faces.shape[0]) - int(clipped_faces.shape[0])
         print(f"  cap: added {cap_added} faces")
+        if fallback_label is not None:
+            print(f"  fallback used: {fallback_label}")
 
         _emit_progress(progress_cb, 70.0, "Contact Hole Repair: smoothing junction")
         _check_cancel(cancel_cb)
