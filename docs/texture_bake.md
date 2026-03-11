@@ -33,13 +33,16 @@
    - FOV グリッドサーチ
    - Nelder-Mead で `(fx, fy, cx, cy)` 最適化
 3. `xatlas.parametrize` で UV 展開。
-4. テクセル単位で Top-K ビューをスコア加重ブレンド。
+4. 全テクセルで Top-K ビューをスコアリング。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
-   - 各テクセルの上位 K 個のビューからスコア加重平均で色を決定
+   - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
+   - conflict が多い face は face 単位で dominant view に固定
+5. non-conflict texel は Top-K ビューをスコア加重ブレンド。
+   - conflict face は single-view、その他は上位 K 個のビューから色を決定
    - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
-5. UV seam 周辺を反復補間して隙間埋め。
-6. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
-7. OBJ/MTL を生成。
+6. UV seam 周辺を反復補間して隙間埋め。
+7. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
+8. OBJ/MTL を生成。
 
 ## アルゴリズム要点
 
@@ -48,7 +51,8 @@
   - 距離減衰 (`TEXTURE_DIST_POW`) を適用
   - 可視性はビューごとの深度ラスタライズで判定
 - 貼り付け:
-  - テクセル単位で Top-K ビューのスコア加重平均で色を決定
+  - 競合が弱い領域はテクセル単位 Top-K ブレンド
+  - 円筒面のような競合が強い領域は face 単位の single-view 貼り付けに切り替え
   - 未充填テクセルは relaxed 閾値でフォールバックしてから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
@@ -67,7 +71,21 @@
 | `TEXTURE_BLEND_TOPK` | `3` | テクセルあたりブレンドするビュー数 (1=ブレンドなし) |
 | `TEXTURE_BLEND_HARD_RATIO` | `2.0` | top-1 / top-2 スコア比がこの値を超えるテクセルはシングルビュー化 (0=無効) |
 
-既定値の定義元: `scripts/config_defaults.py`
+内部固定しきい値:
+
+- `conflict_ratio = 1.35`
+- `conflict_view_angle_deg = 20`
+- `conflict_face_min_texels = 4`
+- `conflict_face_min_frac = 0.2`
+- `conflict_face_min_coverage = 0.7`
+- `conflict_smooth_dot = 0.95`
+- `conflict_smooth_gain = 1.05`
+- `conflict_smooth_min_neighbors = 2`
+
+既定値の定義元:
+
+- 公開パラメータ: `scripts/config_defaults.py`
+- conflict lock の内部しきい値: `scripts/stage_texture_bake.py`
 
 ## パフォーマンス最適化
 

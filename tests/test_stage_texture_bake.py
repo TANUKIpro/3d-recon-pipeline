@@ -6,6 +6,8 @@ import numpy as np
 
 from scripts.stage_texture_bake import (
     _apply_view_hardening,
+    _compute_conflict_texels,
+    _compute_face_locked_views,
     _resolve_texture_device,
     _resolve_texture_size,
     _update_topk_scores,
@@ -272,3 +274,233 @@ class ViewHardeningTests(unittest.TestCase):
         best_views = np.array([[2]], dtype=np.int32)
         n = _apply_view_hardening(best_scores, best_views, hard_ratio=2.0)
         self.assertEqual(n, 0)
+
+
+class ConflictDetectionTests(unittest.TestCase):
+    def test_marks_close_scores_with_large_view_separation(self) -> None:
+        pos3d = np.array([
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ], dtype=np.float64)
+        poses = np.repeat(np.eye(4, dtype=np.float64)[None, :, :], 3, axis=0)
+        poses[0, :3, 3] = np.array([1.0, 0.0, 0.0])
+        poses[1, :3, 3] = np.array([0.0, 0.0, 1.0])
+        poses[2, :3, 3] = np.array([0.98, 0.0, 0.17])
+
+        best_scores = np.array([
+            [0.52, 0.47],
+            [0.80, 0.20],
+            [0.51, 0.49],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [0, 1],
+            [0, 2],
+        ], dtype=np.int32)
+
+        conflict = _compute_conflict_texels(
+            pos3d=pos3d,
+            poses=poses,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_ratio=1.35,
+            min_view_angle_deg=20.0,
+        )
+
+        np.testing.assert_array_equal(conflict, np.array([True, False, False]))
+
+
+class FaceLockingTests(unittest.TestCase):
+    def test_locks_conflict_face_to_dominant_view(self) -> None:
+        fids = np.array([0, 0, 0, 0, 1, 1], dtype=np.int32)
+        best_scores = np.array([
+            [0.50, 0.45],
+            [0.48, 0.46],
+            [0.49, 0.44],
+            [0.51, 0.43],
+            [0.80, -1.0],
+            [0.75, -1.0],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [1, -1],
+            [1, -1],
+        ], dtype=np.int32)
+        conflict_texels = np.array([True, True, True, True, False, False], dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+        ], dtype=np.int32)
+
+        face_locked_view, face_support = _compute_face_locked_views(
+            fids=fids,
+            n_faces=2,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([0, -1], dtype=np.int32))
+        self.assertGreater(float(face_support[0]), 0.0)
+        self.assertAlmostEqual(float(face_support[1]), 0.0, places=5)
+
+    def test_does_not_lock_when_dominant_view_coverage_is_too_low(self) -> None:
+        fids = np.array([0, 0, 0, 0], dtype=np.int32)
+        best_scores = np.array([
+            [0.90, 0.10],
+            [0.40, 0.30],
+            [0.90, 0.10],
+            [0.40, 0.30],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [1, 2],
+            [0, 1],
+            [1, 2],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(4, dtype=bool)
+        face_normals = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+
+        face_locked_view, face_support = _compute_face_locked_views(
+            fids=fids,
+            n_faces=1,
+            n_views=3,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([-1], dtype=np.int32))
+        self.assertAlmostEqual(float(face_support[0]), 0.0, places=5)
+
+    def test_neighbor_majority_smooths_small_face_island(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+
+        face_locked_view, _ = _compute_face_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 1, 1], dtype=np.int32))
+
+    def test_smoothing_does_not_force_view_missing_from_face(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, -1],
+            [0, -1],
+            [0, -1],
+            [0, -1],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+
+        face_locked_view, _ = _compute_face_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 0, 1], dtype=np.int32))

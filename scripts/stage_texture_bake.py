@@ -40,6 +40,15 @@ except Exception:  # pragma: no cover - optional dependency for GPU acceleration
 
 ProgressCallback = Callable[[float, str | None], None]
 
+_TEXTURE_CONFLICT_RATIO = 1.35
+_TEXTURE_CONFLICT_VIEW_ANGLE_DEG = 20.0
+_TEXTURE_CONFLICT_FACE_MIN_TEXELS = 4
+_TEXTURE_CONFLICT_FACE_MIN_FRAC = 0.2
+_TEXTURE_CONFLICT_FACE_MIN_COVERAGE = 0.7
+_TEXTURE_CONFLICT_SMOOTH_DOT = 0.95
+_TEXTURE_CONFLICT_SMOOTH_GAIN = 1.05
+_TEXTURE_CONFLICT_SMOOTH_MIN_NEIGHBORS = 2
+
 
 def _emit_progress(
     progress_cb: ProgressCallback | None,
@@ -607,6 +616,219 @@ def _apply_view_hardening(
     return n_hard
 
 
+def _compute_conflict_texels(
+    pos3d: np.ndarray,
+    poses: np.ndarray,
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    conflict_ratio: float = _TEXTURE_CONFLICT_RATIO,
+    min_view_angle_deg: float = _TEXTURE_CONFLICT_VIEW_ANGLE_DEG,
+) -> np.ndarray:
+    """Mark texels where two competing views disagree strongly."""
+    n_texels = best_scores.shape[0]
+    if n_texels == 0 or best_scores.shape[1] <= 1 or len(poses) == 0:
+        return np.zeros(n_texels, dtype=bool)
+
+    top0 = best_scores[:, 0].astype(np.float64, copy=False)
+    top1 = best_scores[:, 1].astype(np.float64, copy=False)
+    view0 = best_views[:, 0]
+    view1 = best_views[:, 1]
+
+    close_scores = (top0 > 0) & (top1 > 0) & (top0 < conflict_ratio * top1)
+    different_views = view0 >= 0
+    different_views &= view1 >= 0
+    different_views &= view0 != view1
+    candidates = close_scores & different_views
+
+    conflict = np.zeros(n_texels, dtype=bool)
+    idx = np.where(candidates)[0]
+    if idx.size == 0:
+        return conflict
+
+    cam_pos = poses[:, :3, 3]
+    dir0 = cam_pos[view0[idx]] - pos3d[idx]
+    dir1 = cam_pos[view1[idx]] - pos3d[idx]
+    dir0 /= np.maximum(np.linalg.norm(dir0, axis=1, keepdims=True), 1e-10)
+    dir1 /= np.maximum(np.linalg.norm(dir1, axis=1, keepdims=True), 1e-10)
+    dots = np.sum(dir0 * dir1, axis=1)
+    dots = np.clip(dots, -1.0, 1.0)
+    angles_deg = np.degrees(np.arccos(dots))
+    conflict[idx] = angles_deg >= min_view_angle_deg
+    return conflict
+
+
+def _build_face_adjacency(faces: np.ndarray) -> list[np.ndarray]:
+    adjacency: list[set[int]] = [set() for _ in range(len(faces))]
+    edge_to_face: dict[tuple[int, int], int] = {}
+
+    for fi, face in enumerate(faces):
+        a, b, c = (int(face[0]), int(face[1]), int(face[2]))
+        for u, v in ((a, b), (b, c), (c, a)):
+            edge = (u, v) if u < v else (v, u)
+            prev = edge_to_face.get(edge)
+            if prev is None:
+                edge_to_face[edge] = fi
+                continue
+            adjacency[fi].add(prev)
+            adjacency[prev].add(fi)
+
+    return [
+        np.fromiter(sorted(neighbors), dtype=np.int32)
+        if neighbors else np.empty(0, dtype=np.int32)
+        for neighbors in adjacency
+    ]
+
+
+def _compute_face_locked_views(
+    fids: np.ndarray,
+    n_faces: int,
+    n_views: int,
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    conflict_texels: np.ndarray,
+    face_normals: np.ndarray,
+    faces: np.ndarray,
+    min_conflict_texels: int = _TEXTURE_CONFLICT_FACE_MIN_TEXELS,
+    min_conflict_frac: float = _TEXTURE_CONFLICT_FACE_MIN_FRAC,
+    min_view_coverage: float = _TEXTURE_CONFLICT_FACE_MIN_COVERAGE,
+    smooth_dot: float = _TEXTURE_CONFLICT_SMOOTH_DOT,
+    smooth_gain: float = _TEXTURE_CONFLICT_SMOOTH_GAIN,
+    smooth_min_neighbors: int = _TEXTURE_CONFLICT_SMOOTH_MIN_NEIGHBORS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Select a single dominant view for conflict-heavy faces."""
+    face_locked_view = np.full(n_faces, -1, dtype=np.int32)
+    if n_faces == 0 or n_views <= 0 or best_scores.size == 0 or not np.any(conflict_texels):
+        return face_locked_view, np.zeros(n_faces, dtype=np.float32)
+
+    face_texel_count = np.bincount(fids, minlength=n_faces).astype(np.int32)
+    face_conflict_count = np.bincount(fids[conflict_texels], minlength=n_faces).astype(np.int32)
+    face_conflict_frac = np.divide(
+        face_conflict_count,
+        np.maximum(face_texel_count, 1),
+        dtype=np.float32,
+    )
+    candidate_faces = np.where(
+        (face_conflict_count >= min_conflict_texels)
+        & (face_conflict_frac >= min_conflict_frac)
+    )[0]
+    if candidate_faces.size == 0:
+        return face_locked_view, np.zeros(n_faces, dtype=np.float32)
+
+    candidate_mask = np.zeros(n_faces, dtype=bool)
+    candidate_mask[candidate_faces] = True
+    candidate_rows = np.full(n_faces, -1, dtype=np.int32)
+    candidate_rows[candidate_faces] = np.arange(candidate_faces.size, dtype=np.int32)
+
+    active_faces_parts: list[np.ndarray] = []
+    active_views_parts: list[np.ndarray] = []
+    active_scores_parts: list[np.ndarray] = []
+    for k in range(best_scores.shape[1]):
+        views_k = best_views[:, k]
+        active = (views_k >= 0) & conflict_texels & candidate_mask[fids]
+        if not np.any(active):
+            continue
+        active_faces_parts.append(fids[active].astype(np.int32, copy=False))
+        active_views_parts.append(views_k[active].astype(np.int32, copy=False))
+        active_scores_parts.append(best_scores[active, k].astype(np.float32, copy=False))
+
+    if not active_faces_parts:
+        return face_locked_view, np.zeros(n_faces, dtype=np.float32)
+
+    active_faces = np.concatenate(active_faces_parts)
+    active_views = np.concatenate(active_views_parts)
+    active_scores = np.concatenate(active_scores_parts)
+    pair_keys = active_faces.astype(np.int64) * np.int64(n_views) + active_views.astype(np.int64)
+    order = np.argsort(pair_keys, kind="stable")
+    pair_keys = pair_keys[order]
+    active_faces = active_faces[order]
+    active_views = active_views[order]
+    active_scores = active_scores[order]
+
+    run_starts = np.flatnonzero(np.r_[True, pair_keys[1:] != pair_keys[:-1]])
+    run_ends = np.r_[run_starts[1:], len(pair_keys)]
+    pair_faces = active_faces[run_starts]
+    pair_views = active_views[run_starts]
+    pair_support = np.add.reduceat(active_scores, run_starts).astype(np.float32, copy=False)
+    pair_coverage = (run_ends - run_starts).astype(np.int32, copy=False)
+
+    dominant_support = np.zeros(candidate_faces.size, dtype=np.float32)
+    dominant_coverage = np.zeros(candidate_faces.size, dtype=np.int32)
+    dominant_cols = np.full(candidate_faces.size, -1, dtype=np.int32)
+    face_view_stats: dict[tuple[int, int], tuple[float, int]] = {}
+    for face_i, view_i, support_i, coverage_i in zip(
+        pair_faces.tolist(),
+        pair_views.tolist(),
+        pair_support.tolist(),
+        pair_coverage.tolist(),
+        strict=False,
+    ):
+        row = candidate_rows[int(face_i)]
+        if row < 0:
+            continue
+        face_view_stats[(int(face_i), int(view_i))] = (float(support_i), int(coverage_i))
+        if support_i > dominant_support[row]:
+            dominant_support[row] = float(support_i)
+            dominant_coverage[row] = int(coverage_i)
+            dominant_cols[row] = int(view_i)
+
+    coverage_ratio = np.divide(
+        dominant_coverage,
+        np.maximum(face_conflict_count[candidate_faces], 1),
+        dtype=np.float32,
+    )
+    eligible = (dominant_support > 0.0) & (coverage_ratio >= min_view_coverage)
+    if not np.any(eligible):
+        return face_locked_view, np.zeros(n_faces, dtype=np.float32)
+
+    face_locked_view[candidate_faces[eligible]] = dominant_cols[eligible].astype(np.int32)
+    face_support = np.zeros(n_faces, dtype=np.float32)
+    face_support[candidate_faces[eligible]] = dominant_support[eligible]
+
+    adjacency = _build_face_adjacency(faces)
+    locked_faces = np.where(face_locked_view >= 0)[0]
+    if locked_faces.size == 0:
+        return face_locked_view, face_support
+
+    smoothed = face_locked_view.copy()
+    for fi in locked_faces:
+        row = candidate_rows[fi]
+        if row < 0:
+            continue
+        neighbors = adjacency[fi]
+        if neighbors.size == 0:
+            continue
+        same_region = neighbors[smoothed[neighbors] >= 0]
+        if same_region.size == 0:
+            continue
+        normal_dot = np.sum(face_normals[same_region] * face_normals[fi], axis=1)
+        similar = same_region[normal_dot >= smooth_dot]
+        if similar.size < smooth_min_neighbors:
+            continue
+        labels = smoothed[similar]
+        weights = face_support[similar]
+        totals: dict[int, float] = {}
+        for label, weight in zip(labels.tolist(), weights.tolist(), strict=False):
+            label_i = int(label)
+            local_support, _local_coverage = face_view_stats.get((int(fi), label_i), (0.0, 0))
+            if local_support <= 0.0:
+                continue
+            totals[label_i] = totals.get(label_i, 0.0) + float(weight)
+        if not totals:
+            continue
+        best_label, best_total = max(totals.items(), key=lambda item: item[1])
+        if best_label != int(smoothed[fi]) and best_total > float(face_support[fi]) * smooth_gain:
+            smoothed[fi] = int(best_label)
+
+    changed = smoothed != face_locked_view
+    if np.any(changed):
+        face_locked_view = smoothed
+        for fi in np.where(changed)[0]:
+            local_support, _local_coverage = face_view_stats.get((int(fi), int(face_locked_view[fi])), (0.0, 0))
+            face_support[fi] = float(local_support)
+
+    return face_locked_view, face_support
+
+
 def bake_texture(
     mesh_ply: str,
     poses_path: str,
@@ -884,6 +1106,43 @@ def bake_texture(
     if n_hard > 0:
         print(f"  View hardening: {n_hard}/{n_valid} texels use single dominant view (ratio>{hard_ratio:.1f})")
 
+    conflict_texels = _compute_conflict_texels(
+        pos3d=pos3d,
+        poses=poses,
+        best_scores=best_scores,
+        best_views=best_views,
+    )
+    n_conflict = int(conflict_texels.sum())
+    if n_conflict > 0:
+        face_locked_view, _face_lock_support = _compute_face_locked_views(
+            fids=fids,
+            n_faces=len(new_faces),
+            n_views=len(poses),
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=new_faces,
+        )
+        locked_faces = face_locked_view >= 0
+        n_locked_faces = int(locked_faces.sum())
+        locked_view_per_texel = face_locked_view[fids]
+        n_locked_texels = int(np.count_nonzero(locked_view_per_texel >= 0))
+        if n_locked_faces > 0:
+            print(
+                "  Conflict locking: %d/%d texels, %d faces locked to a single view"
+                % (n_locked_texels, n_valid, n_locked_faces)
+            )
+        else:
+            print(
+                "  Conflict detection: %d texels flagged, but no faces met lock coverage"
+                % n_conflict
+            )
+    else:
+        face_locked_view = np.full(len(new_faces), -1, dtype=np.int32)
+        locked_view_per_texel = np.full(n_valid, -1, dtype=np.int32)
+        print("  Conflict locking: no ambiguous texels detected")
+
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float64)
     weight_sum = np.zeros(n_valid, dtype=np.float64)
     has_color = np.zeros(n_valid, dtype=bool)
@@ -893,14 +1152,33 @@ def bake_texture(
 
     # Group texels by view across all K slots
     view_texels: dict[int, list[tuple[np.ndarray, np.ndarray]]] = defaultdict(list)
+    locked_mask = locked_view_per_texel >= 0
+    if np.any(locked_mask):
+        locked_indices = np.where(locked_mask)[0]
+        locked_views = locked_view_per_texel[locked_mask]
+        order = np.argsort(locked_views, kind="stable")
+        locked_indices = locked_indices[order]
+        locked_views = locked_views[order]
+        start_idx = np.flatnonzero(np.r_[True, locked_views[1:] != locked_views[:-1]])
+        end_idx = np.r_[start_idx[1:], len(locked_views)]
+        for start, end in zip(start_idx.tolist(), end_idx.tolist(), strict=False):
+            vidx_val = int(locked_views[start])
+            tidx = locked_indices[start:end]
+            view_texels[vidx_val].append(
+                (tidx, np.ones(tidx.size, dtype=np.float64))
+            )
+
+    free_texels = ~locked_mask
     for k in range(blend_topk):
         col_views = best_views[:, k]
         col_scores = best_scores[:, k]
         for vidx_val in np.unique(col_views):
             if vidx_val < 0:
                 continue
-            mask_k = col_views == vidx_val
+            mask_k = free_texels & (col_views == vidx_val)
             tidx = np.where(mask_k)[0]
+            if tidx.size == 0:
+                continue
             view_texels[int(vidx_val)].append(
                 (tidx, col_scores[tidx].astype(np.float64))
             )
