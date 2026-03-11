@@ -138,26 +138,12 @@ class SAM2Service:
                 s.ground_click_points.clear()
                 s.ground_click_labels.clear()
                 self._current_ground_mask = None
-                # Re-run object inference to keep obj_id=1 state valid
-                if s.click_points:
-                    self._current_mask = _run_single_frame_inference_obj(
-                        s, obj_id=1,
-                        click_points=s.click_points,
-                        click_labels=s.click_labels,
-                    )
             else:
                 s.click_points.clear()
                 s.click_labels.clear()
                 self._current_mask = None
-                # Re-run ground inference to keep obj_id=2 state valid
-                if s.ground_click_points:
-                    self._current_ground_mask = _run_single_frame_inference_obj(
-                        s, obj_id=2,
-                        click_points=s.ground_click_points,
-                        click_labels=s.ground_click_labels,
-                    )
 
-            # Reset predictor state and re-add all points
+            # Reset predictor state and re-add remaining points
             s.predictor.reset_state(s.inference_state)
             if s.click_points:
                 self._current_mask = _run_single_frame_inference_obj(

@@ -185,7 +185,7 @@ def _run_single_frame_inference_obj(
     labels_np = np.array(click_labels, dtype=np.int32)
 
     with torch.inference_mode():
-        _, _, masks_out = session.predictor.add_new_points_or_box(
+        _, obj_ids_out, masks_out = session.predictor.add_new_points_or_box(
             inference_state=session.inference_state,
             frame_idx=0,
             obj_id=obj_id,
@@ -194,7 +194,8 @@ def _run_single_frame_inference_obj(
             clear_old_points=True,
             normalize_coords=True,
         )
-    mask = (masks_out[0] > 0).cpu().numpy().squeeze()
+    obj_idx = list(obj_ids_out).index(obj_id)
+    mask = (masks_out[obj_idx] > 0).cpu().numpy().squeeze()
     return mask
 
 
