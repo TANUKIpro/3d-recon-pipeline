@@ -2,6 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from scripts.stage_texture_bake import (
@@ -11,11 +12,15 @@ from scripts.stage_texture_bake import (
     _compute_face_locked_views,
     _compute_region_gc_locked_views,
     _estimate_detail_band_shift,
+    _normalize_candidate_patch_colors,
+    _refine_detail_band_shift,
     _resolve_texture_device,
     _resolve_texture_quality_boost,
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
+    _select_detail_companion_view_candidates,
     _select_detail_companion_views,
+    _translate_patch,
     _update_topk_scores,
 )
 
@@ -290,6 +295,80 @@ class DetailCompanionViewSelectionTests(unittest.TestCase):
         companions = _select_detail_companion_views(primary, best_views, best_scores)
 
         np.testing.assert_array_equal(companions, np.array([5, 6, -1], dtype=np.int32))
+
+    def test_collects_multiple_unique_candidates_in_rank_order(self) -> None:
+        primary = np.array([2, 1, 4], dtype=np.int32)
+        best_views = np.array([
+            [2, 5, 7, 8],
+            [1, 1, 6, 9],
+            [4, 8, 9, -1],
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.9, 0.6, 0.3, 0.2],
+            [0.8, 0.7, 0.4, 0.1],
+            [0.5, 0.4, 0.2, -1.0],
+        ], dtype=np.float32)
+
+        companions = _select_detail_companion_view_candidates(
+            primary,
+            best_views,
+            best_scores,
+            max_candidates=3,
+        )
+
+        self.assertEqual(len(companions), 3)
+        np.testing.assert_array_equal(companions[0], np.array([5, 6, 8], dtype=np.int32))
+        np.testing.assert_array_equal(companions[1], np.array([7, 9, 9], dtype=np.int32))
+        np.testing.assert_array_equal(companions[2], np.array([8, -1, -1], dtype=np.int32))
+
+
+class DetailPatchNormalizationTests(unittest.TestCase):
+    def test_normalizes_local_mean_toward_reference(self) -> None:
+        reference = np.full((6, 6, 3), 0.40, dtype=np.float32)
+        reference[2:4, 2:4, 1] = 0.75
+        candidate = np.clip(reference * 1.20 + 0.10, 0.0, 1.0)
+        mask = np.ones((6, 6), dtype=bool)
+
+        normalized = _normalize_candidate_patch_colors(reference, candidate, mask)
+
+        before = float(np.mean(np.abs(reference - candidate)))
+        after = float(np.mean(np.abs(reference - normalized)))
+        self.assertLess(after, before)
+
+
+class DetailBandShiftRefinementTests(unittest.TestCase):
+    def test_ecc_refinement_reduces_alignment_error(self) -> None:
+        ref = np.zeros((32, 32, 3), dtype=np.float32)
+        ref[8:24, 8:24, :] = 0.75
+        ref[10:22, 10:22, 1] = 0.25
+        cand = cv2.warpAffine(
+            ref,
+            np.array([[1.0, 0.0, 1.2], [0.0, 1.0, -0.7]], dtype=np.float32),
+            (32, 32),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+        cand = np.clip(cand * 1.10 + 0.04, 0.0, 1.0)
+        mask = np.zeros((32, 32), dtype=bool)
+        mask[5:27, 5:27] = True
+
+        normalized = _normalize_candidate_patch_colors(ref, cand, mask)
+        phase_dx, phase_dy, _phase_response = _estimate_detail_band_shift(ref, normalized, mask)
+        refined_dx, refined_dy, refined_response = _refine_detail_band_shift(
+            ref,
+            normalized,
+            mask,
+            init_dx=phase_dx,
+            init_dy=phase_dy,
+        )
+
+        phase_aligned = _translate_patch(normalized, phase_dx, phase_dy)
+        refined_aligned = _translate_patch(normalized, refined_dx, refined_dy)
+        phase_error = float(np.mean(np.abs(ref[mask] - phase_aligned[mask])))
+        refined_error = float(np.mean(np.abs(ref[mask] - refined_aligned[mask])))
+
+        self.assertLessEqual(refined_error, phase_error + 1e-4)
+        self.assertGreater(refined_response, 0.0)
 
 
 class ViewHardeningTests(unittest.TestCase):

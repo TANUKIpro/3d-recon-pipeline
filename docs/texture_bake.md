@@ -42,6 +42,8 @@
    - conflict face / region は single-view、その他は上位 K 個のビューから色を決定
    - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
 6. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
+   - `TEXTURE_QUALITY_BOOST` 有効時は boundary component ごとに複数補助ビューを比較し、
+     色正規化 + ECC/phase correlation 整列つきで最良候補の detail を注入する。
 7. UV seam 周辺を反復補間して隙間埋め。
 8. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
 9. OBJ/MTL を生成。
@@ -57,6 +59,8 @@
   - `legacy`: 円筒面のような競合が強い領域は face 単位の single-view 貼り付けに切り替え
   - `region_gc`: 円筒面のような競合が強い領域は face graph を region 化し、region 内の label を揃えて single-view 貼り付けに切り替え
   - `region_gc` の境界は narrow seam leveling を挟み、hard seam を少し抑えてから seam padding に入る
+  - `TEXTURE_QUALITY_BOOST` は Top-K 候補から複数の補助ビューを評価し、component 単位で最も整合する detail source を選ぶ
+  - 補助ビューは局所色正規化後に phase correlation と ECC で平行移動整列し、低周波と高周波を分けて merge する
   - 未充填テクセルは relaxed 閾値でフォールバックしてから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
@@ -75,6 +79,7 @@
 | `TEXTURE_SHARPEN` | `0.15` | 最終アンシャープ量 |
 | `TEXTURE_BLEND_TOPK` | `3` | テクセルあたりブレンドするビュー数 (1=ブレンドなし) |
 | `TEXTURE_BLEND_HARD_RATIO` | `2.0` | top-1 / top-2 スコア比がこの値を超えるテクセルはシングルビュー化 (0=無効) |
+| `TEXTURE_QUALITY_BOOST` | `false` | `region_gc` 向けの高品質境界 refinement。複数補助ビュー比較、局所色正規化、ECC 整列、detail 注入を有効化 |
 
 内部固定しきい値:
 
