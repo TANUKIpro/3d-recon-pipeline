@@ -1235,6 +1235,7 @@ def extract_ground_plane(
     output_dir: str,
     progress_cb: ProgressCallback | None = None,
     cancel_cb: CancelCallback | None = None,
+    object_mask_dir: str | None = None,
 ) -> dict | None:
     """Extract ground plane from Pi3X cache using ground segmentation masks.
 
@@ -1247,6 +1248,9 @@ def extract_ground_plane(
         output_dir: Output directory for ground_plane.json.
         progress_cb: Optional progress callback.
         cancel_cb: Optional cancel callback.
+        object_mask_dir: Optional directory of SAM2 object mask PNGs.
+            When provided, used for more accurate object centroid estimation
+            during normal orientation.
 
     Returns:
         Dict with plane parameters, or None if insufficient ground points.
@@ -1331,15 +1335,40 @@ def extract_ground_plane(
     # Extract ground 3D points
     ground_pts = points[final_ground_mask].astype(np.float32)
 
-    # Also extract non-ground (object) points for normal orientation
-    object_mask = conf_edge_mask & ~ground_mask
-    object_count = object_mask.sum()
-    if object_count > 0:
-        object_pts = points[object_mask].astype(np.float32)
-        object_centroid = object_pts.mean(axis=0)
-    else:
-        # Fallback: use all non-ground cached points
-        object_centroid = points[conf_edge_mask].astype(np.float32).mean(axis=0)
+    # Extract object centroid for normal orientation.
+    # Prefer SAM2 object masks (accurate) over conf_edge & ~ground (noisy).
+    object_centroid = None
+    if object_mask_dir is not None:
+        obj_mask_path = Path(object_mask_dir)
+        obj_mask_files = sorted(obj_mask_path.glob("*.png"))
+        if obj_mask_files:
+            obj_masks = []
+            for i, frame_idx in enumerate(frame_indices):
+                mp = obj_mask_path / f"{int(frame_idx):05d}.png"
+                if not mp.exists() and 0 <= int(frame_idx) < len(obj_mask_files):
+                    mp = obj_mask_files[int(frame_idx)]
+                if mp.exists():
+                    mimg = cv2.imread(str(mp), cv2.IMREAD_GRAYSCALE)
+                    if mimg is not None:
+                        obj_masks.append(cv2.resize(mimg, (W, H), interpolation=cv2.INTER_NEAREST) > 127)
+                        continue
+                obj_masks.append(np.zeros((H, W), dtype=bool))
+            sam2_obj_mask = np.stack(obj_masks)
+            final_obj_mask = conf_edge_mask & sam2_obj_mask
+            obj_count = final_obj_mask.sum()
+            if obj_count > 0:
+                object_centroid = points[final_obj_mask].astype(np.float32).mean(axis=0)
+                print(f"  Object centroid from SAM2 masks ({obj_count:,} points)")
+
+    if object_centroid is None:
+        object_mask = conf_edge_mask & ~ground_mask
+        object_count = object_mask.sum()
+        if object_count > 0:
+            object_pts = points[object_mask].astype(np.float32)
+            object_centroid = object_pts.mean(axis=0)
+        else:
+            object_centroid = points[conf_edge_mask].astype(np.float32).mean(axis=0)
+        print(f"  Object centroid from non-ground points ({object_mask.sum():,} points)")
     _emit_progress(progress_cb, 60.0, "Fitting ground plane (RANSAC)")
 
     # Build Open3D point cloud

@@ -293,6 +293,7 @@ def _stage_extract_ground_plane(
     cache_path: str,
     ground_mask_dir: str,
     output_dir: str,
+    object_mask_dir: str | None = None,
 ) -> dict | None:
     from stage_pi3x_reconstruct import extract_ground_plane
 
@@ -301,6 +302,7 @@ def _stage_extract_ground_plane(
             cache_path,
             ground_mask_dir,
             output_dir,
+            object_mask_dir=object_mask_dir,
         )
 
 

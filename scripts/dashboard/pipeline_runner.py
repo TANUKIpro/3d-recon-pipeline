@@ -313,6 +313,9 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                         # Switch back to object mode
                         sam2_service.set_mode("object")
 
+                    elif cfg.ground_plane_enabled and cfg.auto_accept:
+                        print("Ground plane segmentation skipped (auto-accept mode requires interactive clicks)")
+
                     # Propagate masks
                     await _broadcast_stage_progress(
                         session,
@@ -438,6 +441,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     session.pi3x_cache_path,
                     session.ground_mask_dir,
                     output_dir,
+                    object_mask_dir=session.mask_dir,
                 )
                 if ground_plane is not None:
                     session.ground_plane_path = str(Path(output_dir) / "ground_plane.json")
@@ -836,6 +840,22 @@ async def _run_mesh_repair_interactive(
 ) -> None:
     stage = PipelineStage.MESH_REPAIR
 
+    # Ground-plane mode: skip interactive loop analysis entirely
+    if ground_plane is not None:
+        await _run_stage(
+            session,
+            stage,
+            _stage_mesh_repair,
+            mesh_ply,
+            output_dir,
+            mesh_repair_enabled,
+            mesh_repair_max_diameter_ratio,
+            mesh_repair_y_band_ratio,
+            mesh_repair_smooth_iters,
+            ground_plane,
+        )
+        return
+
     if not mesh_repair_enabled:
         await _run_stage(
             session,
@@ -896,6 +916,7 @@ async def _run_mesh_repair_interactive(
                     "stage": int(stage),
                     "candidate_count": 0,
                     "auto_accepted": session.config.auto_accept,
+                    "has_ground_plane": ground_plane is not None,
                     "overall_progress": session.overall_progress(),
                 },
             )
@@ -939,6 +960,7 @@ async def _run_mesh_repair_interactive(
                     "stage": int(stage),
                     "candidate_count": len(candidates),
                     "auto_accepted": auto_accepted,
+                    "has_ground_plane": ground_plane is not None,
                     "overall_progress": session.overall_progress(),
                 },
             )

@@ -1084,20 +1084,27 @@ def run_contact_hole_repair(
 
     mesh, vertices, faces = _load_mesh_arrays(mesh_ply)
 
-    if not params.enabled:
-        print("Mesh repair disabled. Saving input mesh as repaired output.")
-        mesh.compute_vertex_normals()
-        _write_mesh_safe(repaired_path, mesh)
-        _write_mesh_safe(repaired_copy_path, mesh)
-        _emit_progress(progress_cb, 100.0, "Contact Hole Repair: skipped (disabled)")
-        return repaired_path
-
     # ------------------------------------------------------------------
-    # Ground-plane clipping path: skip Y-band heuristic entirely
+    # Ground-plane clipping path: always runs regardless of `enabled` flag
     # ------------------------------------------------------------------
     if ground_plane is not None:
         gp_normal = np.asarray(ground_plane["normal"], dtype=np.float64)
         gp_d = float(ground_plane["d"])
+
+        # Ensure normal points toward the mesh majority (the object side).
+        # extract_ground_plane may orient incorrectly when background points
+        # skew the object centroid estimate.
+        gp_normal_unit = gp_normal / max(float(np.linalg.norm(gp_normal)), 1e-12)
+        signed_dist = vertices @ gp_normal_unit + gp_d
+        above_count = int((signed_dist > 0).sum())
+        below_count = int(vertices.shape[0] - above_count)
+        if above_count < below_count:
+            gp_normal = -gp_normal
+            gp_d = -gp_d
+            print(
+                f"Ground-plane mode: flipped normal (above={above_count}, below={below_count})"
+            )
+
         print(
             f"Ground-plane mode: normal=[{gp_normal[0]:.4f}, {gp_normal[1]:.4f}, {gp_normal[2]:.4f}], "
             f"d={gp_d:.4f}"
@@ -1146,6 +1153,14 @@ def run_contact_hole_repair(
 
         print(f"Saved repaired mesh (ground-plane): {repaired_path}")
         _emit_progress(progress_cb, 100.0, "Contact Hole Repair: complete")
+        return repaired_path
+
+    if not params.enabled:
+        print("Mesh repair disabled. Saving input mesh as repaired output.")
+        mesh.compute_vertex_normals()
+        _write_mesh_safe(repaired_path, mesh)
+        _write_mesh_safe(repaired_copy_path, mesh)
+        _emit_progress(progress_cb, 100.0, "Contact Hole Repair: skipped (disabled)")
         return repaired_path
 
     # ------------------------------------------------------------------

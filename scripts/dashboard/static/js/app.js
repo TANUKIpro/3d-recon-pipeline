@@ -538,14 +538,23 @@ ws.on('pi3x_preview_ready', () => {
 
 ws.on('mesh_repair_ready', async (msg) => {
   const autoAccepted = msg.auto_accepted === true;
+  const hasGroundPlane = msg.has_ground_plane === true;
   const loopCount = Number(msg.candidate_count) || 0;
   if (loopCount === 0) {
-    const prefix = autoAccepted ? '[Auto] ' : '';
-    appendLog(
-      'warn',
-      `${prefix}Mesh Repair: no closed surfaces found — skipped.\n`,
-      { stage: 7 },
-    );
+    if (hasGroundPlane) {
+      appendLog(
+        'stdout',
+        'Mesh Repair: using ground plane for bottom surface repair.\n',
+        { stage: 7 },
+      );
+    } else {
+      const prefix = autoAccepted ? '[Auto] ' : '';
+      appendLog(
+        'warn',
+        `${prefix}Mesh Repair: no closed surfaces found — skipped.\n`,
+        { stage: 7 },
+      );
+    }
     return;
   }
   if (autoAccepted) {
