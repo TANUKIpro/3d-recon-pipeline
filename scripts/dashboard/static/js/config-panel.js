@@ -110,7 +110,7 @@ const MESHWRAP_DEFAULTS = {
 };
 
 const MESH_REPAIR_DEFAULTS = {
-  mesh_repair_max_diameter_ratio: 0.08,
+  mesh_repair_max_diameter_ratio: 0.46,
   mesh_repair_y_band_ratio: 0.06,
   mesh_repair_smooth_iters: 3,
 };

@@ -209,7 +209,7 @@ describe('ConfigPanel', () => {
         'meshwrap_poisson_depth', 'meshwrap_poisson_scale',
         'meshwrap_iterations', 'meshwrap_crop_scale',
         'classical_preset', 'classical_poisson_depth',
-        'mesh_repair_enabled',
+        'mesh_repair_enabled', 'mesh_repair_max_diameter_ratio',
       ];
       for (const key of expectedKeys) {
         expect(config).toHaveProperty(key);
@@ -229,6 +229,7 @@ describe('ConfigPanel', () => {
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
       expect(config.texture_view_assign_mode).toBe('legacy');
       expect(config.texture_quality_boost).toBe(false);
+      expect(config.mesh_repair_max_diameter_ratio).toBe(0.46);
     });
 
     it('reads the selected texture view assignment mode', () => {

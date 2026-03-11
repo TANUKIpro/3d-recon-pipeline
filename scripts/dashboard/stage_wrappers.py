@@ -8,6 +8,11 @@ from per-stage wiring.
 
 from __future__ import annotations
 
+from scripts.config_defaults import (
+    REPAIR_MAX_DIAMETER_RATIO,
+    REPAIR_SMOOTH_ITERS,
+    REPAIR_Y_BAND_RATIO,
+)
 from scripts.dashboard.log_capture import stage_log_scope
 from scripts.dashboard.state import PipelineStage
 
@@ -214,9 +219,9 @@ def _stage_mesh_repair(
     mesh_ply: str,
     output_dir: str,
     mesh_repair_enabled: bool = True,
-    mesh_repair_max_diameter_ratio: float = 0.08,
-    mesh_repair_y_band_ratio: float = 0.06,
-    mesh_repair_smooth_iters: int = 3,
+    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO,
+    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO,
+    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -258,9 +263,9 @@ def _stage_mesh_repair_selected(
     output_dir: str,
     selected_loop_ids: list[int],
     mesh_repair_enabled: bool = True,
-    mesh_repair_max_diameter_ratio: float = 0.08,
-    mesh_repair_y_band_ratio: float = 0.06,
-    mesh_repair_smooth_iters: int = 3,
+    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO,
+    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO,
+    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
     progress_cb=None,
     cancel_cb=None,
 ) -> None:

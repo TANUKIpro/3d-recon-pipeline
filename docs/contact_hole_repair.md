@@ -42,7 +42,7 @@ Dashboard 追加 API:
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
 | `MESH_REPAIR_ENABLED` | `1` | 補修有効化 |
-| `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.08` | 補修対象穴の最大直径 (bbox対角比) |
+| `MESH_REPAIR_MAX_DIAMETER_RATIO` | `0.46` | 補修対象穴の最大直径 (bbox対角比)。接地前提の底面穴を既定で拾えるよう調整済み |
 | `MESH_REPAIR_Y_BAND_RATIO` | `0.06` | 補修対象穴のY帯域 (下端からbbox対角比) |
 | `MESH_REPAIR_SMOOTH_ITERS` | `3` | 局所平滑化反復数 |
 
