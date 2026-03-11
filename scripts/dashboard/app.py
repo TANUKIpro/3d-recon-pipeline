@@ -797,6 +797,47 @@ async def sam2_mask(idx: int):
     return Response(content=png_bytes, media_type="image/png")
 
 
+# ── Object file preview (for overview thumbnails) ────────────────
+
+@app.get("/api/preview/object-file/{object_name}/{path:path}")
+async def preview_object_file(object_name: str, path: str):
+    """Serve a file from any object's directory (not just active session)."""
+    try:
+        object_name = _validate_object_name(object_name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    base_output = _resolve_output_root(OUTPUT_DIR)
+    out = _object_dir(object_name, base_output)
+    if not out.is_dir():
+        return JSONResponse({"error": "Object not found"}, status_code=404)
+
+    target = (out / path).resolve()
+    if not str(target).startswith(str(out.resolve())):
+        return JSONResponse({"error": "Access denied"}, status_code=403)
+    if not target.is_file():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+
+    media_types = {
+        ".ply": "application/octet-stream",
+        ".obj": "text/plain",
+        ".mtl": "text/plain",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".json": "application/json",
+    }
+    mt = media_types.get(target.suffix.lower(), "application/octet-stream")
+    return FileResponse(
+        str(target),
+        media_type=mt,
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 # ── Preview API ───────────────────────────────────────────────────
 
 @app.get("/api/preview/outputs")
