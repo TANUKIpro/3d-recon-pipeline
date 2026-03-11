@@ -212,6 +212,7 @@ export function buildConfigPanelDOM() {
         <option value="legacy">Legacy Blend</option>
         <option value="region_gc">Region Optimized</option>
       </select>
+      <input type="checkbox" id="cfg-texture-quality-boost">
     </div>
   `;
 }

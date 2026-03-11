@@ -10,9 +10,12 @@ from scripts.stage_texture_bake import (
     _compute_conflict_texels,
     _compute_face_locked_views,
     _compute_region_gc_locked_views,
+    _estimate_detail_band_shift,
     _resolve_texture_device,
+    _resolve_texture_quality_boost,
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
+    _select_detail_companion_views,
     _update_topk_scores,
 )
 
@@ -250,6 +253,43 @@ class ResolveTextureViewAssignModeTests(unittest.TestCase):
     def test_invalid_mode_falls_back_to_legacy(self) -> None:
         with patch.dict(os.environ, {"TEXTURE_VIEW_ASSIGN_MODE": "broken"}, clear=False):
             self.assertEqual(_resolve_texture_view_assign_mode(), "legacy")
+
+
+class ResolveTextureQualityBoostTests(unittest.TestCase):
+    def test_default_mode_is_disabled(self) -> None:
+        old = os.environ.pop("TEXTURE_QUALITY_BOOST", None)
+        try:
+            self.assertFalse(_resolve_texture_quality_boost())
+        finally:
+            if old is not None:
+                os.environ["TEXTURE_QUALITY_BOOST"] = old
+
+    def test_env_truthy_value_enables_boost(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_QUALITY_BOOST": "true"}, clear=False):
+            self.assertTrue(_resolve_texture_quality_boost())
+
+    def test_explicit_argument_wins(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_QUALITY_BOOST": "false"}, clear=False):
+            self.assertTrue(_resolve_texture_quality_boost(True))
+
+
+class DetailCompanionViewSelectionTests(unittest.TestCase):
+    def test_picks_first_non_primary_candidate(self) -> None:
+        primary = np.array([2, 1, 4], dtype=np.int32)
+        best_views = np.array([
+            [2, 5, 7],
+            [1, 1, 6],
+            [4, -1, -1],
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.9, 0.6, 0.2],
+            [0.8, 0.7, 0.4],
+            [0.5, -1.0, -1.0],
+        ], dtype=np.float32)
+
+        companions = _select_detail_companion_views(primary, best_views, best_scores)
+
+        np.testing.assert_array_equal(companions, np.array([5, 6, -1], dtype=np.int32))
 
 
 class ViewHardeningTests(unittest.TestCase):
@@ -765,3 +805,53 @@ class NarrowSeamLevelingTests(unittest.TestCase):
         self.assertGreater(float(leveled[4, 4, 0] + leveled[4, 4, 2]), 0.95)
         self.assertGreater(float(leveled[4, 2, 0]), 0.95)
         self.assertGreater(float(leveled[4, 6, 2]), 0.95)
+
+    def test_detail_band_shift_detects_small_translation(self) -> None:
+        ref = np.zeros((12, 12, 3), dtype=np.float32)
+        ref[3:9, 4:8, :] = 1.0
+        cand = np.roll(ref, shift=1, axis=1)
+        mask = np.zeros((12, 12), dtype=bool)
+        mask[2:10, 2:10] = True
+
+        dx, dy, response = _estimate_detail_band_shift(ref, cand, mask)
+
+        self.assertGreater(abs(dx), 0.2)
+        self.assertAlmostEqual(dy, 0.0, places=1)
+        self.assertGreaterEqual(response, 0.0)
+
+    def test_quality_boost_preserves_stronger_companion_detail(self) -> None:
+        texture = np.full((11, 11, 3), 0.5, dtype=np.float32)
+        texture[:, :5, 0] += 0.15
+        texture[:, 6:, 2] += 0.15
+        valid_mask = np.ones((11, 11), dtype=bool)
+        label_buffer = np.full((11, 11), -1, dtype=np.int32)
+        label_buffer[:, :5] = 0
+        label_buffer[:, 6:] = 1
+        label_buffer[:, 5] = 1
+
+        companion = texture.copy()
+        companion[3:8, 4:7, 1] = np.array(
+            [
+                [0.0, 0.8, 0.0],
+                [0.0, 0.2, 0.0],
+                [0.0, 0.9, 0.0],
+                [0.0, 0.2, 0.0],
+                [0.0, 0.8, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        companion_valid = np.zeros((11, 11), dtype=bool)
+        companion_valid[2:9, 3:8] = True
+
+        leveled, seam_texels = _apply_narrow_seam_leveling(
+            texture,
+            valid_mask,
+            label_buffer,
+            detail_texture=companion,
+            detail_valid_mask=companion_valid,
+            quality_boost=True,
+        )
+
+        self.assertGreater(seam_texels, 0)
+        np.testing.assert_array_almost_equal(leveled[0, 0], texture[0, 0], decimal=5)
+        self.assertGreater(float(leveled[5, 5, 1]), float(texture[5, 5, 1]) + 0.15)

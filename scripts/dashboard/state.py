@@ -50,6 +50,7 @@ from scripts.config_defaults import (
     REPAIR_SMOOTH_ITERS,
     REPAIR_Y_BAND_RATIO,
     SAM2_DEFAULT_MODEL,
+    TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
     _MESHWRAP_METHOD,
@@ -179,6 +180,7 @@ class PipelineConfig:
     mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
+    texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
     auto_accept: bool = False
 
     @classmethod

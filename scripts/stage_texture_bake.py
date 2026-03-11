@@ -57,9 +57,18 @@ _TEXTURE_REGION_SMOOTHNESS = 0.55
 _TEXTURE_REGION_MIN_LABEL_COVERAGE = 0.15
 _TEXTURE_REGION_MISSING_COST = 1.5
 _TEXTURE_REGION_LOW_COVERAGE_PENALTY = 0.35
-_TEXTURE_SEAM_LEVEL_BLEND = 0.35
+_TEXTURE_SEAM_LEVEL_BLEND = 0.30
 _TEXTURE_SEAM_LEVEL_DILATE = 2
 _TEXTURE_SEAM_LEVEL_SIGMA = 0.8
+_TEXTURE_SEAM_LOW_SIGMA = 0.75
+_TEXTURE_SEAM_SMOOTH_SIGMA = 1.65
+_TEXTURE_SEAM_HQ_SIGMA = 1.25
+_TEXTURE_SEAM_HQ_DILATE = 3
+_TEXTURE_SEAM_HQ_DETAIL_GAIN = 1.0
+_TEXTURE_SEAM_HQ_LOW_BLEND = 0.35
+_TEXTURE_SEAM_HQ_MIN_COMPONENT_PIXELS = 9
+_TEXTURE_SEAM_HQ_SHIFT_LIMIT = 1.5
+_TEXTURE_SEAM_HQ_RESPONSE_FLOOR = 0.50
 
 
 def _emit_progress(
@@ -410,6 +419,142 @@ def _resolve_texture_view_assign_mode(requested: str | None = None) -> str:
         print(f"Warning: invalid TEXTURE_VIEW_ASSIGN_MODE='{mode}', falling back to {TEXTURE_VIEW_ASSIGN_MODE}")
         return TEXTURE_VIEW_ASSIGN_MODE
     return mode
+
+
+def _compute_label_boundary(label_buffer: np.ndarray) -> np.ndarray:
+    valid_labels = label_buffer >= 0
+    boundary = np.zeros(label_buffer.shape, dtype=bool)
+    diff_x = valid_labels[:, 1:] & valid_labels[:, :-1] & (label_buffer[:, 1:] != label_buffer[:, :-1])
+    diff_y = valid_labels[1:, :] & valid_labels[:-1, :] & (label_buffer[1:, :] != label_buffer[:-1, :])
+    boundary[:, 1:] |= diff_x
+    boundary[:, :-1] |= diff_x
+    boundary[1:, :] |= diff_y
+    boundary[:-1, :] |= diff_y
+    return boundary
+
+
+def _masked_gaussian(image: np.ndarray, mask: np.ndarray, sigma: float) -> np.ndarray:
+    mask_f = mask.astype(np.float32)
+    if image.ndim == 3:
+        num = cv2.GaussianBlur(image * mask_f[:, :, None], (0, 0), sigmaX=sigma)
+        den = cv2.GaussianBlur(mask_f, (0, 0), sigmaX=sigma)
+        return num / np.maximum(den[:, :, None], 1e-6)
+    num = cv2.GaussianBlur(image * mask_f, (0, 0), sigmaX=sigma)
+    den = cv2.GaussianBlur(mask_f, (0, 0), sigmaX=sigma)
+    return num / np.maximum(den, 1e-6)
+
+
+def _estimate_detail_band_shift(
+    reference_patch: np.ndarray,
+    candidate_patch: np.ndarray,
+    valid_mask: np.ndarray,
+    max_shift: float = _TEXTURE_SEAM_HQ_SHIFT_LIMIT,
+) -> tuple[float, float, float]:
+    if reference_patch.size == 0 or candidate_patch.size == 0 or int(valid_mask.sum()) < _TEXTURE_SEAM_HQ_MIN_COMPONENT_PIXELS:
+        return 0.0, 0.0, 0.0
+
+    ref_gray = (
+        0.299 * reference_patch[:, :, 0]
+        + 0.587 * reference_patch[:, :, 1]
+        + 0.114 * reference_patch[:, :, 2]
+    ).astype(np.float32, copy=False)
+    cand_gray = (
+        0.299 * candidate_patch[:, :, 0]
+        + 0.587 * candidate_patch[:, :, 1]
+        + 0.114 * candidate_patch[:, :, 2]
+    ).astype(np.float32, copy=False)
+    mask_f = valid_mask.astype(np.float32, copy=False)
+
+    ref_hp = ref_gray - _masked_gaussian(ref_gray, valid_mask, sigma=1.0)
+    cand_hp = cand_gray - _masked_gaussian(cand_gray, valid_mask, sigma=1.0)
+    ref_hp *= mask_f
+    cand_hp *= mask_f
+    if float(np.std(ref_hp)) < 1e-4 or float(np.std(cand_hp)) < 1e-4:
+        return 0.0, 0.0, 0.0
+
+    try:
+        shift, response = cv2.phaseCorrelate(ref_hp, cand_hp)
+    except cv2.error:
+        return 0.0, 0.0, 0.0
+    dx, dy = float(shift[0]), float(shift[1])
+    if not np.isfinite(dx) or not np.isfinite(dy) or not np.isfinite(response):
+        return 0.0, 0.0, 0.0
+    return (
+        float(np.clip(dx, -max_shift, max_shift)),
+        float(np.clip(dy, -max_shift, max_shift)),
+        float(max(0.0, min(1.0, response))),
+    )
+
+
+def _translate_patch(patch: np.ndarray, dx: float, dy: float, is_mask: bool = False) -> np.ndarray:
+    if patch.size == 0 or (abs(dx) < 1e-6 and abs(dy) < 1e-6):
+        return patch.copy()
+    h, w = patch.shape[:2]
+    warp = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+    interp = cv2.INTER_NEAREST if is_mask else cv2.INTER_LINEAR
+    return cv2.warpAffine(
+        patch,
+        warp,
+        (w, h),
+        flags=interp,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+
+
+def _masked_gray_difference(
+    reference_patch: np.ndarray,
+    candidate_patch: np.ndarray,
+    valid_mask: np.ndarray,
+) -> float:
+    overlap = valid_mask.astype(bool, copy=False)
+    if reference_patch.size == 0 or candidate_patch.size == 0 or not np.any(overlap):
+        return float("inf")
+    ref_gray = (
+        0.299 * reference_patch[:, :, 0]
+        + 0.587 * reference_patch[:, :, 1]
+        + 0.114 * reference_patch[:, :, 2]
+    )
+    cand_gray = (
+        0.299 * candidate_patch[:, :, 0]
+        + 0.587 * candidate_patch[:, :, 1]
+        + 0.114 * candidate_patch[:, :, 2]
+    )
+    diff = np.abs(ref_gray[overlap] - cand_gray[overlap])
+    if diff.size == 0:
+        return float("inf")
+    return float(np.mean(diff))
+
+
+def _select_detail_companion_views(
+    primary_views: np.ndarray,
+    best_views: np.ndarray,
+    best_scores: np.ndarray,
+) -> np.ndarray:
+    companion = np.full(primary_views.shape, -1, dtype=np.int32)
+    for k in range(best_views.shape[1]):
+        cand_views = best_views[:, k]
+        cand_scores = best_scores[:, k]
+        take = (
+            (companion < 0)
+            & (primary_views >= 0)
+            & (cand_views >= 0)
+            & (cand_scores > 0)
+            & (cand_views != primary_views)
+        )
+        companion[take] = cand_views[take].astype(np.int32, copy=False)
+    return companion
+
+
+def _resolve_texture_quality_boost(requested: bool | str | int | None = None) -> bool:
+    if requested is None:
+        requested = os.environ.get("TEXTURE_QUALITY_BOOST", "0")
+    if isinstance(requested, bool):
+        return requested
+    if isinstance(requested, (int, np.integer)):
+        return bool(requested)
+    text = str(requested).strip().lower()
+    return text in {"1", "true", "yes", "on", "hq", "high"}
 
 
 def _rasterize_view_depth(
@@ -1169,19 +1314,16 @@ def _apply_narrow_seam_leveling(
     blend: float = _TEXTURE_SEAM_LEVEL_BLEND,
     dilate_iters: int = _TEXTURE_SEAM_LEVEL_DILATE,
     sigma: float = _TEXTURE_SEAM_LEVEL_SIGMA,
+    detail_texture: np.ndarray | None = None,
+    detail_valid_mask: np.ndarray | None = None,
+    quality_boost: bool = False,
 ) -> tuple[np.ndarray, int]:
-    """Soften region-label seams without blurring the full texture."""
+    """Soften region-label seams while preserving local texture detail."""
     valid_labels = label_buffer >= 0
     if texture.size == 0 or not np.any(valid_mask & valid_labels):
         return texture, 0
 
-    boundary = np.zeros(label_buffer.shape, dtype=bool)
-    diff_x = valid_labels[:, 1:] & valid_labels[:, :-1] & (label_buffer[:, 1:] != label_buffer[:, :-1])
-    diff_y = valid_labels[1:, :] & valid_labels[:-1, :] & (label_buffer[1:, :] != label_buffer[:-1, :])
-    boundary[:, 1:] |= diff_x
-    boundary[:, :-1] |= diff_x
-    boundary[1:, :] |= diff_y
-    boundary[:-1, :] |= diff_y
+    boundary = _compute_label_boundary(label_buffer)
     if not np.any(boundary):
         return texture, 0
 
@@ -1192,21 +1334,191 @@ def _apply_narrow_seam_leveling(
         return texture, int(boundary.sum())
 
     result = texture.copy()
-    valid_weight = valid_mask.astype(np.float32)
-    for _iter_idx in range(2):
-        blurred_num = cv2.GaussianBlur(
-            result * valid_weight[:, :, None],
-            (0, 0),
-            sigmaX=sigma,
-        )
-        blurred_den = cv2.GaussianBlur(valid_weight, (0, 0), sigmaX=sigma)
-        blurred = blurred_num / np.maximum(blurred_den[:, :, None], 1e-6)
-        result[editable] = np.clip(
-            (1.0 - blend) * result[editable] + blend * blurred[editable],
-            0.0,
-            1.0,
-        )
+    local_low = _masked_gaussian(result, valid_mask, sigma=max(0.4, _TEXTURE_SEAM_LOW_SIGMA))
+    smooth_low = _masked_gaussian(result, valid_mask, sigma=max(sigma, _TEXTURE_SEAM_SMOOTH_SIGMA))
+    detail = result - local_low
+    boundary_distance = cv2.distanceTransform((~boundary).astype(np.uint8), cv2.DIST_L2, 3)
+    boundary_weight = np.clip(
+        1.0 - (boundary_distance / max(float(dilate_iters) + 0.5, 1.0)),
+        0.0,
+        1.0,
+    ).astype(np.float32, copy=False)
+    local_blend = (0.7 * blend * boundary_weight[editable]).astype(np.float32, copy=False)
+    result[editable] = np.clip(
+        (1.0 - local_blend[:, None]) * local_low[editable]
+        + local_blend[:, None] * smooth_low[editable]
+        + detail[editable],
+        0.0,
+        1.0,
+    )
+
+    if (
+        quality_boost
+        and detail_texture is not None
+        and detail_valid_mask is not None
+        and detail_texture.shape == texture.shape
+        and detail_valid_mask.shape == valid_mask.shape
+    ):
+        detail_mask = editable & detail_valid_mask
+        if np.any(detail_mask):
+            num_components, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+                detail_mask.astype(np.uint8),
+                connectivity=8,
+            )
+            refined = result.copy()
+            base_low = _masked_gaussian(refined, valid_mask, sigma=max(0.7, _TEXTURE_SEAM_HQ_SIGMA))
+            base_detail = refined - base_low
+            for comp_id in range(1, num_components):
+                area = int(stats[comp_id, cv2.CC_STAT_AREA])
+                if area < _TEXTURE_SEAM_HQ_MIN_COMPONENT_PIXELS:
+                    continue
+                x = int(stats[comp_id, cv2.CC_STAT_LEFT])
+                y = int(stats[comp_id, cv2.CC_STAT_TOP])
+                w = int(stats[comp_id, cv2.CC_STAT_WIDTH])
+                h = int(stats[comp_id, cv2.CC_STAT_HEIGHT])
+                pad = 2
+                x0 = max(0, x - pad)
+                y0 = max(0, y - pad)
+                x1 = min(texture.shape[1], x + w + pad)
+                y1 = min(texture.shape[0], y + h + pad)
+                local_component = labels[y0:y1, x0:x1] == comp_id
+                local_detail_mask = detail_mask[y0:y1, x0:x1]
+                local_ref = refined[y0:y1, x0:x1]
+                local_cand = detail_texture[y0:y1, x0:x1]
+                local_cand_mask = detail_valid_mask[y0:y1, x0:x1]
+                dx, dy, response = _estimate_detail_band_shift(local_ref, local_cand, local_detail_mask)
+                if response < _TEXTURE_SEAM_HQ_RESPONSE_FLOOR:
+                    dx = 0.0
+                    dy = 0.0
+                candidate_options: list[tuple[np.ndarray, np.ndarray, float]] = []
+                for shift_dx, shift_dy in ((0.0, 0.0), (dx, dy), (-dx, -dy)):
+                    cand_variant = _translate_patch(local_cand, shift_dx, shift_dy)
+                    mask_variant = _translate_patch(
+                        local_cand_mask.astype(np.uint8),
+                        shift_dx,
+                        shift_dy,
+                        is_mask=True,
+                    ) > 0
+                    score = _masked_gray_difference(local_ref, cand_variant, local_component & mask_variant)
+                    candidate_options.append((cand_variant, mask_variant, score))
+                shifted_cand, shifted_mask, _best_score = min(candidate_options, key=lambda item: item[2])
+                merge_mask = local_component & shifted_mask
+                if not np.any(merge_mask):
+                    continue
+                cand_low = _masked_gaussian(shifted_cand, shifted_mask, sigma=max(0.7, _TEXTURE_SEAM_HQ_SIGMA))
+                cand_detail = shifted_cand - cand_low
+                base_low_patch = base_low[y0:y1, x0:x1]
+                base_detail_patch = base_detail[y0:y1, x0:x1]
+                ref_mag = np.linalg.norm(base_detail_patch, axis=2)
+                cand_mag = np.linalg.norm(cand_detail, axis=2)
+                stronger = cand_mag > (ref_mag * 1.03)
+                confidence = max(response, 0.75)
+                low_mix = min(0.60, _TEXTURE_SEAM_HQ_LOW_BLEND * confidence)
+                detail_gain = min(1.00, max(0.70, _TEXTURE_SEAM_HQ_DETAIL_GAIN * confidence))
+                chosen_detail = np.where(stronger[:, :, None], cand_detail, base_detail_patch)
+                merged = np.clip(
+                    (1.0 - low_mix) * base_low_patch
+                    + low_mix * cand_low
+                    + (1.0 - detail_gain) * base_detail_patch
+                    + detail_gain * chosen_detail,
+                    0.0,
+                    1.0,
+                )
+                merged = np.where(
+                    stronger[:, :, None],
+                    np.maximum(merged, shifted_cand),
+                    merged,
+                )
+                color_advantage = np.max(np.abs(shifted_cand - base_low_patch), axis=2) > 0.18
+                if np.any(color_advantage & merge_mask):
+                    color_mix = min(0.85, max(0.60, confidence))
+                    boosted = np.clip(
+                        (1.0 - color_mix) * merged + color_mix * shifted_cand,
+                        0.0,
+                        1.0,
+                    )
+                    merged = np.where(color_advantage[:, :, None], boosted, merged)
+                patch = refined[y0:y1, x0:x1]
+                patch[merge_mask] = merged[merge_mask]
+                refined[y0:y1, x0:x1] = patch
+            result = refined
     return result, int(boundary.sum())
+
+
+def _sample_companion_texture(
+    tex_shape: tuple[int, int, int],
+    tidx: np.ndarray,
+    companion_views: np.ndarray,
+    tex_xs: np.ndarray,
+    tex_ys: np.ndarray,
+    pos3d: np.ndarray,
+    normals: np.ndarray,
+    poses: np.ndarray,
+    pose_frame_indices: list[int],
+    frames_dir: str,
+    mask_dir: str,
+    frame_cache: _FrameCache,
+    depth_cache: OrderedDict[int, np.ndarray],
+    new_vertices: np.ndarray,
+    new_faces: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    companion_texture = np.zeros(tex_shape, dtype=np.float32)
+    companion_valid = np.zeros(tex_shape[:2], dtype=bool)
+    if tidx.size == 0:
+        return companion_texture, companion_valid
+
+    local_views = companion_views[tidx]
+    usable = local_views >= 0
+    if not np.any(usable):
+        return companion_texture, companion_valid
+    active_tidx = tidx[usable]
+    active_views = local_views[usable]
+
+    for vidx in np.unique(active_views):
+        if vidx < 0:
+            continue
+        view_tidx = active_tidx[active_views == vidx]
+        if view_tidx.size == 0:
+            continue
+        src_idx = int(pose_frame_indices[int(vidx)])
+        c2w = poses[int(vidx)]
+        try:
+            frame = frame_cache.load_frame(frames_dir, src_idx)
+            mask_bool = frame_cache.load_mask(mask_dir, src_idx)
+        except FileNotFoundError:
+            continue
+
+        if int(vidx) in depth_cache:
+            depth_buffer = depth_cache[int(vidx)]
+        else:
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+            depth_cache[int(vidx)] = depth_buffer
+        valid, _score, px_proj, py_proj = _evaluate_view_samples(
+            pos3d=pos3d[view_tidx],
+            normals=normals[view_tidx],
+            c2w=c2w,
+            K=K,
+            img_w=img_w,
+            img_h=img_h,
+            mask_bool=mask_bool,
+            depth_buffer=depth_buffer,
+            min_cos=min_cos,
+            angle_exp=angle_exp,
+            dist_pow=dist_pow,
+        )
+        if not np.any(valid):
+            continue
+        fill_tidx = view_tidx[valid]
+        colors = _bilinear_sample(frame, px_proj[valid], py_proj[valid]).astype(np.float32)
+        companion_texture[tex_ys[fill_tidx], tex_xs[fill_tidx]] = colors
+        companion_valid[tex_ys[fill_tidx], tex_xs[fill_tidx]] = True
+    return companion_texture, companion_valid
 
 
 def bake_texture(
@@ -1217,6 +1529,7 @@ def bake_texture(
     output_dir: str,
     tex_size: int | None = None,
     view_assign_mode: str | None = None,
+    quality_boost: bool | None = None,
     progress_cb: ProgressCallback | None = None,
 ) -> Path:
     """Full texture baking pipeline: intrinsics → UV atlas → bake → export.
@@ -1243,6 +1556,8 @@ def bake_texture(
         TEXTURE_SHARPEN (float): Unsharp mask amount (0=off, 0.1–0.4 typical).
         TEXTURE_BLEND_HARD_RATIO (float): When top-1/top-2 score ratio exceeds this,
             use single dominant view (default 2.0, 0=disabled).
+        TEXTURE_QUALITY_BOOST (bool): Enables boundary-focused detail refinement
+            for Region Optimized mode (default False).
 
     Returns:
         Path to the output OBJ file.
@@ -1258,6 +1573,10 @@ def bake_texture(
     hard_ratio = float(os.environ.get("TEXTURE_BLEND_HARD_RATIO", str(TEXTURE_BLEND_HARD_RATIO)))
     texture_device = _resolve_texture_device()
     texture_view_assign_mode = _resolve_texture_view_assign_mode(view_assign_mode)
+    texture_quality_boost = _resolve_texture_quality_boost(quality_boost)
+    if texture_view_assign_mode == "region_gc" and texture_quality_boost:
+        oversample = max(oversample, 3)
+        blend_topk = max(blend_topk, 4)
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1365,8 +1684,8 @@ def bake_texture(
         f"({tex_size}x{tex_size}, internal {tex_res}x{tex_res}, oversample x{oversample})"
     )
     print(
-        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f, mode=%s"
-        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt, texture_view_assign_mode)
+        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f, mode=%s, quality_boost=%s"
+        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt, texture_view_assign_mode, texture_quality_boost)
     )
     if texture_device == "cuda":
         print("  Projection backend request: CUDA (scoring currently uses CPU z-buffer)")
@@ -1743,19 +2062,72 @@ def bake_texture(
     texture = texture.astype(np.float32)
 
     if texture_view_assign_mode == "region_gc" and np.any(region_id_per_texel >= 0):
-        _emit_progress(progress_cb, 92.0, "Leveling region seams")
         valid_color_mask = np.zeros((tex_res, tex_res), dtype=bool)
         valid_color_mask[ys, xs] = has_color
         label_buffer = np.full((tex_res, tex_res), -1, dtype=np.int32)
         region_mask = (region_id_per_texel >= 0) & (locked_view_per_texel >= 0)
         label_buffer[ys[region_mask], xs[region_mask]] = locked_view_per_texel[region_mask]
+        companion_texture = None
+        companion_valid_mask = None
+        if texture_quality_boost and np.any(region_mask):
+            boundary = _compute_label_boundary(label_buffer)
+            if np.any(boundary):
+                band = cv2.dilate(
+                    boundary.astype(np.uint8),
+                    np.ones((3, 3), dtype=np.uint8),
+                    iterations=_TEXTURE_SEAM_HQ_DILATE,
+                ).astype(bool)
+                band_texels = region_mask & band[ys, xs]
+                if np.any(band_texels):
+                    companion_views = _select_detail_companion_views(
+                        primary_views=locked_view_per_texel,
+                        best_views=best_views,
+                        best_scores=best_scores,
+                    )
+                    companion_texture, companion_valid_mask = _sample_companion_texture(
+                        tex_shape=texture.shape,
+                        tidx=np.where(band_texels)[0],
+                        companion_views=companion_views,
+                        tex_xs=xs,
+                        tex_ys=ys,
+                        pos3d=pos3d,
+                        normals=normals,
+                        poses=poses,
+                        pose_frame_indices=pose_frame_indices,
+                        frames_dir=frames_dir,
+                        mask_dir=mask_dir,
+                        frame_cache=frame_cache,
+                        depth_cache=depth_cache,
+                        new_vertices=new_vertices,
+                        new_faces=new_faces,
+                        K=K,
+                        img_w=img_w,
+                        img_h=img_h,
+                        min_cos=min_cos,
+                        angle_exp=angle_exp,
+                        dist_pow=dist_pow,
+                    )
+        _emit_progress(progress_cb, 92.0, "Leveling region seams")
         texture, seam_texels = _apply_narrow_seam_leveling(
             texture=texture,
             valid_mask=valid_color_mask,
             label_buffer=label_buffer,
+            blend=_TEXTURE_SEAM_LEVEL_BLEND if not texture_quality_boost else 0.30,
+            dilate_iters=_TEXTURE_SEAM_LEVEL_DILATE if not texture_quality_boost else _TEXTURE_SEAM_HQ_DILATE,
+            sigma=_TEXTURE_SEAM_LEVEL_SIGMA if not texture_quality_boost else _TEXTURE_SEAM_HQ_SIGMA,
+            detail_texture=companion_texture,
+            detail_valid_mask=companion_valid_mask,
+            quality_boost=texture_quality_boost,
         )
         if seam_texels > 0:
-            print(f"  Narrow seam leveling: softened {seam_texels} boundary texels")
+            if texture_quality_boost and companion_valid_mask is not None:
+                companion_cov = int(np.count_nonzero(companion_valid_mask))
+                print(
+                    "  Region seam refinement: softened %d boundary texels, companion detail samples=%d"
+                    % (seam_texels, companion_cov)
+                )
+            else:
+                print(f"  Narrow seam leveling: softened {seam_texels} boundary texels")
 
     # Release caches to free memory before seam padding
     depth_cache.clear()

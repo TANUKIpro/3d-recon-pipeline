@@ -540,6 +540,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 output_dir,
                 cfg.texture_size,
                 cfg.texture_view_assign_mode,
+                cfg.texture_quality_boost,
             )
             session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
 

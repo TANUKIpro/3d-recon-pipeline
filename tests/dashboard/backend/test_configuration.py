@@ -99,6 +99,30 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
 
+    def test_texture_quality_boost_defaults_to_false(self) -> None:
+        cfg = build_pipeline_config(
+            {},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertFalse(cfg.texture_quality_boost)
+
+    def test_texture_quality_boost_accepts_true(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "texture_quality_boost": True,
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={"TEXTURE_QUALITY_BOOST": "false"},
+        )
+
+        self.assertTrue(cfg.texture_quality_boost)
+
     def test_mesh_wrap_and_repair_defaults_match_contact_friendly_profile(self) -> None:
         cfg = build_pipeline_config(
             {},
