@@ -2,12 +2,25 @@ import os
 import unittest
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from scripts.stage_texture_bake import (
+    _apply_narrow_seam_leveling,
     _apply_view_hardening,
+    _compute_conflict_texels,
+    _compute_face_locked_views,
+    _compute_region_gc_locked_views,
+    _estimate_detail_band_shift,
+    _normalize_candidate_patch_colors,
+    _refine_detail_band_shift,
     _resolve_texture_device,
+    _resolve_texture_quality_boost,
     _resolve_texture_size,
+    _resolve_texture_view_assign_mode,
+    _select_detail_companion_view_candidates,
+    _select_detail_companion_views,
+    _translate_patch,
     _update_topk_scores,
 )
 
@@ -230,6 +243,134 @@ class ResolveTextureSizeTests(unittest.TestCase):
             self.assertTrue(is_auto)
 
 
+class ResolveTextureViewAssignModeTests(unittest.TestCase):
+    def test_default_mode_is_legacy(self) -> None:
+        old = os.environ.pop("TEXTURE_VIEW_ASSIGN_MODE", None)
+        try:
+            self.assertEqual(_resolve_texture_view_assign_mode(), "legacy")
+        finally:
+            if old is not None:
+                os.environ["TEXTURE_VIEW_ASSIGN_MODE"] = old
+
+    def test_explicit_region_gc_mode_is_kept(self) -> None:
+        self.assertEqual(_resolve_texture_view_assign_mode("region_gc"), "region_gc")
+
+    def test_invalid_mode_falls_back_to_legacy(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_VIEW_ASSIGN_MODE": "broken"}, clear=False):
+            self.assertEqual(_resolve_texture_view_assign_mode(), "legacy")
+
+
+class ResolveTextureQualityBoostTests(unittest.TestCase):
+    def test_default_mode_is_disabled(self) -> None:
+        old = os.environ.pop("TEXTURE_QUALITY_BOOST", None)
+        try:
+            self.assertFalse(_resolve_texture_quality_boost())
+        finally:
+            if old is not None:
+                os.environ["TEXTURE_QUALITY_BOOST"] = old
+
+    def test_env_truthy_value_enables_boost(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_QUALITY_BOOST": "true"}, clear=False):
+            self.assertTrue(_resolve_texture_quality_boost())
+
+    def test_explicit_argument_wins(self) -> None:
+        with patch.dict(os.environ, {"TEXTURE_QUALITY_BOOST": "false"}, clear=False):
+            self.assertTrue(_resolve_texture_quality_boost(True))
+
+
+class DetailCompanionViewSelectionTests(unittest.TestCase):
+    def test_picks_first_non_primary_candidate(self) -> None:
+        primary = np.array([2, 1, 4], dtype=np.int32)
+        best_views = np.array([
+            [2, 5, 7],
+            [1, 1, 6],
+            [4, -1, -1],
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.9, 0.6, 0.2],
+            [0.8, 0.7, 0.4],
+            [0.5, -1.0, -1.0],
+        ], dtype=np.float32)
+
+        companions = _select_detail_companion_views(primary, best_views, best_scores)
+
+        np.testing.assert_array_equal(companions, np.array([5, 6, -1], dtype=np.int32))
+
+    def test_collects_multiple_unique_candidates_in_rank_order(self) -> None:
+        primary = np.array([2, 1, 4], dtype=np.int32)
+        best_views = np.array([
+            [2, 5, 7, 8],
+            [1, 1, 6, 9],
+            [4, 8, 9, -1],
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.9, 0.6, 0.3, 0.2],
+            [0.8, 0.7, 0.4, 0.1],
+            [0.5, 0.4, 0.2, -1.0],
+        ], dtype=np.float32)
+
+        companions = _select_detail_companion_view_candidates(
+            primary,
+            best_views,
+            best_scores,
+            max_candidates=3,
+        )
+
+        self.assertEqual(len(companions), 3)
+        np.testing.assert_array_equal(companions[0], np.array([5, 6, 8], dtype=np.int32))
+        np.testing.assert_array_equal(companions[1], np.array([7, 9, 9], dtype=np.int32))
+        np.testing.assert_array_equal(companions[2], np.array([8, -1, -1], dtype=np.int32))
+
+
+class DetailPatchNormalizationTests(unittest.TestCase):
+    def test_normalizes_local_mean_toward_reference(self) -> None:
+        reference = np.full((6, 6, 3), 0.40, dtype=np.float32)
+        reference[2:4, 2:4, 1] = 0.75
+        candidate = np.clip(reference * 1.20 + 0.10, 0.0, 1.0)
+        mask = np.ones((6, 6), dtype=bool)
+
+        normalized = _normalize_candidate_patch_colors(reference, candidate, mask)
+
+        before = float(np.mean(np.abs(reference - candidate)))
+        after = float(np.mean(np.abs(reference - normalized)))
+        self.assertLess(after, before)
+
+
+class DetailBandShiftRefinementTests(unittest.TestCase):
+    def test_ecc_refinement_reduces_alignment_error(self) -> None:
+        ref = np.zeros((32, 32, 3), dtype=np.float32)
+        ref[8:24, 8:24, :] = 0.75
+        ref[10:22, 10:22, 1] = 0.25
+        cand = cv2.warpAffine(
+            ref,
+            np.array([[1.0, 0.0, 1.2], [0.0, 1.0, -0.7]], dtype=np.float32),
+            (32, 32),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+        )
+        cand = np.clip(cand * 1.10 + 0.04, 0.0, 1.0)
+        mask = np.zeros((32, 32), dtype=bool)
+        mask[5:27, 5:27] = True
+
+        normalized = _normalize_candidate_patch_colors(ref, cand, mask)
+        phase_dx, phase_dy, _phase_response = _estimate_detail_band_shift(ref, normalized, mask)
+        refined_dx, refined_dy, refined_response = _refine_detail_band_shift(
+            ref,
+            normalized,
+            mask,
+            init_dx=phase_dx,
+            init_dy=phase_dy,
+        )
+
+        phase_aligned = _translate_patch(normalized, phase_dx, phase_dy)
+        refined_aligned = _translate_patch(normalized, refined_dx, refined_dy)
+        phase_error = float(np.mean(np.abs(ref[mask] - phase_aligned[mask])))
+        refined_error = float(np.mean(np.abs(ref[mask] - refined_aligned[mask])))
+
+        self.assertLessEqual(refined_error, phase_error + 1e-4)
+        self.assertGreater(refined_response, 0.0)
+
+
 class ViewHardeningTests(unittest.TestCase):
     def test_dominant_texel_zeroed(self) -> None:
         """Top-1 >> top-2 should zero out non-dominant slots."""
@@ -272,3 +413,524 @@ class ViewHardeningTests(unittest.TestCase):
         best_views = np.array([[2]], dtype=np.int32)
         n = _apply_view_hardening(best_scores, best_views, hard_ratio=2.0)
         self.assertEqual(n, 0)
+
+
+class ConflictDetectionTests(unittest.TestCase):
+    def test_marks_close_scores_with_large_view_separation(self) -> None:
+        pos3d = np.array([
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ], dtype=np.float64)
+        poses = np.repeat(np.eye(4, dtype=np.float64)[None, :, :], 3, axis=0)
+        poses[0, :3, 3] = np.array([1.0, 0.0, 0.0])
+        poses[1, :3, 3] = np.array([0.0, 0.0, 1.0])
+        poses[2, :3, 3] = np.array([0.98, 0.0, 0.17])
+
+        best_scores = np.array([
+            [0.52, 0.47],
+            [0.80, 0.20],
+            [0.51, 0.49],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [0, 1],
+            [0, 2],
+        ], dtype=np.int32)
+
+        conflict = _compute_conflict_texels(
+            pos3d=pos3d,
+            poses=poses,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_ratio=1.35,
+            min_view_angle_deg=20.0,
+        )
+
+        np.testing.assert_array_equal(conflict, np.array([True, False, False]))
+
+
+class FaceLockingTests(unittest.TestCase):
+    def test_locks_conflict_face_to_dominant_view(self) -> None:
+        fids = np.array([0, 0, 0, 0, 1, 1], dtype=np.int32)
+        best_scores = np.array([
+            [0.50, 0.45],
+            [0.48, 0.46],
+            [0.49, 0.44],
+            [0.51, 0.43],
+            [0.80, -1.0],
+            [0.75, -1.0],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [1, -1],
+            [1, -1],
+        ], dtype=np.int32)
+        conflict_texels = np.array([True, True, True, True, False, False], dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+        ], dtype=np.int32)
+
+        face_locked_view, face_support = _compute_face_locked_views(
+            fids=fids,
+            n_faces=2,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([0, -1], dtype=np.int32))
+        self.assertGreater(float(face_support[0]), 0.0)
+        self.assertAlmostEqual(float(face_support[1]), 0.0, places=5)
+
+    def test_does_not_lock_when_dominant_view_coverage_is_too_low(self) -> None:
+        fids = np.array([0, 0, 0, 0], dtype=np.int32)
+        best_scores = np.array([
+            [0.90, 0.10],
+            [0.40, 0.30],
+            [0.90, 0.10],
+            [0.40, 0.30],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1],
+            [1, 2],
+            [0, 1],
+            [1, 2],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(4, dtype=bool)
+        face_normals = np.array([[0.0, 0.0, 1.0]], dtype=np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+
+        face_locked_view, face_support = _compute_face_locked_views(
+            fids=fids,
+            n_faces=1,
+            n_views=3,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([-1], dtype=np.int32))
+        self.assertAlmostEqual(float(face_support[0]), 0.0, places=5)
+
+    def test_neighbor_majority_smooths_small_face_island(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.26, 0.25],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+
+        face_locked_view, _ = _compute_face_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 1, 1], dtype=np.int32))
+
+    def test_smoothing_does_not_force_view_missing_from_face(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.31, -1.0],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, -1],
+            [0, -1],
+            [0, -1],
+            [0, -1],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+
+        face_locked_view, _ = _compute_face_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 0, 1], dtype=np.int32))
+
+
+class RegionGraphLockingTests(unittest.TestCase):
+    def test_region_labeling_smooths_ambiguous_curved_strip(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.52, 0.45],
+            [0.52, 0.45],
+            [0.52, 0.45],
+            [0.52, 0.45],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.52, 0.45],
+            [0.52, 0.45],
+            [0.52, 0.45],
+            [0.52, 0.45],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+        base_locked = np.array([1, 0, 1], dtype=np.int32)
+
+        face_locked_view, face_support, region_ids = _compute_region_gc_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+            base_locked_view=base_locked,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 1, 1], dtype=np.int32))
+        self.assertTrue(np.all(face_support > 0.0))
+        np.testing.assert_array_equal(region_ids, np.array([0, 0, 0], dtype=np.int32))
+
+    def test_region_labeling_respects_sharp_edge_split(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.49, 0.48],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.52, 0.50],
+            [0.53, 0.47],
+            [0.53, 0.47],
+            [0.53, 0.47],
+            [0.53, 0.47],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+            [0, 1],
+        ], dtype=np.int32)
+        conflict_texels = np.ones(12, dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+        ], dtype=np.int32)
+        base_locked = np.array([1, 0, 0], dtype=np.int32)
+
+        face_locked_view, _face_support, region_ids = _compute_region_gc_locked_views(
+            fids=fids,
+            n_faces=3,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+            base_locked_view=base_locked,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 0, 0], dtype=np.int32))
+        np.testing.assert_array_equal(region_ids, np.array([-1, -1, -1], dtype=np.int32))
+
+    def test_region_labeling_expands_to_adjacent_smooth_faces(self) -> None:
+        fids = np.array([
+            0, 0, 0, 0,
+            1, 1, 1, 1,
+            2, 2, 2, 2,
+            3, 3, 3, 3,
+        ], dtype=np.int32)
+        best_scores = np.array([
+            [0.53, 0.48],
+            [0.53, 0.48],
+            [0.53, 0.48],
+            [0.53, 0.48],
+            [0.52, 0.49],
+            [0.52, 0.49],
+            [0.52, 0.49],
+            [0.52, 0.49],
+            [0.51, 0.46],
+            [0.51, 0.46],
+            [0.51, 0.46],
+            [0.51, 0.46],
+            [0.50, 0.40],
+            [0.50, 0.40],
+            [0.50, 0.40],
+            [0.50, 0.40],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+            [1, 0],
+        ], dtype=np.int32)
+        conflict_texels = np.array([
+            True, True, True, True,
+            True, True, True, True,
+            False, False, False, False,
+            False, False, False, False,
+        ], dtype=bool)
+        face_normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 1, 2],
+            [2, 1, 3],
+            [2, 3, 4],
+            [4, 3, 5],
+        ], dtype=np.int32)
+        base_locked = np.array([1, 1, -1, -1], dtype=np.int32)
+
+        face_locked_view, _face_support, region_ids = _compute_region_gc_locked_views(
+            fids=fids,
+            n_faces=4,
+            n_views=2,
+            best_scores=best_scores,
+            best_views=best_views,
+            conflict_texels=conflict_texels,
+            face_normals=face_normals,
+            faces=faces,
+            base_locked_view=base_locked,
+        )
+
+        np.testing.assert_array_equal(face_locked_view, np.array([1, 1, 1, 1], dtype=np.int32))
+        np.testing.assert_array_equal(region_ids, np.array([0, 0, 0, 0], dtype=np.int32))
+
+
+class NarrowSeamLevelingTests(unittest.TestCase):
+    def test_only_boundary_band_is_softened(self) -> None:
+        texture = np.zeros((9, 9, 3), dtype=np.float32)
+        texture[:, :4, 0] = 1.0
+        texture[:, 4:, 2] = 1.0
+        valid_mask = np.ones((9, 9), dtype=bool)
+        label_buffer = np.full((9, 9), -1, dtype=np.int32)
+        label_buffer[:, :4] = 0
+        label_buffer[:, 4:] = 1
+
+        leveled, seam_texels = _apply_narrow_seam_leveling(texture, valid_mask, label_buffer)
+
+        self.assertGreater(seam_texels, 0)
+        np.testing.assert_array_almost_equal(leveled[0, 0], np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        np.testing.assert_array_almost_equal(leveled[0, 8], np.array([0.0, 0.0, 1.0], dtype=np.float32))
+        self.assertGreater(float(leveled[4, 4, 0]), 0.0)
+        self.assertGreater(float(leveled[4, 3, 2]), 0.0)
+
+    def test_invalid_uv_space_does_not_darken_boundary(self) -> None:
+        texture = np.zeros((9, 9, 3), dtype=np.float32)
+        valid_mask = np.zeros((9, 9), dtype=bool)
+        valid_mask[2:7, 2:7] = True
+        texture[2:7, 2:4, 0] = 1.0
+        texture[2:7, 4:7, 2] = 1.0
+        label_buffer = np.full((9, 9), -1, dtype=np.int32)
+        label_buffer[2:7, 2:4] = 0
+        label_buffer[2:7, 4:7] = 1
+
+        leveled, seam_texels = _apply_narrow_seam_leveling(texture, valid_mask, label_buffer)
+
+        self.assertGreater(seam_texels, 0)
+        self.assertGreater(float(leveled[4, 4, 0] + leveled[4, 4, 2]), 0.95)
+        self.assertGreater(float(leveled[4, 2, 0]), 0.95)
+        self.assertGreater(float(leveled[4, 6, 2]), 0.95)
+
+    def test_detail_band_shift_detects_small_translation(self) -> None:
+        ref = np.zeros((12, 12, 3), dtype=np.float32)
+        ref[3:9, 4:8, :] = 1.0
+        cand = np.roll(ref, shift=1, axis=1)
+        mask = np.zeros((12, 12), dtype=bool)
+        mask[2:10, 2:10] = True
+
+        dx, dy, response = _estimate_detail_band_shift(ref, cand, mask)
+
+        self.assertGreater(abs(dx), 0.2)
+        self.assertAlmostEqual(dy, 0.0, places=1)
+        self.assertGreaterEqual(response, 0.0)
+
+    def test_quality_boost_preserves_stronger_companion_detail(self) -> None:
+        texture = np.full((11, 11, 3), 0.5, dtype=np.float32)
+        texture[:, :5, 0] += 0.15
+        texture[:, 6:, 2] += 0.15
+        valid_mask = np.ones((11, 11), dtype=bool)
+        label_buffer = np.full((11, 11), -1, dtype=np.int32)
+        label_buffer[:, :5] = 0
+        label_buffer[:, 6:] = 1
+        label_buffer[:, 5] = 1
+
+        companion = texture.copy()
+        companion[3:8, 4:7, 1] = np.array(
+            [
+                [0.0, 0.8, 0.0],
+                [0.0, 0.2, 0.0],
+                [0.0, 0.9, 0.0],
+                [0.0, 0.2, 0.0],
+                [0.0, 0.8, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        companion_valid = np.zeros((11, 11), dtype=bool)
+        companion_valid[2:9, 3:8] = True
+
+        leveled, seam_texels = _apply_narrow_seam_leveling(
+            texture,
+            valid_mask,
+            label_buffer,
+            detail_texture=companion,
+            detail_valid_mask=companion_valid,
+            quality_boost=True,
+        )
+
+        self.assertGreater(seam_texels, 0)
+        np.testing.assert_array_almost_equal(leveled[0, 0], texture[0, 0], decimal=5)
+        self.assertGreater(float(leveled[5, 5, 1]), float(texture[5, 5, 1]) + 0.15)

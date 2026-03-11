@@ -205,7 +205,7 @@ describe('ConfigPanel', () => {
         'pi3x_frame_target', 'confidence_threshold', 'edge_rtol',
         'sam2_model', 'denoise_preset', 'denoise_algorithm',
         'mesh_method', 'diffcd_batch_size', 'diffcd_n_batches',
-        'diffcd_resolution', 'texture_size',
+        'diffcd_resolution', 'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
         'meshwrap_poisson_depth', 'meshwrap_poisson_scale',
         'meshwrap_iterations', 'meshwrap_crop_scale',
         'classical_preset', 'classical_poisson_depth',
@@ -227,6 +227,20 @@ describe('ConfigPanel', () => {
       // Numeric fields should have fallback defaults (positive numbers)
       expect(config.frame_interval).toBeGreaterThan(0);
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
+      expect(config.texture_view_assign_mode).toBe('legacy');
+      expect(config.texture_quality_boost).toBe(false);
+    });
+
+    it('reads the selected texture view assignment mode', () => {
+      document.getElementById('cfg-texture-view-assign-mode').value = 'region_gc';
+      const config = panel.getConfig();
+      expect(config.texture_view_assign_mode).toBe('region_gc');
+    });
+
+    it('reads the texture quality boost toggle', () => {
+      document.getElementById('cfg-texture-quality-boost').checked = true;
+      const config = panel.getConfig();
+      expect(config.texture_quality_boost).toBe(true);
     });
   });
 });

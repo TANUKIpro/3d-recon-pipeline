@@ -191,6 +191,9 @@ REPAIR_SMOOTH_ITERS = 3
 
 # --- Stage 8: TextureBake --------------------------------
 TEXTURE_SIZE = 0
+TEXTURE_VIEW_ASSIGN_MODE = "legacy"
+TEXTURE_VIEW_ASSIGN_MODES: set[str] = {"legacy", "region_gc"}
+TEXTURE_QUALITY_BOOST = False
 TEXTURE_OVERSAMPLE = 2
 TEXTURE_MIN_COS = 0.2
 TEXTURE_ANGLE_EXP = 4.0

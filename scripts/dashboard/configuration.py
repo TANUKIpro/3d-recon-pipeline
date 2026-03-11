@@ -38,7 +38,10 @@ from scripts.config_defaults import (
     REPAIR_SMOOTH_ITERS,
     REPAIR_Y_BAND_RATIO,
     SAM2_DEFAULT_MODEL,
+    TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
+    TEXTURE_VIEW_ASSIGN_MODE,
+    TEXTURE_VIEW_ASSIGN_MODES,
     _MESHWRAP_METHOD,
     _MESHWRAP_METHODS,
 )
@@ -346,5 +349,14 @@ def build_pipeline_config(
             ),
         ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", TEXTURE_SIZE, env_map)),
+        texture_view_assign_mode=parse_choice(
+            raw.get("texture_view_assign_mode") or env_map.get("TEXTURE_VIEW_ASSIGN_MODE"),
+            TEXTURE_VIEW_ASSIGN_MODES,
+            TEXTURE_VIEW_ASSIGN_MODE,
+        ),
+        texture_quality_boost=parse_bool(
+            raw.get("texture_quality_boost"),
+            env_bool("TEXTURE_QUALITY_BOOST", TEXTURE_QUALITY_BOOST, env_map),
+        ),
         auto_accept=parse_bool(raw.get("auto_accept"), False),
     )

@@ -191,6 +191,8 @@ export class ConfigPanel {
       diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
       diffcd_resolution: document.getElementById('cfg-diffcd-res'),
       texture_size: document.getElementById('cfg-texture-size'),
+      texture_view_assign_mode: document.getElementById('cfg-texture-view-assign-mode'),
+      texture_quality_boost: document.getElementById('cfg-texture-quality-boost'),
       meshwrap_poisson_depth: document.getElementById('cfg-meshwrap-poisson-depth'),
       meshwrap_poisson_scale: document.getElementById('cfg-meshwrap-poisson-scale'),
       meshwrap_density_trim_q: document.getElementById('cfg-meshwrap-density-trim-q'),
@@ -469,6 +471,8 @@ export class ConfigPanel {
         MESH_REPAIR_DEFAULTS.mesh_repair_smooth_iters,
       ),
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
+      texture_view_assign_mode: this._inputs.texture_view_assign_mode?.value || 'legacy',
+      texture_quality_boost: Boolean(this._inputs.texture_quality_boost?.checked),
     };
   }
 
@@ -935,6 +939,12 @@ export class ConfigPanel {
     }
     if (cfg.sam2_model != null) {
       this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
+    }
+    if (cfg.texture_view_assign_mode != null) {
+      this._setSelectValue(this._inputs.texture_view_assign_mode, String(cfg.texture_view_assign_mode));
+    }
+    if (cfg.texture_quality_boost != null && this._inputs.texture_quality_boost) {
+      this._inputs.texture_quality_boost.checked = Boolean(cfg.texture_quality_boost);
     }
     this.setMeshMethod(String(cfg.mesh_method || this.getMeshMethod() || 'poisson'));
 

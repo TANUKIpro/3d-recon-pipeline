@@ -208,6 +208,11 @@ export function buildConfigPanelDOM() {
         <option value="1024">1024</option>
         <option value="2048">2048</option>
       </select>
+      <select id="cfg-texture-view-assign-mode">
+        <option value="legacy">Legacy Blend</option>
+        <option value="region_gc">Region Optimized</option>
+      </select>
+      <input type="checkbox" id="cfg-texture-quality-boost">
     </div>
   `;
 }
