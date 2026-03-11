@@ -501,6 +501,65 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
 
         self.assertIsNone(result.selected_shift)
 
+    def test_search_prefers_lowest_stable_band_below_start(self) -> None:
+        vertices = np.array(
+            [
+                [0.0, 0.05, 0.0],
+                [0.0, 0.20, 0.0],
+                [0.0, 0.35, 0.0],
+                [0.0, 0.55, 0.0],
+                [0.0, 0.80, 0.0],
+                [0.0, 1.00, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        faces = np.array([[0, 1, 2]], dtype=np.int64)
+        plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+        def _fake_probe(*args, **kwargs):
+            shift = float(args[4])
+            if 0.54 < shift < 0.76:
+                return GroundPlaneProbe(
+                    shift=shift,
+                    section_loop_count=1,
+                    selected_loop_area=0.4,
+                    matched_boundary_area_before=0.4,
+                    matched_boundary_area_after=0.0,
+                    cap_added=2,
+                    valid=True,
+                )
+            if 0.19 < shift < 0.36:
+                return GroundPlaneProbe(
+                    shift=shift,
+                    section_loop_count=1,
+                    selected_loop_area=0.9,
+                    matched_boundary_area_before=0.9,
+                    matched_boundary_area_after=0.0,
+                    cap_added=2,
+                    valid=True,
+                )
+            return GroundPlaneProbe(
+                shift=shift,
+                section_loop_count=0,
+                selected_loop_area=0.0,
+                matched_boundary_area_before=0.0,
+                matched_boundary_area_after=0.0,
+                cap_added=0,
+                valid=False,
+            )
+
+        with mock.patch("stage_contact_hole_repair._probe_ground_plane_shift", side_effect=_fake_probe):
+            result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
+
+        self.assertIsNotNone(result.first_valid_shift)
+        self.assertIsNotNone(result.selected_shift)
+        assert result.first_valid_shift is not None
+        assert result.selected_shift is not None
+        self.assertGreater(result.first_valid_shift, 0.6)
+        self.assertGreater(result.selected_shift, 0.2)
+        self.assertLess(result.selected_shift, 0.3)
+        self.assertAlmostEqual(result.selected_loop_area, 0.9, places=6)
+
     def test_extract_closed_section_loops_prefers_largest_loop(self) -> None:
         small_vertices, small_faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.25)
         large_vertices, large_faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.60)

@@ -22,6 +22,7 @@ from config_defaults import (
     REPAIR_SMOOTH_ITERS as _DEFAULT_SMOOTH_ITERS,
     REPAIR_Y_BAND_RATIO as _DEFAULT_Y_BAND_RATIO,
     _REPAIR_GROUND_SECTION_MIN_AREA_RATIO as _GROUND_SECTION_MIN_AREA_RATIO,
+    _REPAIR_GROUND_SECTION_START_QUANTILE as _GROUND_SECTION_START_QUANTILE,
     _REPAIR_MIN_DOWNWARD_NORMAL_Y as _MIN_DOWNWARD_NORMAL_Y,
     _REPAIR_MIN_LOOP_VERTICES as _MIN_LOOP_VERTICES,
     _REPAIR_SMOOTH_LAMBDA as _DEFAULT_SMOOTH_LAMBDA,
@@ -1421,6 +1422,7 @@ def _find_ground_plane_shift(
     bbox_diag = max(float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))), 1e-6)
     interval_pad = max(1e-6, 1e-4 * bbox_diag)
     min_section_area = _ground_section_min_area(vertices, plane_normal)
+    start_shift = float(np.quantile(dists, _GROUND_SECTION_START_QUANTILE))
 
     boundaries = [min(0.0, dist_min) - interval_pad]
     boundaries.extend(float(v) for v in np.unique(dists))
@@ -1451,40 +1453,67 @@ def _find_ground_plane_shift(
         scanned_count += 1
         return probe
 
+    interval_candidates: list[tuple[int, float, float, float, float, float]] = []
     for idx in range(len(boundaries) - 1):
         low = float(boundaries[idx])
         high = float(boundaries[idx + 1])
         if high - low <= 1e-12:
             continue
-        sample_shift = 0.5 * (low + high)
-        sample_probe = _probe(sample_shift)
-        if not sample_probe.valid:
-            continue
-
         margin = min(interval_pad, 0.25 * (high - low))
         if margin <= 0.0 or low + margin >= high:
-            lower_shift = sample_shift
-            upper_shift = sample_shift
+            lower_shift = low + 0.5 * (high - low)
+            upper_shift = lower_shift
         else:
             lower_shift = low + margin
             upper_shift = high - margin
             if upper_shift <= lower_shift:
-                lower_shift = sample_shift
-                upper_shift = sample_shift
+                lower_shift = low + 0.5 * (high - low)
+                upper_shift = lower_shift
+        sample_shift = 0.5 * (lower_shift + upper_shift)
+        interval_candidates.append((idx, low, high, lower_shift, sample_shift, upper_shift))
 
-        stability_probe = _probe(upper_shift)
-        if not stability_probe.valid:
-            continue
+    if not interval_candidates:
+        return GroundPlaneSearchResult(
+            selected_shift=None,
+            scanned_count=scanned_count,
+            first_valid_shift=None,
+            lowest_valid_shift=None,
+            selected_loop_area=0.0,
+        )
 
-        first_valid_shift = sample_shift
+    start_idx = 0
+    for pos, (_interval_idx, low, high, _lower_shift, _sample_shift, _upper_shift) in enumerate(interval_candidates):
+        if low <= start_shift <= high:
+            start_idx = pos
+            break
+        if start_shift > high:
+            start_idx = pos
+
+    band_active = False
+
+    for pos in range(start_idx, -1, -1):
+        _interval_idx, _low, _high, lower_shift, sample_shift, _upper_shift = interval_candidates[pos]
+        sample_probe = _probe(sample_shift)
         lower_probe = _probe(lower_shift)
-        if lower_probe.valid:
+        stable = sample_probe.valid and lower_probe.valid
+        if stable:
+            if first_valid_shift is None:
+                first_valid_shift = float(sample_shift)
+            band_active = True
             selected_shift = float(lower_shift)
             selected_loop_area = float(lower_probe.selected_loop_area)
-        else:
-            selected_shift = float(sample_shift)
-            selected_loop_area = float(sample_probe.selected_loop_area)
-        break
+            continue
+        if band_active:
+            band_active = False
+
+    if selected_shift is None:
+        return GroundPlaneSearchResult(
+            selected_shift=None,
+            scanned_count=scanned_count,
+            first_valid_shift=None,
+            lowest_valid_shift=None,
+            selected_loop_area=0.0,
+        )
 
     return GroundPlaneSearchResult(
         selected_shift=selected_shift,
@@ -1922,7 +1951,7 @@ def run_contact_hole_repair(
         search = _find_ground_plane_shift(vertices, faces, gp_normal, gp_d)
         print(f"  candidate offsets scanned: {search.scanned_count}")
         if search.first_valid_shift is not None:
-            print(f"  first closed offset: {search.first_valid_shift:.4f}")
+            print(f"  seed stable offset: {search.first_valid_shift:.4f}")
         if search.lowest_valid_shift is not None:
             print(f"  lowest valid closed offset: {search.lowest_valid_shift:.4f}")
         if search.selected_loop_area > 0.0:
