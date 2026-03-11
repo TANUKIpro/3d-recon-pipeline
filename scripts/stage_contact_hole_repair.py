@@ -142,6 +142,13 @@ class GroundPlaneSearchResult:
     lowest_valid_shift: float | None
 
 
+@dataclass(frozen=True)
+class GroundPlaneValidation:
+    plane_loop_count: int
+    plane_boundary_edges: int
+    valid: bool
+
+
 def _emit_progress(
     progress_cb: ProgressCallback | None,
     progress: float,
@@ -792,6 +799,52 @@ def _count_plane_boundary_edges(
     return int(np.count_nonzero(edge_mask))
 
 
+def _project_vertices_to_plane(
+    vertices: np.ndarray,
+    vertex_ids: set[int],
+    plane_normal: np.ndarray,
+    plane_d: float,
+) -> np.ndarray:
+    if not vertex_ids:
+        return vertices
+
+    plane_normal = plane_normal / max(float(np.linalg.norm(plane_normal)), 1e-12)
+    updated = vertices.copy()
+    indices = np.asarray(sorted(int(idx) for idx in vertex_ids), dtype=np.int64)
+    signed = updated[indices] @ plane_normal + plane_d
+    updated[indices] = updated[indices] - signed[:, None] * plane_normal[None, :]
+    return updated
+
+
+def _validate_ground_plane_output(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    tolerance_ratio: float = 0.01,
+) -> GroundPlaneValidation:
+    plane_loops, _boundary_edges = _collect_plane_boundary_loops(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        tolerance_ratio=tolerance_ratio,
+    )
+    plane_boundary_edges = _count_plane_boundary_edges(
+        vertices,
+        faces,
+        plane_normal,
+        plane_d,
+        tolerance_ratio=tolerance_ratio,
+    )
+    return GroundPlaneValidation(
+        plane_loop_count=len(plane_loops),
+        plane_boundary_edges=int(plane_boundary_edges),
+        valid=plane_boundary_edges == 0,
+    )
+
+
 def _clip_mesh_at_plane(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -1084,8 +1137,17 @@ def _find_ground_plane_shift(
         return probe
 
     ordered_candidates = sorted(candidate_shifts)
-    valid_candidates = [probe for probe in (_probe(shift) for shift in ordered_candidates) if probe.valid]
-    if not valid_candidates:
+    first_valid: GroundPlaneProbe | None = None
+    low = ordered_candidates[0]
+
+    for shift in ordered_candidates:
+        probe = _probe(shift)
+        if probe.valid:
+            first_valid = probe
+            break
+        low = shift
+
+    if first_valid is None:
         return GroundPlaneSearchResult(
             selected_shift=None,
             scanned_count=len(probes),
@@ -1093,12 +1155,7 @@ def _find_ground_plane_shift(
             lowest_valid_shift=None,
         )
 
-    first_valid = valid_candidates[0]
-    low = ordered_candidates[0]
     high = first_valid.shift
-    for shift in ordered_candidates:
-        if shift < first_valid.shift and not probes[shift].valid:
-            low = shift
 
     best_valid = first_valid
     if low < high and not probes[low].valid:
@@ -1332,24 +1389,45 @@ def _repair_contact_holes(
     return repaired_vertices, current_faces, stats
 
 
-def _write_repaired_outputs(
+def _prepare_repaired_mesh(
     repaired_vertices: np.ndarray,
     repaired_faces: np.ndarray,
-    repaired_path: Path,
-    repaired_copy_path: Path,
-) -> None:
+    *,
+    remove_non_manifold: bool = True,
+) -> tuple[o3d.geometry.TriangleMesh, np.ndarray, np.ndarray]:
     repaired_mesh = o3d.geometry.TriangleMesh()
     repaired_mesh.vertices = o3d.utility.Vector3dVector(repaired_vertices)
     repaired_mesh.triangles = o3d.utility.Vector3iVector(repaired_faces.astype(np.int32))
     repaired_mesh.remove_degenerate_triangles()
     repaired_mesh.remove_duplicated_triangles()
     repaired_mesh.remove_duplicated_vertices()
-    repaired_mesh.remove_non_manifold_edges()
+    if remove_non_manifold:
+        repaired_mesh.remove_non_manifold_edges()
     repaired_mesh.remove_unreferenced_vertices()
     repaired_mesh.compute_vertex_normals()
 
+    final_vertices = np.asarray(repaired_mesh.vertices, dtype=np.float64).copy()
+    final_faces = np.asarray(repaired_mesh.triangles, dtype=np.int64).copy()
+    return repaired_mesh, final_vertices, final_faces
+
+
+def _write_repaired_outputs(
+    repaired_vertices: np.ndarray,
+    repaired_faces: np.ndarray,
+    repaired_path: Path,
+    repaired_copy_path: Path,
+    *,
+    remove_non_manifold: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    repaired_mesh, final_vertices, final_faces = _prepare_repaired_mesh(
+        repaired_vertices,
+        repaired_faces,
+        remove_non_manifold=remove_non_manifold,
+    )
+
     _write_mesh_safe(repaired_path, repaired_mesh)
     _write_mesh_safe(repaired_copy_path, repaired_mesh)
+    return final_vertices, final_faces
 
 
 def _print_repair_stats(stats: RepairStats) -> None:
@@ -1372,6 +1450,70 @@ def _print_repair_stats(stats: RepairStats) -> None:
         f"triangulation:{stats.skipped_triangulation:,}, "
         f"non_manifold:{stats.skipped_non_manifold:,}, "
         f"degenerate:{stats.skipped_degenerate:,}"
+    )
+
+
+def _finalize_ground_plane_outputs(
+    capped_vertices: np.ndarray,
+    capped_faces: np.ndarray,
+    *,
+    cap_vertex_ids: set[int],
+    plane_normal: np.ndarray,
+    plane_d: float,
+    smooth_iters: int,
+    smooth_lambda: float,
+    repaired_path: Path,
+    repaired_copy_path: Path,
+) -> tuple[np.ndarray, np.ndarray, str, GroundPlaneValidation]:
+    projected_capped = _project_vertices_to_plane(
+        capped_vertices,
+        cap_vertex_ids,
+        plane_normal,
+        plane_d,
+    )
+    smoothed_vertices = _apply_local_smoothing(
+        projected_capped,
+        capped_faces,
+        cap_vertex_ids,
+        iterations=smooth_iters,
+        lamb=smooth_lambda,
+    )
+    smoothed_projected = _project_vertices_to_plane(
+        smoothed_vertices,
+        cap_vertex_ids,
+        plane_normal,
+        plane_d,
+    )
+
+    attempts: list[tuple[str, np.ndarray, bool]] = [
+        ("smoothed+strict-cleanup", smoothed_projected, True),
+        ("smoothed+preserve-cap", smoothed_projected, False),
+        ("flat-cap+preserve-cap", projected_capped, False),
+    ]
+
+    last_validation = GroundPlaneValidation(plane_loop_count=0, plane_boundary_edges=0, valid=False)
+    for label, candidate_vertices, remove_non_manifold in attempts:
+        repaired_mesh, final_vertices, final_faces = _prepare_repaired_mesh(
+            candidate_vertices,
+            capped_faces,
+            remove_non_manifold=remove_non_manifold,
+        )
+        validation = _validate_ground_plane_output(
+            final_vertices,
+            final_faces,
+            plane_normal,
+            plane_d,
+        )
+        last_validation = validation
+        if validation.valid:
+            _write_mesh_safe(repaired_path, repaired_mesh)
+            _write_mesh_safe(repaired_copy_path, repaired_mesh)
+            return final_vertices, final_faces, label, validation
+
+    raise ValueError(
+        "Ground-plane repaired mesh failed post-save validation "
+        f"(plane_loops={last_validation.plane_loop_count}, "
+        f"plane_boundary_edges={last_validation.plane_boundary_edges})"
     )
 
 
@@ -1517,19 +1659,26 @@ def run_contact_hole_repair(
             cap_face_block = capped_faces[clipped_faces.shape[0]:]
             smooth_seed.update(int(v) for v in np.unique(cap_face_block))
 
-        repaired_vertices = _apply_local_smoothing(
-            capped_verts,
-            capped_faces,
-            smooth_seed,
-            iterations=params.smooth_iters,
-            lamb=params.smooth_lambda,
-        )
-        repaired_faces = capped_faces
-
         _check_cancel(cancel_cb)
         _emit_progress(progress_cb, 90.0, "Contact Hole Repair: writing repaired mesh")
 
-        _write_repaired_outputs(repaired_vertices, repaired_faces, repaired_path, repaired_copy_path)
+        repaired_vertices, repaired_faces, finalize_mode, post_validation = _finalize_ground_plane_outputs(
+            capped_verts,
+            capped_faces,
+            cap_vertex_ids=smooth_seed,
+            plane_normal=gp_normal,
+            plane_d=actual_clip_d,
+            smooth_iters=params.smooth_iters,
+            smooth_lambda=params.smooth_lambda,
+            repaired_path=repaired_path,
+            repaired_copy_path=repaired_copy_path,
+        )
+        print(
+            "  saved mesh validation: "
+            f"plane_loops={post_validation.plane_loop_count}, "
+            f"plane_boundary_edges={post_validation.plane_boundary_edges}"
+        )
+        print(f"  finalize mode: {finalize_mode}")
 
         print(f"Saved repaired mesh (ground-plane): {repaired_path}")
         _emit_progress(progress_cb, 100.0, "Contact Hole Repair: complete")
