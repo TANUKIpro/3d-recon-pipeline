@@ -95,6 +95,11 @@ export class PreviewPanel {
       helper: null,        // THREE.LineSegments (OBB wireframe)
       obbData: null,       // { center, extent, rotation, adjustedCenter } from API
     };
+    this._groundPlane = {
+      meshByStage: {},   // stageNum -> THREE.Mesh
+      data: null,        // parsed ground_plane.json
+      visible: true,
+    };
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -127,6 +132,10 @@ export class PreviewPanel {
 
   clearFromStage(startStage = 1) {
     const start = Math.max(1, Math.min(8, Number(startStage) || 1));
+
+    if (start <= 3) {
+      this._groundPlane.data = null;
+    }
 
     if (start <= 1) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -363,6 +372,9 @@ export class PreviewPanel {
   _clearStageScene(stageNum) {
     const stage = this._stages[stageNum];
     if (!stage) return;
+    if (stageNum >= 4) {
+      this._removeGroundPlane(stageNum);
+    }
     if (stageNum === 6) {
       this.clearCropBbox();
     }
@@ -1246,8 +1258,82 @@ export class PreviewPanel {
         enableShadows: enableShadows === true,
       });
     }
+    if (loaded && stageNum >= 4) {
+      this.showGroundPlane(stageNum).catch(() => {});
+    }
     if (empty) empty.classList.toggle('hidden', loaded);
     return loaded;
+  }
+
+  async showGroundPlane(stageNum) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
+
+    if (!this._groundPlane.data) {
+      try {
+        const resp = await fetch(`/api/preview/file/ground_plane.json?_t=${Date.now()}`);
+        if (!resp.ok) return;
+        this._groundPlane.data = await resp.json();
+      } catch { return; }
+    }
+
+    this._createGroundPlaneMesh(stageNum);
+  }
+
+  _createGroundPlaneMesh(stageNum) {
+    const stage = this._stages[stageNum];
+    const data = this._groundPlane.data;
+    if (!stage || !data || !THREE) return;
+
+    // Remove existing mesh for this stage if any
+    this._removeGroundPlane(stageNum);
+
+    const extent = data.extent || [1, 1, 1];
+    const planeSize = Math.max(...extent) * 1.5;
+
+    const geometry = new THREE.PlaneGeometry(planeSize, planeSize);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x2ecc71,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+
+    // Orient plane: rotate from default Z-up to match the ground normal
+    const normal = data.normal || [0, 0, 1];
+    const from = new THREE.Vector3(0, 0, 1);
+    const to = new THREE.Vector3(normal[0], normal[1], normal[2]).normalize();
+    const quat = new THREE.Quaternion().setFromUnitVectors(from, to);
+    mesh.quaternion.copy(quat);
+
+    // Position at ground center, adjusted for stage offset
+    const adjusted = this._applyStageCenterOffset(stage, data.center);
+    if (adjusted) {
+      mesh.position.set(adjusted[0], adjusted[1], adjusted[2]);
+    }
+
+    mesh.renderOrder = -1;
+    mesh.visible = this._groundPlane.visible;
+    stage.sceneRoot.add(mesh);
+    this._groundPlane.meshByStage[stageNum] = mesh;
+  }
+
+  _removeGroundPlane(stageNum) {
+    const mesh = this._groundPlane.meshByStage[stageNum];
+    if (!mesh) return;
+    mesh.parent?.remove(mesh);
+    mesh.geometry?.dispose();
+    mesh.material?.dispose();
+    delete this._groundPlane.meshByStage[stageNum];
+  }
+
+  toggleGroundPlane(visible) {
+    this._groundPlane.visible = visible;
+    for (const mesh of Object.values(this._groundPlane.meshByStage)) {
+      if (mesh) mesh.visible = visible;
+    }
   }
 
   async _loadPreviewAssetForStage(stageNum, file, opts = {}) {

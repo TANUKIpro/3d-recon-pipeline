@@ -1332,8 +1332,9 @@ def extract_ground_plane(
         _emit_progress(progress_cb, 100.0, "Insufficient ground points")
         return None
 
-    # Extract ground 3D points
+    # Extract ground 3D points and colors
     ground_pts = points[final_ground_mask].astype(np.float32)
+    ground_colors = colors[final_ground_mask].astype(np.float32)
 
     # Extract object centroid for normal orientation.
     # Prefer SAM2 object masks (accurate) over conf_edge & ~ground (noisy).
@@ -1393,6 +1394,7 @@ def extract_ground_plane(
 
     # Compute ground center from inlier points
     inlier_pts = ground_pts[inliers]
+    inlier_colors = ground_colors[inliers]
     ground_center = inlier_pts.mean(axis=0).astype(np.float64)
 
     # Ensure normal points toward the object centroid
@@ -1408,16 +1410,27 @@ def extract_ground_plane(
     print(f"  Inliers: {len(inliers):,}/{ground_count:,} ({100*inlier_ratio:.1f}%)")
     print(f"  Distance threshold: {distance_threshold:.5f} (bbox_diag={bbox_diag:.4f})")
 
+    inlier_min = inlier_pts.min(axis=0)
+    inlier_max = inlier_pts.max(axis=0)
+
     result = {
         "normal": [float(normal[0]), float(normal[1]), float(normal[2])],
         "d": float(d),
         "center": [float(ground_center[0]), float(ground_center[1]), float(ground_center[2])],
+        "extent": [float(inlier_max[i] - inlier_min[i]) for i in range(3)],
         "point_count": int(len(inliers)),
         "inlier_ratio": float(inlier_ratio),
     }
 
-    # Save ground_plane.json
+    # Save ground.ply
     output_path.mkdir(parents=True, exist_ok=True)
+    import torch
+    from pi3.utils.basic import write_ply
+    ground_ply_path = output_path / "ground.ply"
+    write_ply(torch.from_numpy(inlier_pts), torch.from_numpy(inlier_colors), str(ground_ply_path))
+    print(f"Saved ground PLY: {ground_ply_path} ({len(inlier_pts):,} points)")
+
+    # Save ground_plane.json
     json_path = output_path / "ground_plane.json"
     with open(json_path, "w") as f:
         json.dump(result, f, indent=2)

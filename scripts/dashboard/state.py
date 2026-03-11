@@ -583,6 +583,7 @@ class PipelineSession:
                 }
                 for k, v in self.stages.items()
             },
+            "has_ground_plane": self.ground_plane_path is not None,
             "auto_accept": self.config.auto_accept,
             "overall_progress": self.overall_progress(),
         }

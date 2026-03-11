@@ -26,7 +26,7 @@ PREVIEW_FILE_EXTENSIONS = {".ply", ".obj", ".mtl", ".png", ".jpg", ".json"}
 STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     1: {"dirs": ("frames",), "files": ()},
     2: {"dirs": (), "files": ("object_full.ply", "pi3x_cache.npz", "camera_poses.json")},
-    3: {"dirs": ("masks", "masks_ground"), "files": ("object.ply", "ground_plane.json")},
+    3: {"dirs": ("masks", "masks_ground"), "files": ("object.ply", "ground_plane.json", "ground.ply")},
     4: {"dirs": (), "files": ("object_denoised.ply",)},
     5: {
         "dirs": ("diffcd", "classical_mesh"),
