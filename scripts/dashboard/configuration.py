@@ -16,6 +16,7 @@ from scripts.config_defaults import (
     DIFFCD_RESOLUTION,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
+    GROUND_PLANE_ENABLED,
     MESH_DEFAULT_METHOD,
     MESH_METHODS,
     MESHWRAP_ALPHA_RATIO,
@@ -357,6 +358,10 @@ def build_pipeline_config(
         texture_quality_boost=parse_bool(
             raw.get("texture_quality_boost"),
             env_bool("TEXTURE_QUALITY_BOOST", TEXTURE_QUALITY_BOOST, env_map),
+        ),
+        ground_plane_enabled=parse_bool(
+            raw.get("ground_plane_enabled"),
+            env_bool("GROUND_PLANE_ENABLED", GROUND_PLANE_ENABLED, env_map),
         ),
         auto_accept=parse_bool(raw.get("auto_accept"), False),
     )

@@ -155,9 +155,14 @@
           </div>
         </div>
         <div id="sam2-toolbar">
+          <div id="sam2-mode-toggle" style="display:none">
+            <button id="sam2-mode-object" class="btn-small active" title="Segment the object">Object</button>
+            <button id="sam2-mode-ground" class="btn-small" title="Segment the ground plane">Ground</button>
+          </div>
           <button id="sam2-undo" disabled>Undo</button>
           <button id="sam2-clear" disabled>Clear</button>
           <span id="sam2-click-info"></span>
+          <button id="sam2-skip-ground" class="btn-small" style="display:none">Skip Ground</button>
           <button id="sam2-confirm" class="btn-primary" disabled>Confirm &amp; Propagate</button>
         </div>
         <div id="sam2-verification" style="display:none">
@@ -382,6 +387,13 @@
               <option value="small">Small</option>
               <option value="tiny">Tiny</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label" for="cfg-ground-plane-enabled">
+              <input type="checkbox" id="cfg-ground-plane-enabled" checked>
+              Ground Plane Segmentation
+            </label>
+            <div class="config-note">Segment the ground surface for better bottom repair.</div>
           </div>
         </div>
 
@@ -660,7 +672,7 @@
                 <div class="form-row">
                   <div class="form-group">
                     <label for="cfg-mesh-repair-max-diameter-ratio">Max Diameter Ratio</label>
-                    <input type="number" id="cfg-mesh-repair-max-diameter-ratio" value="0.08" min="0.005" max="1.5" step="0.005">
+                    <input type="number" id="cfg-mesh-repair-max-diameter-ratio" value="0.46" min="0.005" max="1.5" step="0.005">
                   </div>
                   <div class="form-group">
                     <label for="cfg-mesh-repair-y-band-ratio">Y Band Ratio</label>
@@ -686,13 +698,13 @@
           <div class="form-group">
             <label for="cfg-texture-view-assign-mode">View Assignment</label>
             <select id="cfg-texture-view-assign-mode">
-              <option value="legacy" selected>Legacy Blend</option>
-              <option value="region_gc">Region Optimized</option>
+              <option value="legacy">Legacy Blend</option>
+              <option value="region_gc" selected>Region Optimized</option>
             </select>
           </div>
           <div class="form-group">
             <label class="checkbox-label" for="cfg-texture-quality-boost">
-              <input type="checkbox" id="cfg-texture-quality-boost">
+              <input type="checkbox" id="cfg-texture-quality-boost" checked>
               High Quality Region Refinement
             </label>
           </div>

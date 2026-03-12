@@ -142,6 +142,17 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.meshwrap_normal_radius_ratio, 0.02)
         self.assertEqual(cfg.mesh_repair_smooth_iters, 3)
 
+    def test_mesh_repair_defaults_include_tuned_bottom_hole_ratio(self) -> None:
+        cfg = build_pipeline_config(
+            {},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.mesh_repair_max_diameter_ratio, 0.46)
+
     def test_mesh_repair_fields_are_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
             {

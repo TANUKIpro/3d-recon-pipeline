@@ -430,6 +430,7 @@ async def pipeline_cancel():
     # If waiting for SAM2 or Pi3X confirmation/approval, unblock it
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
+    session.sam2_ground_skip_event.set()
     session.next_stage_confirm_event.set()
     session.mesh_repair_confirm_event.set()
     return JSONResponse(
@@ -724,6 +725,28 @@ async def sam2_confirm():
     return JSONResponse({"status": "confirming"})
 
 
+@app.post("/api/sam2/mode")
+async def sam2_mode(body: dict):
+    if not sam2_service.initialized:
+        return JSONResponse({"error": "SAM2 not ready"}, status_code=409)
+    mode = str(body.get("mode", "")).strip()
+    if mode not in ("object", "ground"):
+        return JSONResponse({"error": "mode must be 'object' or 'ground'"}, status_code=400)
+    sam2_service.set_mode(mode)
+    return JSONResponse({"status": "ok", "mode": mode})
+
+
+@app.get("/api/sam2/mode")
+async def sam2_get_mode():
+    return JSONResponse({"mode": sam2_service.segmentation_mode})
+
+
+@app.post("/api/sam2/skip-ground")
+async def sam2_skip_ground():
+    session.sam2_ground_skip_event.set()
+    return JSONResponse({"status": "skipping_ground"})
+
+
 @app.post("/api/sam2/approve")
 async def sam2_approve():
     session.sam2_approved = True
@@ -775,6 +798,43 @@ async def verification_frame(idx: int):
                 overlay = frame.copy()
                 overlay[mask > 0] = (
                     overlay[mask > 0] * 0.6 + np.array([0, 180, 0], dtype=np.float64) * 0.4
+                ).astype(np.uint8)
+                frame = overlay
+        _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes()
+
+    try:
+        jpeg_bytes = await asyncio.to_thread(_composite, str(frame_path), str(mask_path))
+        return Response(content=jpeg_bytes, media_type="image/jpeg")
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/api/verification/ground-frame/{idx}")
+async def verification_ground_frame(idx: int):
+    """Composite frame + orange ground mask overlay for verification."""
+    out = _active_output_dir()
+    frame_path = out / "frames" / f"{idx:05d}.jpg"
+    mask_path = out / "masks_ground" / f"{idx:05d}.png"
+
+    if not frame_path.is_file():
+        return JSONResponse({"error": f"Frame {idx} not found"}, status_code=404)
+
+    def _composite(fp: str, mp: str) -> bytes:
+        import cv2
+        import numpy as np
+        frame = cv2.imread(fp)
+        if frame is None:
+            raise FileNotFoundError(f"Cannot read frame: {fp}")
+        if Path(mp).is_file():
+            mask = cv2.imread(mp, cv2.IMREAD_GRAYSCALE)
+            if mask is not None:
+                if mask.shape[:2] != frame.shape[:2]:
+                    mask = cv2.resize(mask, (frame.shape[1], frame.shape[0]))
+                overlay = frame.copy()
+                # Orange overlay (BGR: 0, 165, 255) at 35% opacity
+                overlay[mask > 0] = (
+                    overlay[mask > 0] * 0.65 + np.array([0, 165, 255], dtype=np.float64) * 0.35
                 ).astype(np.uint8)
                 frame = overlay
         _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])

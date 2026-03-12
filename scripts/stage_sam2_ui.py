@@ -16,6 +16,8 @@ from config_defaults import (
     SAM2_MODEL_CONFIGS,
     _SAM2_CIRCLE_OUTLINE_WIDTH,
     _SAM2_CIRCLE_RADIUS,
+    _SAM2_GROUND_MASK_COLOR,
+    _SAM2_GROUND_MASK_OVERLAY_ALPHA,
     _SAM2_MASK_COLOR,
     _SAM2_MASK_OVERLAY_ALPHA,
 )
@@ -55,9 +57,15 @@ class SAM2Session:
         )
         self.img_h, self.img_w = self.first_frame.shape[:2]
 
-        # Click state
+        # Click state — object (obj_id=1)
         self.click_points: list[tuple[float, float]] = []
         self.click_labels: list[int] = []
+
+        # Click state — ground plane (obj_id=2)
+        self.ground_click_points: list[tuple[float, float]] = []
+        self.ground_click_labels: list[int] = []
+        self.ground_mask_dir = self.output_dir / "masks_ground"
+        self.ground_mask_dir.mkdir(parents=True, exist_ok=True)
 
         # Completion signal
         self.done_event = threading.Event()
@@ -118,15 +126,29 @@ def _create_mask_overlay(
     points: list[tuple[float, float]],
     labels: list[int],
     alpha: float = _SAM2_MASK_OVERLAY_ALPHA,
+    ground_mask: np.ndarray | None = None,
+    ground_points: list[tuple[float, float]] | None = None,
+    ground_labels: list[int] | None = None,
 ) -> np.ndarray:
     """Draw segmentation mask overlay and click points on frame."""
     vis = frame.copy().astype(np.float32)
+
+    # Object mask in blue
     color = np.array(_SAM2_MASK_COLOR, dtype=np.float32)
     if mask is not None and mask.any():
         vis[mask] = vis[mask] * (1 - alpha) + color * alpha
+
+    # Ground mask in orange
+    ground_color = np.array(_SAM2_GROUND_MASK_COLOR, dtype=np.float32)
+    ground_alpha = _SAM2_GROUND_MASK_OVERLAY_ALPHA
+    if ground_mask is not None and ground_mask.any():
+        vis[ground_mask] = vis[ground_mask] * (1 - ground_alpha) + ground_color * ground_alpha
+
     vis = np.clip(vis, 0, 255).astype(np.uint8)
 
     h, w = vis.shape[:2]
+
+    # Object click points (green positive, red negative)
     for (nx, ny), label in zip(points, labels):
         nx, ny = _sanitize_normalized_point(nx, ny)
         px = int(np.clip(round(nx * w), 0, w - 1))
@@ -134,32 +156,56 @@ def _create_mask_overlay(
         c = (0, 255, 0) if label == 1 else (255, 0, 0)
         cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS, c, -1)
         cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS + _SAM2_CIRCLE_OUTLINE_WIDTH, (255, 255, 255), _SAM2_CIRCLE_OUTLINE_WIDTH)
+
+    # Ground click points (orange positive, dark red negative)
+    if ground_points and ground_labels:
+        for (nx, ny), label in zip(ground_points, ground_labels):
+            nx, ny = _sanitize_normalized_point(nx, ny)
+            px = int(np.clip(round(nx * w), 0, w - 1))
+            py = int(np.clip(round(ny * h), 0, h - 1))
+            c = (255, 165, 0) if label == 1 else (180, 0, 0)
+            cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS, c, -1)
+            cv2.circle(vis, (px, py), _SAM2_CIRCLE_RADIUS + _SAM2_CIRCLE_OUTLINE_WIDTH, (200, 200, 200), _SAM2_CIRCLE_OUTLINE_WIDTH)
+
     return vis
 
 
-def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
-    """Run SAM2 inference on frame 0 with all accumulated click points."""
+def _run_single_frame_inference_obj(
+    session: SAM2Session,
+    obj_id: int,
+    click_points: list[tuple[float, float]],
+    click_labels: list[int],
+) -> np.ndarray:
+    """Run SAM2 inference on frame 0 for a specific object with explicit click lists."""
     points_px = []
-    for p in session.click_points:
+    for p in click_points:
         nx, ny = _sanitize_normalized_point(p[0], p[1])
         points_px.append([nx * session.img_w, ny * session.img_h])
     points_np = np.array(points_px, dtype=np.float32)
-    labels_np = np.array(session.click_labels, dtype=np.int32)
+    labels_np = np.array(click_labels, dtype=np.int32)
 
     with torch.inference_mode():
-        _, _, masks_out = session.predictor.add_new_points_or_box(
+        _, obj_ids_out, masks_out = session.predictor.add_new_points_or_box(
             inference_state=session.inference_state,
             frame_idx=0,
-            obj_id=1,
+            obj_id=obj_id,
             points=points_np,
             labels=labels_np,
             clear_old_points=True,
-            # Points are in original-frame pixel coordinates.
-            # Let SAM2 normalize/scale them to the internal image size.
             normalize_coords=True,
         )
-    mask = (masks_out[0] > 0).cpu().numpy().squeeze()
+    obj_idx = list(obj_ids_out).index(obj_id)
+    mask = (masks_out[obj_idx] > 0).cpu().numpy().squeeze()
     return mask
+
+
+def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
+    """Run SAM2 inference on frame 0 with all accumulated click points (obj_id=1)."""
+    return _run_single_frame_inference_obj(
+        session, obj_id=1,
+        click_points=session.click_points,
+        click_labels=session.click_labels,
+    )
 
 
 def run_sam2_interactive(

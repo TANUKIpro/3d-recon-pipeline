@@ -8,6 +8,11 @@ from per-stage wiring.
 
 from __future__ import annotations
 
+from scripts.config_defaults import (
+    REPAIR_MAX_DIAMETER_RATIO,
+    REPAIR_SMOOTH_ITERS,
+    REPAIR_Y_BAND_RATIO,
+)
 from scripts.dashboard.log_capture import stage_log_scope
 from scripts.dashboard.state import PipelineStage
 
@@ -214,9 +219,10 @@ def _stage_mesh_repair(
     mesh_ply: str,
     output_dir: str,
     mesh_repair_enabled: bool = True,
-    mesh_repair_max_diameter_ratio: float = 0.08,
-    mesh_repair_y_band_ratio: float = 0.06,
-    mesh_repair_smooth_iters: int = 3,
+    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO,
+    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO,
+    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
+    ground_plane: dict | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -234,6 +240,7 @@ def _stage_mesh_repair(
         max_diameter_ratio=mesh_repair_max_diameter_ratio,
         y_band_ratio=mesh_repair_y_band_ratio,
         smooth_iters=mesh_repair_smooth_iters,
+        ground_plane=ground_plane,
     )
 
 
@@ -258,11 +265,12 @@ def _stage_mesh_repair_selected(
     output_dir: str,
     selected_loop_ids: list[int],
     mesh_repair_enabled: bool = True,
-    mesh_repair_max_diameter_ratio: float = 0.08,
-    mesh_repair_y_band_ratio: float = 0.06,
-    mesh_repair_smooth_iters: int = 3,
+    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO,
+    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO,
+    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS,
     progress_cb=None,
     cancel_cb=None,
+    ground_plane: dict | None = None,
 ) -> None:
     from stage_contact_hole_repair import run_selected_contact_hole_repair
 
@@ -277,14 +285,32 @@ def _stage_mesh_repair_selected(
             max_diameter_ratio=mesh_repair_max_diameter_ratio,
             y_band_ratio=mesh_repair_y_band_ratio,
             smooth_iters=mesh_repair_smooth_iters,
+            ground_plane=ground_plane,
+        )
+
+
+def _stage_extract_ground_plane(
+    cache_path: str,
+    ground_mask_dir: str,
+    output_dir: str,
+    object_mask_dir: str | None = None,
+) -> dict | None:
+    from stage_pi3x_reconstruct import extract_ground_plane
+
+    with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
+        return extract_ground_plane(
+            cache_path,
+            ground_mask_dir,
+            output_dir,
+            object_mask_dir=object_mask_dir,
         )
 
 
 def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,
-    texture_view_assign_mode: str = "legacy",
-    texture_quality_boost: bool = False,
+    texture_view_assign_mode: str = "region_gc",
+    texture_quality_boost: bool = True,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,

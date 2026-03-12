@@ -3,6 +3,7 @@
  *
  * Left-click = positive point, right-click = negative point.
  * Each click sends a request and receives back a mask overlay PNG.
+ * Supports object and ground plane segmentation modes.
  */
 
 export class SAM2Canvas {
@@ -15,12 +16,21 @@ export class SAM2Canvas {
     this._confirmBtn = document.getElementById('sam2-confirm');
     this._clickInfo = document.getElementById('sam2-click-info');
 
+    // Mode toggle buttons
+    this._modeBtnObject = document.getElementById('sam2-mode-object');
+    this._modeBtnGround = document.getElementById('sam2-mode-ground');
+    this._skipGroundBtn = document.getElementById('sam2-skip-ground');
+
     this._active = false;
     this._imgWidth = 0;
     this._imgHeight = 0;
     this._positiveCount = 0;
     this._negativeCount = 0;
+    this._groundPositiveCount = 0;
+    this._groundNegativeCount = 0;
     this._loading = false;
+    this._mode = 'object'; // 'object' or 'ground'
+    this._groundPhase = false;
 
     this._bindEvents();
   }
@@ -31,6 +41,10 @@ export class SAM2Canvas {
     this._imgHeight = height;
     this._positiveCount = 0;
     this._negativeCount = 0;
+    this._groundPositiveCount = 0;
+    this._groundNegativeCount = 0;
+    this._mode = 'object';
+    this._groundPhase = false;
     this.frameCount = frameCount;
 
     this._placeholder.style.display = 'none';
@@ -43,6 +57,10 @@ export class SAM2Canvas {
     this._clearBtn.disabled = true;
     this._confirmBtn.disabled = true;
     this._confirmBtn.textContent = 'Confirm & Propagate';
+
+    // Hide mode toggle and skip button until ground phase
+    this._setModeToggleVisible(false);
+    this._setSkipGroundVisible(false);
 
     // Load first frame, then enable interactions.
     this._loadFrame(0).finally(() => {
@@ -59,10 +77,38 @@ export class SAM2Canvas {
   deactivate() {
     this._active = false;
     this._loading = false;
+    this._groundPhase = false;
     this._canvas.style.opacity = '1';
     this._undoBtn.disabled = true;
     this._clearBtn.disabled = true;
     this._confirmBtn.disabled = true;
+    this._setModeToggleVisible(false);
+    this._setSkipGroundVisible(false);
+  }
+
+  /** Called when sam2_ground_phase WS message arrives */
+  enterGroundPhase() {
+    this._active = true;      // Ensure active (may have been cleared by reconnect)
+    this._loading = false;    // Ensure not loading
+    this._groundPhase = true;
+    this._mode = 'ground';
+    this._setModeToggleVisible(true);
+    this._setSkipGroundVisible(true);
+    this._updateModeButtons();
+    this._updateInfo();
+    this._confirmBtn.textContent = 'Confirm Ground & Propagate';
+    this._confirmBtn.disabled = false;
+    this._undoBtn.disabled = false;
+    this._clearBtn.disabled = false;
+    // Switch backend mode
+    this._switchMode('ground');
+  }
+
+  /** Called when ground phase is skipped or done */
+  exitGroundPhase() {
+    this._groundPhase = false;
+    this._setModeToggleVisible(false);
+    this._setSkipGroundVisible(false);
   }
 
   async _loadFrame(idx) {
@@ -91,6 +137,46 @@ export class SAM2Canvas {
     this._undoBtn.addEventListener('click', () => this._undo());
     this._clearBtn.addEventListener('click', () => this._clear());
     this._confirmBtn.addEventListener('click', () => this._confirm());
+
+    // Mode toggle buttons
+    this._modeBtnObject?.addEventListener('click', () => {
+      if (this._mode !== 'object') {
+        this._mode = 'object';
+        this._updateModeButtons();
+        this._updateInfo();
+        this._switchMode('object');
+      }
+    });
+    this._modeBtnGround?.addEventListener('click', () => {
+      if (this._mode !== 'ground') {
+        this._mode = 'ground';
+        this._updateModeButtons();
+        this._updateInfo();
+        this._switchMode('ground');
+      }
+    });
+
+    // Skip ground button
+    this._skipGroundBtn?.addEventListener('click', async () => {
+      this._skipGroundBtn.disabled = true;
+      try {
+        await fetch('/api/sam2/skip-ground', { method: 'POST' });
+      } catch (e) {
+        console.error('Skip ground error:', e);
+      }
+    });
+  }
+
+  async _switchMode(mode) {
+    try {
+      await fetch('/api/sam2/mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+    } catch (e) {
+      console.error('Mode switch error:', e);
+    }
   }
 
   async _handleClick(e, label) {
@@ -104,8 +190,13 @@ export class SAM2Canvas {
     const normX = canvasX / this._canvas.width;
     const normY = canvasY / this._canvas.height;
 
-    if (label === 1) this._positiveCount++;
-    else this._negativeCount++;
+    if (this._mode === 'ground') {
+      if (label === 1) this._groundPositiveCount++;
+      else this._groundNegativeCount++;
+    } else {
+      if (label === 1) this._positiveCount++;
+      else this._negativeCount++;
+    }
     this._updateInfo();
 
     await this._postClickAndDraw('/api/sam2/click', {
@@ -117,20 +208,24 @@ export class SAM2Canvas {
 
   async _undo() {
     if (!this._active || this._loading) return;
-    if (this._positiveCount + this._negativeCount > 0) {
-      // We don't track which was last, just decrement total
-      // The backend handles the actual undo
-    }
     await this._postClickAndDraw('/api/sam2/undo');
-    // Refresh counts from a rough estimate
-    this._positiveCount = Math.max(0, this._positiveCount - 1);
+    if (this._mode === 'ground') {
+      this._groundPositiveCount = Math.max(0, this._groundPositiveCount - 1);
+    } else {
+      this._positiveCount = Math.max(0, this._positiveCount - 1);
+    }
     this._updateInfo();
   }
 
   async _clear() {
     if (!this._active || this._loading) return;
-    this._positiveCount = 0;
-    this._negativeCount = 0;
+    if (this._mode === 'ground') {
+      this._groundPositiveCount = 0;
+      this._groundNegativeCount = 0;
+    } else {
+      this._positiveCount = 0;
+      this._negativeCount = 0;
+    }
     this._updateInfo();
     await this._postClickAndDraw('/api/sam2/clear');
   }
@@ -138,15 +233,20 @@ export class SAM2Canvas {
   async _confirm() {
     if (!this._active) return;
     this._confirmBtn.disabled = true;
+    const prevText = this._confirmBtn.textContent;
     this._confirmBtn.textContent = 'Propagating...';
     try {
       const res = await fetch('/api/sam2/confirm', { method: 'POST' });
       if (!res.ok) {
-        const data = await res.json();
-        console.error('Confirm failed:', data.error);
+        const data = await res.json().catch(() => ({}));
+        console.error('Confirm failed:', data.error || res.status);
+        this._confirmBtn.disabled = false;
+        this._confirmBtn.textContent = prevText;
       }
     } catch (e) {
       console.error('Confirm error:', e);
+      this._confirmBtn.disabled = false;
+      this._confirmBtn.textContent = prevText;
     }
   }
 
@@ -182,7 +282,36 @@ export class SAM2Canvas {
   }
 
   _updateInfo() {
-    this._clickInfo.textContent =
-      `Positive: ${this._positiveCount}  Negative: ${this._negativeCount}`;
+    const objInfo = `Object: ${this._positiveCount}+ ${this._negativeCount}-`;
+    const groundInfo = `Ground: ${this._groundPositiveCount}+ ${this._groundNegativeCount}-`;
+    const modeIndicator = this._groundPhase ? ` [${this._mode}]` : '';
+    if (this._groundPhase || this._groundPositiveCount > 0 || this._groundNegativeCount > 0) {
+      this._clickInfo.textContent = `${objInfo} | ${groundInfo}${modeIndicator}`;
+    } else {
+      this._clickInfo.textContent = `Positive: ${this._positiveCount}  Negative: ${this._negativeCount}`;
+    }
+  }
+
+  _updateModeButtons() {
+    if (this._modeBtnObject) {
+      this._modeBtnObject.classList.toggle('active', this._mode === 'object');
+    }
+    if (this._modeBtnGround) {
+      this._modeBtnGround.classList.toggle('active', this._mode === 'ground');
+    }
+  }
+
+  _setModeToggleVisible(visible) {
+    const container = document.getElementById('sam2-mode-toggle');
+    if (container) {
+      container.style.display = visible ? '' : 'none';
+    }
+  }
+
+  _setSkipGroundVisible(visible) {
+    if (this._skipGroundBtn) {
+      this._skipGroundBtn.style.display = visible ? '' : 'none';
+      this._skipGroundBtn.disabled = false;
+    }
   }
 }

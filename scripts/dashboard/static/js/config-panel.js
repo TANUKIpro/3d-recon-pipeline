@@ -110,7 +110,7 @@ const MESHWRAP_DEFAULTS = {
 };
 
 const MESH_REPAIR_DEFAULTS = {
-  mesh_repair_max_diameter_ratio: 0.08,
+  mesh_repair_max_diameter_ratio: 0.46,
   mesh_repair_y_band_ratio: 0.06,
   mesh_repair_smooth_iters: 3,
 };
@@ -176,6 +176,7 @@ export class ConfigPanel {
       confidence_threshold: document.getElementById('cfg-conf-threshold'),
       edge_rtol: document.getElementById('cfg-edge-rtol'),
       sam2_model: document.getElementById('cfg-sam2-model'),
+      ground_plane_enabled: document.getElementById('cfg-ground-plane-enabled'),
       denoise_preset: document.getElementById('cfg-denoise-preset'),
       denoise_algorithm: document.getElementById('cfg-denoise-algorithm'),
       denoise_dbscan_eps: document.getElementById('cfg-denoise-dbscan-eps'),
@@ -386,6 +387,7 @@ export class ConfigPanel {
       confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.2,
       edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
       sam2_model: this._inputs.sam2_model.value,
+      ground_plane_enabled: this._inputs.ground_plane_enabled?.checked ?? true,
       denoise_preset: this._inputs.denoise_preset.value || 'balanced',
       denoise_algorithm: this._inputs.denoise_algorithm.value || 'dbscan_sor',
       denoise_dbscan_eps: this._parseNonNegativeFloat(this._inputs.denoise_dbscan_eps.value, 0.0),
@@ -939,6 +941,9 @@ export class ConfigPanel {
     }
     if (cfg.sam2_model != null) {
       this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
+    }
+    if (cfg.ground_plane_enabled != null && this._inputs.ground_plane_enabled) {
+      this._inputs.ground_plane_enabled.checked = cfg.ground_plane_enabled !== false;
     }
     if (cfg.texture_view_assign_mode != null) {
       this._setSelectValue(this._inputs.texture_view_assign_mode, String(cfg.texture_view_assign_mode));

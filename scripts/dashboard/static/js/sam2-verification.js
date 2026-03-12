@@ -1,6 +1,7 @@
 /**
  * SAM2 verification strip — shows 10 evenly-spaced composite frames
  * after mask propagation, with approve/redo buttons.
+ * Supports dual mask display (object + ground).
  */
 
 export class SAM2Verification {
@@ -17,8 +18,9 @@ export class SAM2Verification {
   /**
    * Show the verification strip with 10 evenly-spaced frames.
    * @param {number} totalFrames - Total number of frames in the video
+   * @param {boolean} hasGround - Whether ground masks exist
    */
-  show(totalFrames) {
+  show(totalFrames, hasGround = false) {
     const indices = this._pickIndices(totalFrames, 10);
     this._strip.innerHTML = '';
 
@@ -31,10 +33,21 @@ export class SAM2Verification {
       img.alt = `Frame ${idx}`;
       img.loading = 'lazy';
 
+      frame.appendChild(img);
+
+      // If ground masks exist, show a second row with ground overlay
+      if (hasGround) {
+        const groundImg = document.createElement('img');
+        groundImg.src = `/api/verification/ground-frame/${idx}?t=${Date.now()}`;
+        groundImg.alt = `Ground ${idx}`;
+        groundImg.loading = 'lazy';
+        groundImg.className = 'verification-ground-img';
+        frame.appendChild(groundImg);
+      }
+
       const label = document.createElement('span');
       label.textContent = `#${idx}`;
 
-      frame.appendChild(img);
       frame.appendChild(label);
       this._strip.appendChild(frame);
     }

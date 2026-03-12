@@ -702,6 +702,37 @@ body[data-view="overview"] .header-subtitle { display: none; }
   border-top: 1px solid var(--border);
 }
 
+#sam2-mode-toggle {
+  display: flex;
+  gap: 2px;
+  margin-right: 4px;
+}
+#sam2-mode-toggle .btn-small {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 4px;
+  opacity: 0.6;
+  transition: opacity 0.15s, background 0.15s;
+}
+#sam2-mode-toggle .btn-small.active {
+  opacity: 1;
+  color: #fff;
+}
+#sam2-mode-object.active { background: var(--accent); }
+#sam2-mode-ground.active { background: #e67e22; }
+
+#sam2-skip-ground {
+  background: #e67e22;
+  color: #fff;
+  border: none;
+}
+
+.verification-ground-img {
+  max-height: 50px;
+  border-top: 1px solid var(--border);
+  opacity: 0.85;
+}
+
 #sam2-click-info {
   flex: 1;
   font-size: 12px;

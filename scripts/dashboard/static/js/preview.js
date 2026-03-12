@@ -95,6 +95,14 @@ export class PreviewPanel {
       helper: null,        // THREE.LineSegments (OBB wireframe)
       obbData: null,       // { center, extent, rotation, adjustedCenter } from API
     };
+    this._groundPlane = {
+      meshByStage: {},   // stageNum -> THREE.Mesh
+      data: null,        // parsed ground_plane.json
+      visible: true,
+    };
+    this._sectionLoop = {
+      group: null,       // THREE.Group added to stage 7 scene
+    };
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -127,6 +135,10 @@ export class PreviewPanel {
 
   clearFromStage(startStage = 1) {
     const start = Math.max(1, Math.min(8, Number(startStage) || 1));
+
+    if (start <= 3) {
+      this._groundPlane.data = null;
+    }
 
     if (start <= 1) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -363,11 +375,15 @@ export class PreviewPanel {
   _clearStageScene(stageNum) {
     const stage = this._stages[stageNum];
     if (!stage) return;
+    if (stageNum >= 4) {
+      this._removeGroundPlane(stageNum);
+    }
     if (stageNum === 6) {
       this.clearCropBbox();
     }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
+      this._clearSectionLoop();
     }
     if (stage.currentObject) {
       this._disposeObject(stage.currentObject);
@@ -1229,7 +1245,7 @@ export class PreviewPanel {
 
     const ext = file.split('.').pop().toLowerCase();
     const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
-    const stripVertexColors = opts.stripVertexColors ?? isFirstMeshPreview;
+    const stripVertexColors = opts.stripVertexColors ?? (isFirstMeshPreview && stageNum !== 7);
     const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
     let loaded = await this._loadPreviewAssetForStage(stageNum, file, {
       ext,
@@ -1246,8 +1262,176 @@ export class PreviewPanel {
         enableShadows: enableShadows === true,
       });
     }
+    if (loaded && stageNum >= 4) {
+      this.showGroundPlane(stageNum).catch(() => {});
+    }
+    if (loaded && stageNum === 7) {
+      this._showSectionLoop().catch(() => {});
+    }
     if (empty) empty.classList.toggle('hidden', loaded);
     return loaded;
+  }
+
+  async showGroundPlane(stageNum) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
+
+    if (!this._groundPlane.data) {
+      try {
+        const resp = await fetch(`/api/preview/file/ground_plane.json?_t=${Date.now()}`);
+        if (!resp.ok) return;
+        this._groundPlane.data = await resp.json();
+      } catch { return; }
+    }
+
+    this._createGroundPlaneMesh(stageNum);
+  }
+
+  _createGroundPlaneMesh(stageNum) {
+    const stage = this._stages[stageNum];
+    const data = this._groundPlane.data;
+    if (!stage || !data || !THREE) return;
+
+    // Remove existing mesh for this stage if any
+    this._removeGroundPlane(stageNum);
+
+    const extent = data.extent || [1, 1, 1];
+    const planeSize = Math.max(...extent) * 1.5;
+
+    const geometry = new THREE.PlaneGeometry(planeSize, planeSize);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x2ecc71,
+      transparent: true,
+      opacity: 0.25,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+
+    // Orient plane: rotate from default Z-up to match the ground normal
+    const normal = data.normal || [0, 0, 1];
+    const from = new THREE.Vector3(0, 0, 1);
+    const to = new THREE.Vector3(normal[0], normal[1], normal[2]).normalize();
+    const quat = new THREE.Quaternion().setFromUnitVectors(from, to);
+    mesh.quaternion.copy(quat);
+
+    // Position: project the model center (origin in display space) onto the
+    // ground plane so the plane always appears directly under the model,
+    // regardless of how far the ground centroid is from the object.
+    const offset = stage?.centerOffset;
+    if (offset) {
+      const nx = normal[0], ny = normal[1], nz = normal[2];
+      const d = Number(data.d) || 0;
+      // Plane in display coords: n·p + (n·offset + d) = 0
+      const dAdj = nx * offset.x + ny * offset.y + nz * offset.z + d;
+      // Closest point on plane to origin: -dAdj * n  (n is unit length)
+      mesh.position.set(-dAdj * nx, -dAdj * ny, -dAdj * nz);
+    } else {
+      // No centering offset — fall back to raw ground center
+      const c = data.center || [0, 0, 0];
+      mesh.position.set(c[0], c[1], c[2]);
+    }
+
+    mesh.renderOrder = -1;
+    mesh.visible = this._groundPlane.visible;
+    stage.sceneRoot.add(mesh);
+    this._groundPlane.meshByStage[stageNum] = mesh;
+  }
+
+  _removeGroundPlane(stageNum) {
+    const mesh = this._groundPlane.meshByStage[stageNum];
+    if (!mesh) return;
+    mesh.parent?.remove(mesh);
+    mesh.geometry?.dispose();
+    mesh.material?.dispose();
+    delete this._groundPlane.meshByStage[stageNum];
+  }
+
+  toggleGroundPlane(visible) {
+    this._groundPlane.visible = visible;
+    for (const mesh of Object.values(this._groundPlane.meshByStage)) {
+      if (mesh) mesh.visible = visible;
+    }
+  }
+
+  _clearSectionLoop() {
+    const grp = this._sectionLoop.group;
+    if (!grp) return;
+    grp.traverse((node) => {
+      if (node?.geometry?.dispose) node.geometry.dispose();
+      if (node?.material?.dispose) node.material.dispose();
+    });
+    grp.parent?.remove(grp);
+    this._sectionLoop.group = null;
+  }
+
+  async _showSectionLoop() {
+    this._clearSectionLoop();
+    const stage = this._stages[7];
+    if (!stage) return;
+
+    let data;
+    try {
+      const resp = await fetch(
+        `/api/preview/file/contact_hole_repair/section_loop.json?_t=${Date.now()}`
+      );
+      if (!resp.ok) return;
+      data = await resp.json();
+    } catch { return; }
+
+    const samples = data.samples;
+    if (!samples || !samples.length) return;
+
+    const selectedShift = data.selected_shift;
+    const offset = stage.centerOffset;
+    const group = new THREE.Group();
+
+    for (const sample of samples) {
+      const loops = sample.loops;
+      if (!loops || !loops.length) continue;
+
+      const isSelected = Math.abs(sample.shift - selectedShift) < 1e-6;
+      // Below selected = removed region (cyan); at selected = yellow;
+      // above selected = kept region (dim green)
+      let color, opacity;
+      if (isSelected) {
+        color = 0xffee00; opacity = 1.0;
+      } else if (sample.shift < selectedShift) {
+        color = 0x00ddff; opacity = 0.6;
+      } else {
+        color = 0x44cc44; opacity = 0.3;
+      }
+
+      for (let li = 0; li < loops.length; li++) {
+        const pts = loops[li].points;
+        if (!pts || pts.length < 2) continue;
+
+        const positions = new Float32Array(pts.length * 3);
+        for (let i = 0; i < pts.length; i++) {
+          positions[i * 3]     = pts[i][0] - (offset?.x ?? 0);
+          positions[i * 3 + 1] = pts[i][1] - (offset?.y ?? 0);
+          positions[i * 3 + 2] = pts[i][2] - (offset?.z ?? 0);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        // Secondary loops within same sample are dimmer
+        const loopOpacity = li === 0 ? opacity : opacity * 0.4;
+        const mat = new THREE.LineBasicMaterial({
+          color,
+          linewidth: 2,
+          depthTest: false,
+          transparent: true,
+          opacity: loopOpacity,
+        });
+        const line = new THREE.LineLoop(geo, mat);
+        line.renderOrder = 999;
+        group.add(line);
+      }
+    }
+
+    stage.sceneRoot.add(group);
+    this._sectionLoop.group = group;
   }
 
   async _loadPreviewAssetForStage(stageNum, file, opts = {}) {
@@ -1278,6 +1462,7 @@ export class PreviewPanel {
     }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
+      this._clearSectionLoop();
     }
 
     // Remove previous object
