@@ -2066,6 +2066,73 @@ def _apply_quality_boost_detail_refinement(
     return refined, int(boundary.sum()), sampled_detail_pixels
 
 
+def _identify_cap_texels(
+    vert_colors: np.ndarray,
+    vmapping: np.ndarray,
+    new_faces: np.ndarray,
+    fids: np.ndarray,
+    has_color: np.ndarray,
+) -> np.ndarray | None:
+    """Return indices into texel arrays for cap texels missing color, or None."""
+    orange = np.array([1.0, 0.55, 0.0])
+    orig_colors = vert_colors[vmapping]
+    is_orange = np.linalg.norm(orig_colors - orange, axis=1) < 0.05
+    cap_face = (
+        is_orange[new_faces[:, 0]]
+        & is_orange[new_faces[:, 1]]
+        & is_orange[new_faces[:, 2]]
+    )
+    cap_missing = cap_face[fids] & ~has_color
+    idx = np.where(cap_missing)[0]
+    return idx if idx.size > 0 else None
+
+
+def _fill_cap_region(
+    texture: np.ndarray,
+    cap_mask: np.ndarray,
+    valid_mask: np.ndarray,
+    max_iters: int = 300,
+) -> int:
+    """Fill cap region by iterative neighbor-averaging. Returns texels filled."""
+    cy, cx = np.where(cap_mask)
+    margin = 10
+    y0 = max(0, int(cy.min()) - margin)
+    y1 = min(texture.shape[0], int(cy.max()) + margin + 1)
+    x0 = max(0, int(cx.min()) - margin)
+    x1 = min(texture.shape[1], int(cx.max()) + margin + 1)
+
+    tex_crop = texture[y0:y1, x0:x1].copy()
+    cap_crop = cap_mask[y0:y1, x0:x1]
+    val_crop = valid_mask[y0:y1, x0:x1].copy()
+
+    kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.float32)
+    filled = 0
+
+    for _ in range(max_iters):
+        empty = cap_crop & ~val_crop
+        if not np.any(empty):
+            break
+        nc = cv2.filter2D(
+            val_crop.astype(np.float32), -1, kernel,
+            borderType=cv2.BORDER_CONSTANT,
+        )
+        newly = empty & (nc > 0)
+        if not np.any(newly):
+            break
+        for c in range(3):
+            ns = cv2.filter2D(
+                tex_crop[:, :, c], -1, kernel,
+                borderType=cv2.BORDER_CONSTANT,
+            )
+            tex_crop[:, :, c][newly] = ns[newly] / nc[newly]
+        val_crop[newly] = True
+        filled += int(newly.sum())
+
+    texture[y0:y1, x0:x1] = tex_crop
+    valid_mask[y0:y1, x0:x1] = val_crop
+    return filled
+
+
 def bake_texture(
     mesh_ply: str,
     poses_path: str,
@@ -2135,6 +2202,15 @@ def bake_texture(
     f = ply["face"]
     faces = np.vstack(f["vertex_indices"]).astype(np.int32)
     print(f"  {len(vertices)} verts, {len(faces)} faces")
+
+    # Try to read vertex colors (used to detect cap faces from repair stage)
+    vert_colors = None
+    try:
+        vert_colors = np.column_stack(
+            [v["red"], v["green"], v["blue"]]
+        ).astype(np.float64) / 255.0
+    except (ValueError, KeyError):
+        pass
 
     # --- Load camera data ---
     poses, pose_frame_indices = _load_poses(poses_path)
@@ -2603,6 +2679,30 @@ def bake_texture(
         _emit_progress(progress_cb, 92.0, "Fallback complete")
     elif missing.size > 0:
         print(f"  Skipping fallback: only {missing.size} uncovered texels (<0.1%)")
+
+    # --- Pass 3.5: Cap region infill ---
+    if vert_colors is not None:
+        cap_missing_idx = _identify_cap_texels(
+            vert_colors, vmapping, new_faces, fids, has_color
+        )
+        if cap_missing_idx is not None:
+            cap_mask = np.zeros((tex_res, tex_res), dtype=bool)
+            cap_mask[ys[cap_missing_idx], xs[cap_missing_idx]] = True
+            valid_mask = np.zeros((tex_res, tex_res), dtype=bool)
+            valid_mask[ys[has_color], xs[has_color]] = True
+
+            filled = _fill_cap_region(texture, cap_mask, valid_mask)
+
+            for i in cap_missing_idx:
+                if valid_mask[ys[i], xs[i]]:
+                    has_color[i] = True
+            remaining = int((~has_color).sum())
+            print(
+                f"  Cap infill: filled={filled}/{len(cap_missing_idx)}, "
+                f"remaining={remaining}"
+            )
+        else:
+            print("  Cap region: all cap texels already covered (or no cap faces)")
 
     texture = texture.astype(np.float32)
 
