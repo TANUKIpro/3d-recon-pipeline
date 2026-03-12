@@ -19,7 +19,9 @@ from scripts.dashboard.app import (
     mesh_repair_candidates,
     pipeline_cancel,
     pipeline_confirm_next,
+    pipeline_video_info,
     preview_file,
+    preview_object_file,
     pipeline_status,
     sam2_approve,
     sam2_click,
@@ -463,6 +465,78 @@ class TestPreviewFileEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers.get("cache-control"), "no-store, max-age=0")
         self.assertEqual(response.headers.get("pragma"), "no-cache")
         self.assertEqual(response.headers.get("expires"), "0")
+
+    async def test_path_traversal_returns_403(self) -> None:
+        response = await preview_file("../../etc/passwd")
+        self.assertEqual(response.status_code, 403)
+        payload = _json_payload(response)
+        self.assertEqual(payload["error"], "Access denied")
+
+    async def test_dotdot_in_middle_returns_403(self) -> None:
+        # Create a subdir so the prefix portion looks plausible
+        Path(session.config.output_dir, "subdir").mkdir()
+        response = await preview_file("subdir/../../outside")
+        self.assertEqual(response.status_code, 403)
+        payload = _json_payload(response)
+        self.assertEqual(payload["error"], "Access denied")
+
+
+# ── Preview object-file path escape (8.5.4) ──────────────────────
+
+
+class TestPreviewObjectFilePathEscape(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch(
+            "scripts.dashboard.app.OUTPUT_DIR", self._tmp.name
+        )
+        self._patcher.start()
+        # Create the object directory so the endpoint doesn't 404 early
+        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        obj_dir.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmp.cleanup()
+
+    async def test_path_escape_returns_403(self) -> None:
+        response = await preview_object_file("test-obj", "../../etc/passwd")
+        self.assertEqual(response.status_code, 403)
+        payload = _json_payload(response)
+        self.assertEqual(payload["error"], "Access denied")
+
+    async def test_dotdot_path_returns_403(self) -> None:
+        response = await preview_object_file("test-obj", "../outside")
+        self.assertEqual(response.status_code, 403)
+        payload = _json_payload(response)
+        self.assertEqual(payload["error"], "Access denied")
+
+
+# ── Pipeline video-info path security (8.1.20) ───────────────────
+
+
+class TestPipelineVideoInfoPathSecurity(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch(
+            "scripts.dashboard.app.INPUT_DIR", self._tmp.name
+        )
+        self._patcher.start()
+        # Create a file *outside* INPUT_DIR to confirm 403, not 404
+        self._outside_tmp = tempfile.TemporaryDirectory()
+        self._outside_file = Path(self._outside_tmp.name) / "evil.mp4"
+        self._outside_file.write_bytes(b"\x00")
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmp.cleanup()
+        self._outside_tmp.cleanup()
+
+    async def test_path_outside_input_dir_returns_403(self) -> None:
+        response = await pipeline_video_info(str(self._outside_file))
+        self.assertEqual(response.status_code, 403)
+        payload = _json_payload(response)
+        self.assertEqual(payload["error"], "Access denied")
 
 
 if __name__ == "__main__":
