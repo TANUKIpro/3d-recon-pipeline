@@ -100,6 +100,9 @@ export class PreviewPanel {
       data: null,        // parsed ground_plane.json
       visible: true,
     };
+    this._sectionLoop = {
+      group: null,       // THREE.Group added to stage 7 scene
+    };
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -380,6 +383,7 @@ export class PreviewPanel {
     }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
+      this._clearSectionLoop();
     }
     if (stage.currentObject) {
       this._disposeObject(stage.currentObject);
@@ -1241,7 +1245,7 @@ export class PreviewPanel {
 
     const ext = file.split('.').pop().toLowerCase();
     const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
-    const stripVertexColors = opts.stripVertexColors ?? isFirstMeshPreview;
+    const stripVertexColors = opts.stripVertexColors ?? (isFirstMeshPreview && stageNum !== 7);
     const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
     let loaded = await this._loadPreviewAssetForStage(stageNum, file, {
       ext,
@@ -1260,6 +1264,9 @@ export class PreviewPanel {
     }
     if (loaded && stageNum >= 4) {
       this.showGroundPlane(stageNum).catch(() => {});
+    }
+    if (loaded && stageNum === 7) {
+      this._showSectionLoop().catch(() => {});
     }
     if (empty) empty.classList.toggle('hidden', loaded);
     return loaded;
@@ -1347,6 +1354,86 @@ export class PreviewPanel {
     }
   }
 
+  _clearSectionLoop() {
+    const grp = this._sectionLoop.group;
+    if (!grp) return;
+    grp.traverse((node) => {
+      if (node?.geometry?.dispose) node.geometry.dispose();
+      if (node?.material?.dispose) node.material.dispose();
+    });
+    grp.parent?.remove(grp);
+    this._sectionLoop.group = null;
+  }
+
+  async _showSectionLoop() {
+    this._clearSectionLoop();
+    const stage = this._stages[7];
+    if (!stage) return;
+
+    let data;
+    try {
+      const resp = await fetch(
+        `/api/preview/file/contact_hole_repair/section_loop.json?_t=${Date.now()}`
+      );
+      if (!resp.ok) return;
+      data = await resp.json();
+    } catch { return; }
+
+    const samples = data.samples;
+    if (!samples || !samples.length) return;
+
+    const selectedShift = data.selected_shift;
+    const offset = stage.centerOffset;
+    const group = new THREE.Group();
+
+    for (const sample of samples) {
+      const loops = sample.loops;
+      if (!loops || !loops.length) continue;
+
+      const isSelected = Math.abs(sample.shift - selectedShift) < 1e-6;
+      // Below selected = removed region (cyan); at selected = yellow;
+      // above selected = kept region (dim green)
+      let color, opacity;
+      if (isSelected) {
+        color = 0xffee00; opacity = 1.0;
+      } else if (sample.shift < selectedShift) {
+        color = 0x00ddff; opacity = 0.6;
+      } else {
+        color = 0x44cc44; opacity = 0.3;
+      }
+
+      for (let li = 0; li < loops.length; li++) {
+        const pts = loops[li].points;
+        if (!pts || pts.length < 2) continue;
+
+        const positions = new Float32Array(pts.length * 3);
+        for (let i = 0; i < pts.length; i++) {
+          positions[i * 3]     = pts[i][0] - (offset?.x ?? 0);
+          positions[i * 3 + 1] = pts[i][1] - (offset?.y ?? 0);
+          positions[i * 3 + 2] = pts[i][2] - (offset?.z ?? 0);
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        // Secondary loops within same sample are dimmer
+        const loopOpacity = li === 0 ? opacity : opacity * 0.4;
+        const mat = new THREE.LineBasicMaterial({
+          color,
+          linewidth: 2,
+          depthTest: false,
+          transparent: true,
+          opacity: loopOpacity,
+        });
+        const line = new THREE.LineLoop(geo, mat);
+        line.renderOrder = 999;
+        group.add(line);
+      }
+    }
+
+    stage.sceneRoot.add(group);
+    this._sectionLoop.group = group;
+  }
+
   async _loadPreviewAssetForStage(stageNum, file, opts = {}) {
     const ext = String(opts.ext || file.split('.').pop() || '').toLowerCase();
     if (ext === 'ply') {
@@ -1375,6 +1462,7 @@ export class PreviewPanel {
     }
     if (stageNum === 7) {
       this._clearMeshRepairOverlay();
+      this._clearSectionLoop();
     }
 
     // Remove previous object

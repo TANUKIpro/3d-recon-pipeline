@@ -995,7 +995,16 @@ def _extract_plane_intersection_segments(
         return point_idx
 
     segments: list[tuple[int, int]] = []
-    for tri in np.asarray(faces, dtype=np.int64):
+    faces_i64 = np.asarray(faces, dtype=np.int64)
+    # Vectorized pre-filter: only iterate faces that straddle the plane
+    d0 = signed_dist[faces_i64[:, 0]]
+    d1 = signed_dist[faces_i64[:, 1]]
+    d2 = signed_dist[faces_i64[:, 2]]
+    all_above = (d0 > eps) & (d1 > eps) & (d2 > eps)
+    all_below = (d0 < -eps) & (d1 < -eps) & (d2 < -eps)
+    straddle_mask = ~all_above & ~all_below
+    straddle_faces = faces_i64[straddle_mask]
+    for tri in straddle_faces:
         i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
         tri_points: list[int] = []
         for a, b in ((i0, i1), (i1, i2), (i2, i0)):
@@ -1203,22 +1212,27 @@ def _clip_mesh_at_plane(
 
     kept_faces: list[list[int]] = []
 
-    for tri in faces:
-        i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
-        a0, a1, a2 = above[i0], above[i1], above[i2]
-        n_above = int(a0) + int(a1) + int(a2)
+    # Vectorized face classification: bulk-keep all-above faces
+    a0 = above[faces[:, 0]]
+    a1 = above[faces[:, 1]]
+    a2 = above[faces[:, 2]]
+    n_above_arr = a0.astype(np.int8) + a1.astype(np.int8) + a2.astype(np.int8)
+    all_above_faces = faces[n_above_arr == 3]
+    if all_above_faces.shape[0] > 0:
+        kept_faces.extend(all_above_faces.tolist())
 
-        if n_above == 3:
-            # All above: keep as-is
-            kept_faces.append([i0, i1, i2])
-        elif n_above == 0:
-            # All below: discard
-            continue
-        elif n_above == 2:
+    # Only Python-loop over straddling faces (n_above == 1 or 2)
+    straddle_mask = (n_above_arr > 0) & (n_above_arr < 3)
+    for tri in faces[straddle_mask]:
+        i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
+        a0_t, a1_t, a2_t = above[i0], above[i1], above[i2]
+        n_above = int(a0_t) + int(a1_t) + int(a2_t)
+
+        if n_above == 2:
             # Two above, one below: produce two triangles
-            if not a0:
+            if not a0_t:
                 below_idx, above1, above2 = i0, i1, i2
-            elif not a1:
+            elif not a1_t:
                 below_idx, above1, above2 = i1, i2, i0
             else:
                 below_idx, above1, above2 = i2, i0, i1
@@ -1228,9 +1242,9 @@ def _clip_mesh_at_plane(
             kept_faces.append([above2, m2, m1])
         else:
             # One above, two below: produce one triangle
-            if a0:
+            if a0_t:
                 above_idx, below1, below2 = i0, i1, i2
-            elif a1:
+            elif a1_t:
                 above_idx, below1, below2 = i1, i2, i0
             else:
                 above_idx, below1, below2 = i2, i0, i1
@@ -1415,112 +1429,79 @@ def _find_ground_plane_shift(
     *,
     tolerance_ratio: float = 0.01,
 ) -> GroundPlaneSearchResult:
+    """Find the lowest shift where a closed section loop of sufficient area exists.
+
+    Uses a two-pass coarse grid scan:
+
+    1. **Pass 1** — scan all probes to find the maximum section loop area
+       across all shifts (``max_area``).
+    2. **Pass 2** — scan bottom-up and select the first (lowest) shift whose
+       largest closed section loop area ≥ ``max(min_section_area, max_area * 0.10)``.
+
+    The relative threshold (10 % of the observed maximum) prevents tiny
+    spurious loops near the mesh extremity from being selected as the bottom,
+    while still accepting genuinely narrow footprints (vases, tapered bases).
+    """
     plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     dists = vertices @ plane_normal + plane_d
     dist_min = float(dists.min())
-    dist_max = float(dists.max())
     bbox_diag = max(float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))), 1e-6)
     interval_pad = max(1e-6, 1e-4 * bbox_diag)
     min_section_area = _ground_section_min_area(vertices, plane_normal)
     start_shift = float(np.quantile(dists, _GROUND_SECTION_START_QUANTILE))
 
-    boundaries = [min(0.0, dist_min) - interval_pad]
-    boundaries.extend(float(v) for v in np.unique(dists))
-    boundaries.append(float(dist_max + interval_pad))
+    _N_PROBES = 64
+    _RELATIVE_AREA_RATIO = 0.10  # 10 % of max observed section area
 
-    scanned_count = 0
-    first_valid_shift: float | None = None
-    selected_shift: float | None = None
-    selected_loop_area = 0.0
-    probe_cache: dict[float, GroundPlaneProbe] = {}
-
-    def _probe(shift: float) -> GroundPlaneProbe:
-        nonlocal scanned_count
-        key = float(shift)
-        cached = probe_cache.get(key)
-        if cached is not None:
-            return cached
-        probe = _probe_ground_plane_shift(
-            vertices,
-            faces,
-            plane_normal,
-            plane_d,
-            key,
-            tolerance_ratio=tolerance_ratio,
-            min_section_area=min_section_area,
+    # Coarse evenly-spaced grid
+    low_end = dist_min + interval_pad
+    high_end = start_shift
+    if low_end >= high_end:
+        return GroundPlaneSearchResult(
+            selected_shift=None,
+            scanned_count=0,
+            first_valid_shift=None,
+            lowest_valid_shift=None,
+            selected_loop_area=0.0,
         )
-        probe_cache[key] = probe
-        scanned_count += 1
-        return probe
 
-    interval_candidates: list[tuple[int, float, float, float, float, float]] = []
-    for idx in range(len(boundaries) - 1):
-        low = float(boundaries[idx])
-        high = float(boundaries[idx + 1])
-        if high - low <= 1e-12:
-            continue
-        margin = min(interval_pad, 0.25 * (high - low))
-        if margin <= 0.0 or low + margin >= high:
-            lower_shift = low + 0.5 * (high - low)
-            upper_shift = lower_shift
+    shifts = np.linspace(low_end, high_end, _N_PROBES)
+
+    # --- Pass 1: collect per-shift best loop area to determine max_area ---
+    probe_results: list[tuple[float, float]] = []  # (shift, best_loop_area)
+    for shift_val in shifts:
+        shift_f = float(shift_val)
+        actual_d = plane_d - shift_f
+        loops = _extract_closed_section_loops(vertices, faces, plane_normal, actual_d)
+        if loops:
+            best_area = float(max(loops, key=lambda l: l.area).area)
         else:
-            lower_shift = low + margin
-            upper_shift = high - margin
-            if upper_shift <= lower_shift:
-                lower_shift = low + 0.5 * (high - low)
-                upper_shift = lower_shift
-        sample_shift = 0.5 * (lower_shift + upper_shift)
-        interval_candidates.append((idx, low, high, lower_shift, sample_shift, upper_shift))
+            best_area = 0.0
+        probe_results.append((shift_f, best_area))
 
-    if not interval_candidates:
-        return GroundPlaneSearchResult(
-            selected_shift=None,
-            scanned_count=scanned_count,
-            first_valid_shift=None,
-            lowest_valid_shift=None,
-            selected_loop_area=0.0,
-        )
+    max_area = max((a for _, a in probe_results), default=0.0)
+    effective_min = max(min_section_area, max_area * _RELATIVE_AREA_RATIO)
 
-    start_idx = 0
-    for pos, (_interval_idx, low, high, _lower_shift, _sample_shift, _upper_shift) in enumerate(interval_candidates):
-        if low <= start_shift <= high:
-            start_idx = pos
-            break
-        if start_shift > high:
-            start_idx = pos
-
-    band_active = False
-
-    for pos in range(start_idx, -1, -1):
-        _interval_idx, _low, _high, lower_shift, sample_shift, _upper_shift = interval_candidates[pos]
-        sample_probe = _probe(sample_shift)
-        lower_probe = _probe(lower_shift)
-        stable = sample_probe.valid and lower_probe.valid
-        if stable:
-            if first_valid_shift is None:
-                first_valid_shift = float(sample_shift)
-            band_active = True
-            selected_shift = float(lower_shift)
-            selected_loop_area = float(lower_probe.selected_loop_area)
-            continue
-        if band_active:
-            band_active = False
-
-    if selected_shift is None:
-        return GroundPlaneSearchResult(
-            selected_shift=None,
-            scanned_count=scanned_count,
-            first_valid_shift=None,
-            lowest_valid_shift=None,
-            selected_loop_area=0.0,
-        )
+    # --- Pass 2: bottom-up selection using the effective threshold ---
+    first_valid_shift: float | None = None
+    for shift_f, best_area in probe_results:
+        if best_area > 0.0 and first_valid_shift is None:
+            first_valid_shift = shift_f
+        if best_area >= effective_min:
+            return GroundPlaneSearchResult(
+                selected_shift=shift_f,
+                scanned_count=len(probe_results),
+                first_valid_shift=first_valid_shift,
+                lowest_valid_shift=shift_f,
+                selected_loop_area=best_area,
+            )
 
     return GroundPlaneSearchResult(
-        selected_shift=selected_shift,
-        scanned_count=scanned_count,
+        selected_shift=None,
+        scanned_count=len(probe_results),
         first_valid_shift=first_valid_shift,
-        lowest_valid_shift=selected_shift,
-        selected_loop_area=float(selected_loop_area),
+        lowest_valid_shift=None,
+        selected_loop_area=0.0,
     )
 
 
@@ -1742,10 +1723,20 @@ def _prepare_repaired_mesh(
     repaired_faces: np.ndarray,
     *,
     remove_non_manifold: bool = True,
+    cap_vertex_ids: set[int] | None = None,
 ) -> tuple[o3d.geometry.TriangleMesh, np.ndarray, np.ndarray]:
     repaired_mesh = o3d.geometry.TriangleMesh()
     repaired_mesh.vertices = o3d.utility.Vector3dVector(repaired_vertices)
     repaired_mesh.triangles = o3d.utility.Vector3iVector(repaired_faces.astype(np.int32))
+
+    if cap_vertex_ids:
+        n = len(repaired_vertices)
+        colors = np.full((n, 3), 0.82, dtype=np.float64)  # light grey default
+        cap_idx = np.array(sorted(cap_vertex_ids), dtype=np.int64)
+        cap_idx = cap_idx[cap_idx < n]
+        colors[cap_idx] = [1.0, 0.55, 0.0]  # orange highlight for cap
+        repaired_mesh.vertex_colors = o3d.utility.Vector3dVector(colors)
+
     repaired_mesh.remove_degenerate_triangles()
     repaired_mesh.remove_duplicated_triangles()
     repaired_mesh.remove_duplicated_vertices()
@@ -1852,6 +1843,7 @@ def _finalize_ground_plane_outputs(
             candidate_vertices,
             capped_faces,
             remove_non_manifold=remove_non_manifold,
+            cap_vertex_ids=cap_vertex_ids,
         )
         validation = _validate_ground_plane_output(
             final_vertices,
@@ -1977,19 +1969,38 @@ def run_contact_hole_repair(
                 "was present at the chosen plane"
             )
         selected_section_loop = max(section_loops, key=lambda loop: loop.area)
-        final_probe = _probe_ground_plane_shift(vertices, faces, gp_normal, gp_d, selected_shift)
-        if not final_probe.valid:
-            raise ValueError(
-                "Ground-plane repair selected a clip shift but the matching section loop "
-                "could not be capped consistently"
-            )
         print(
-            "  section-loop probe: "
-            f"count={final_probe.section_loop_count}, "
-            f"matched_area={final_probe.matched_boundary_area_before:.6f}"
-            f"->{final_probe.matched_boundary_area_after:.6f}, "
-            f"cap_added={final_probe.cap_added}"
+            f"  section loops at clip plane: {len(section_loops)}, "
+            f"selected area: {selected_section_loop.area:.6f}"
         )
+
+        # Save section loops across the full scan range for dashboard debug
+        _section_loop_path = repair_dir / "section_loop.json"
+        _sl_dists = vertices @ gp_normal + gp_d
+        _sl_dist_min = float(_sl_dists.min())
+        _sl_start = float(np.quantile(_sl_dists, _GROUND_SECTION_START_QUANTILE))
+        _sl_bbox_diag = max(float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))), 1e-6)
+        _sl_pad = max(1e-6, 1e-4 * _sl_bbox_diag)
+        _sl_sample_shifts = np.linspace(_sl_dist_min + _sl_pad, _sl_start, 32)
+        _section_loop_data: dict = {
+            "selected_shift": float(selected_shift),
+            "plane_normal": gp_normal.tolist(),
+            "plane_d": float(gp_d),
+            "samples": [],
+        }
+        for _sh in _sl_sample_shifts:
+            _sh_f = float(_sh)
+            _sh_d = gp_d - _sh_f
+            _sh_loops = _extract_closed_section_loops(vertices, faces, gp_normal, _sh_d)
+            _sample: dict = {"shift": _sh_f, "loops": []}
+            for _sl in sorted(_sh_loops, key=lambda l: l.area, reverse=True):
+                pts = _sl.points.tolist()
+                if len(pts) > 1 and pts[0] != pts[-1]:
+                    pts.append(pts[0])
+                _sample["loops"].append({"area": float(_sl.area), "points": pts})
+            _section_loop_data["samples"].append(_sample)
+        _section_loop_path.write_text(json.dumps(_section_loop_data))
+        print(f"  section loop debug: {_section_loop_path} ({len(_sl_sample_shifts)} samples)")
 
         _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
         _check_cancel(cancel_cb)

@@ -460,105 +460,38 @@ class GroundPlaneShiftSearchTests(unittest.TestCase):
         assert scaled_result.selected_shift is not None
         self.assertAlmostEqual(unit_result.selected_shift, scaled_result.selected_shift, places=6)
 
-    def test_search_requires_stable_second_valid_probe(self) -> None:
+    def test_search_selects_lowest_closed_section_loop(self) -> None:
+        """Bottom-up scan selects the first shift with a closed section loop."""
         vertices, faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0)
         plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-        def _fake_probe(*args, **kwargs):
-            shift = float(args[4])
-            if 0.4 < shift < 0.6:
-                return GroundPlaneProbe(
-                    shift=shift,
-                    section_loop_count=1,
-                    selected_loop_area=1.0,
-                    matched_boundary_area_before=1.0,
-                    matched_boundary_area_after=0.0,
-                    cap_added=2,
-                    valid=True,
-                )
-            if shift > 0.9:
-                return GroundPlaneProbe(
-                    shift=shift,
-                    section_loop_count=0,
-                    selected_loop_area=0.0,
-                    matched_boundary_area_before=0.0,
-                    matched_boundary_area_after=0.0,
-                    cap_added=0,
-                    valid=False,
-                )
-            return GroundPlaneProbe(
-                shift=shift,
-                section_loop_count=0,
-                selected_loop_area=0.0,
-                matched_boundary_area_before=0.0,
-                matched_boundary_area_after=0.0,
-                cap_added=0,
-                valid=False,
-            )
+        result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
 
-        with mock.patch("stage_contact_hole_repair._probe_ground_plane_shift", side_effect=_fake_probe):
-            result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
+        self.assertIsNotNone(result.selected_shift)
+        assert result.selected_shift is not None
+        # Should select the lowest shift where a closed loop exists (near bottom_y)
+        self.assertGreater(result.selected_shift, 0.0498)
+        self.assertLess(result.selected_shift, 0.10)
+        self.assertGreater(result.selected_loop_area, 0.9)
 
-        self.assertIsNone(result.selected_shift)
+    def test_search_picks_lowest_among_two_disjoint_boxes(self) -> None:
+        """When two separate boxes exist, the lowest section loop wins."""
+        low_verts, low_faces = self._make_open_bottom_box(bottom_y=0.1, top_y=0.4)
+        high_verts, high_faces = self._make_open_bottom_box(bottom_y=0.6, top_y=0.9, half=0.3)
+        high_verts = high_verts + np.array([2.0, 0.0, 0.0], dtype=np.float64)
+        high_faces = high_faces + low_verts.shape[0]
 
-    def test_search_prefers_lowest_stable_band_below_start(self) -> None:
-        vertices = np.array(
-            [
-                [0.0, 0.05, 0.0],
-                [0.0, 0.20, 0.0],
-                [0.0, 0.35, 0.0],
-                [0.0, 0.55, 0.0],
-                [0.0, 0.80, 0.0],
-                [0.0, 1.00, 0.0],
-            ],
-            dtype=np.float64,
-        )
-        faces = np.array([[0, 1, 2]], dtype=np.int64)
+        vertices = np.vstack((low_verts, high_verts))
+        faces = np.vstack((low_faces, high_faces))
         plane_normal = np.array([0.0, 1.0, 0.0], dtype=np.float64)
 
-        def _fake_probe(*args, **kwargs):
-            shift = float(args[4])
-            if 0.54 < shift < 0.76:
-                return GroundPlaneProbe(
-                    shift=shift,
-                    section_loop_count=1,
-                    selected_loop_area=0.4,
-                    matched_boundary_area_before=0.4,
-                    matched_boundary_area_after=0.0,
-                    cap_added=2,
-                    valid=True,
-                )
-            if 0.19 < shift < 0.36:
-                return GroundPlaneProbe(
-                    shift=shift,
-                    section_loop_count=1,
-                    selected_loop_area=0.9,
-                    matched_boundary_area_before=0.9,
-                    matched_boundary_area_after=0.0,
-                    cap_added=2,
-                    valid=True,
-                )
-            return GroundPlaneProbe(
-                shift=shift,
-                section_loop_count=0,
-                selected_loop_area=0.0,
-                matched_boundary_area_before=0.0,
-                matched_boundary_area_after=0.0,
-                cap_added=0,
-                valid=False,
-            )
+        result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
 
-        with mock.patch("stage_contact_hole_repair._probe_ground_plane_shift", side_effect=_fake_probe):
-            result = _find_ground_plane_shift(vertices, faces, plane_normal, 0.0)
-
-        self.assertIsNotNone(result.first_valid_shift)
         self.assertIsNotNone(result.selected_shift)
-        assert result.first_valid_shift is not None
         assert result.selected_shift is not None
-        self.assertGreater(result.first_valid_shift, 0.6)
-        self.assertGreater(result.selected_shift, 0.2)
-        self.assertLess(result.selected_shift, 0.3)
-        self.assertAlmostEqual(result.selected_loop_area, 0.9, places=6)
+        # Should pick near the bottom of the lower box (~0.1), not the upper (~0.6)
+        self.assertGreater(result.selected_shift, 0.09)
+        self.assertLess(result.selected_shift, 0.20)
 
     def test_extract_closed_section_loops_prefers_largest_loop(self) -> None:
         small_vertices, small_faces = self._make_open_bottom_box(bottom_y=0.05, top_y=1.0, half=0.25)
