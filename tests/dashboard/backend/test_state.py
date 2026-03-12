@@ -104,8 +104,8 @@ class TestPipelineConfig(unittest.TestCase):
         self.assertEqual(cfg.video_path, "")
         self.assertEqual(cfg.output_dir, "/data/output")
         self.assertEqual(cfg.object_name, "")
-        self.assertEqual(cfg.texture_view_assign_mode, "legacy")
-        self.assertFalse(cfg.texture_quality_boost)
+        self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
+        self.assertTrue(cfg.texture_quality_boost)
 
     def test_from_dict_roundtrip(self) -> None:
         original = PipelineConfig(

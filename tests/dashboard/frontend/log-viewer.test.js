@@ -239,10 +239,15 @@ describe('LogViewer', () => {
       expect(viewer._normalizeStage(3.2)).toBe(3);
     });
 
-    it('out of range (1-6) returns 1', () => {
+    it('out of range (1-8) returns 1', () => {
       expect(viewer._normalizeStage(0)).toBe(1);
-      expect(viewer._normalizeStage(7)).toBe(1);
+      expect(viewer._normalizeStage(9)).toBe(1);
       expect(viewer._normalizeStage(-1)).toBe(1);
+    });
+
+    it('stages 7 and 8 are valid', () => {
+      expect(viewer._normalizeStage(7)).toBe(7);
+      expect(viewer._normalizeStage(8)).toBe(8);
     });
   });
 });

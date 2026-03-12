@@ -75,7 +75,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_size, 0)
 
-    def test_texture_view_assign_mode_defaults_to_legacy(self) -> None:
+    def test_texture_view_assign_mode_defaults_to_region_gc(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -84,7 +84,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.texture_view_assign_mode, "legacy")
+        self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
 
     def test_texture_view_assign_mode_accepts_region_gc(self) -> None:
         cfg = build_pipeline_config(
@@ -99,7 +99,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
 
-    def test_texture_quality_boost_defaults_to_false(self) -> None:
+    def test_texture_quality_boost_defaults_to_true(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -108,7 +108,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertFalse(cfg.texture_quality_boost)
+        self.assertTrue(cfg.texture_quality_boost)
 
     def test_texture_quality_boost_accepts_true(self) -> None:
         cfg = build_pipeline_config(
@@ -132,12 +132,12 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.meshwrap_poisson_depth, 6)
+        self.assertEqual(cfg.meshwrap_poisson_depth, 8)
         self.assertEqual(cfg.meshwrap_poisson_scale, 1.18)
-        self.assertEqual(cfg.meshwrap_density_trim_q, 0.01)
+        self.assertEqual(cfg.meshwrap_density_trim_q, 0.003)
         self.assertEqual(cfg.meshwrap_target_face_ratio, 2.2)
         self.assertEqual(cfg.meshwrap_iterations, 1)
-        self.assertEqual(cfg.meshwrap_crop_scale, 1.03)
+        self.assertEqual(cfg.meshwrap_crop_scale, 1.08)
         self.assertEqual(cfg.meshwrap_sample_points, 400000)
         self.assertEqual(cfg.meshwrap_normal_radius_ratio, 0.02)
         self.assertEqual(cfg.mesh_repair_smooth_iters, 3)

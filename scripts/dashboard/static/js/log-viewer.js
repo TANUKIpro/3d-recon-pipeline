@@ -3,7 +3,7 @@
  */
 
 const STAGE_MIN = 1;
-const STAGE_MAX = 6;
+const STAGE_MAX = 8;
 const DEFAULT_STAGE = 1;
 const DEFAULT_MAX_LINES = 2000;
 const ANSI_ESCAPE_RE = /\u001b\[[0-9;?]*[ -/]*[@-~]/g;
