@@ -74,10 +74,10 @@
 - `_validate_resume_prerequisites` → `validate_resume_prerequisites`
 - `_write_object_meta` → `write_object_meta`
 
-- [ ] `object_store.py` 内の関数名からリーディング `_` を除去
-- [ ] `grep -rn "_infer_resume_stage\|_list_objects\|_list_preview_files\|_object_dir\|_prepare_object_output_dir\|_reset_outputs_from_stage\|_resolve_output_root\|_safe_json_load\|_sanitize_object_name\|_suggest_object_name\|_summarize_object\|_validate_object_name\|_validate_resume_prerequisites\|_write_object_meta" scripts/ tests/` で全参照箇所を列挙し、一括置換
-- [ ] 内部専用ヘルパー（`_utc_iso`, `_stage_completion_flags`, `_latest_update_ts`, `_objects_root` 等）は `_` のまま維持
-- [ ] 全テスト実行して確認
+- [x] `object_store.py` 内の関数名からリーディング `_` を除去
+- [x] `app.py`, `test_object_store.py`, `test_app_endpoints.py`, `TEST_PLAN.md` の全参照箇所を一括置換
+- [x] 内部専用ヘルパー（`_utc_iso`, `_stage_completion_flags`, `_latest_update_ts`, `_objects_root`）は `_` のまま維持
+- [x] Dockerで全テスト実行して確認（469 passed）
 
 ---
 
@@ -105,7 +105,7 @@
 - [ ] 各関数を適切なファイルに移動
 - [ ] `stage_texture_bake.py` 本体は薄いオーケストレーション層として維持（サブモジュールから re-import）
 - [ ] 既存の `from stage_texture_bake import ...` が壊れないよう `stage_texture_bake.py` に re-export を設置
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ### 3-2. `stage_contact_hole_repair.py`（2188 行, 70 関数）の分割
 > **事前確認**: ファイル全体を読み、関数を以下のカテゴリに分類する
@@ -123,7 +123,7 @@
 - [ ] 分割方針を最終決定
 - [ ] サブモジュール `scripts/repair/` ディレクトリと `__init__.py` を作成
 - [ ] 各関数を移動し re-export を設置
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ### 3-3. `app.py`（975 行）のルーター分割
 > **事前確認**: `app.py` を読み、エンドポイントをカテゴリ別に分類する
@@ -143,7 +143,7 @@
 - [ ] `APIRouter` を使って各ルートファイルに分離
 - [ ] `app.py` は `app = FastAPI()` + `app.include_router(...)` のみに
 - [ ] 共有状態（`session`, `sam2_service`, `log_broadcaster`）の受け渡し方法を決定（依存性注入 or モジュールグローバル）
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ### 3-4. `pipeline_runner.py`（1083 行）の分割
 > **事前確認**: ファイルを読み、責務を確認
@@ -215,7 +215,7 @@
   ```
 - [ ] 各ルーターで FastAPI `Depends()` を使ってアクセス
 - [ ] `app.py` のグローバル変数を `AppState` インスタンスに置換
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ---
 
@@ -230,7 +230,7 @@
 - [ ] `_` prefix 付き定数（internal）と prefix なし定数（public/user-configurable）の区別が正しいか確認
 - [ ] 一貫性のない命名があれば修正案を作成
 - [ ] 外部からの利用箇所を `grep` で全列挙してから名前変更を実行
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ---
 
@@ -244,7 +244,7 @@
 - [ ] 現状の遅延 import パターンを全列挙
 - [ ] 統一パターンを決定（例: 各関数冒頭で import、エラーハンドリング統一）
 - [ ] ステージラッパー間で重複している import を整理
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ---
 
@@ -284,7 +284,7 @@
 
 - [ ] 重複する fixture やモックパターンを確認
 - [ ] 共通 fixture を `conftest.py` に集約
-- [ ] 全テスト実行して確認
+- [ ] Dockerで全テスト実行して確認
 
 ### 8-2. フロントエンドテストヘルパーの整理
 > **事前確認**: `tests/dashboard/frontend/helpers/` 内のファイルを確認

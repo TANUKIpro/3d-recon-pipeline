@@ -28,20 +28,20 @@ from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
     PRIMARY_ARTIFACT_PATHS,
     STAGE_RESET_PATHS,
-    _infer_resume_stage,
-    _list_objects,
-    _list_preview_files,
-    _object_dir,
-    _prepare_object_output_dir,
-    _reset_outputs_from_stage,
-    _resolve_output_root,
-    _safe_json_load,
-    _sanitize_object_name,
-    _suggest_object_name,
-    _summarize_object,
-    _validate_object_name,
-    _validate_resume_prerequisites,
-    _write_object_meta,
+    infer_resume_stage,
+    list_objects,
+    list_preview_files,
+    object_dir,
+    prepare_object_output_dir,
+    reset_outputs_from_stage,
+    resolve_output_root,
+    safe_json_load,
+    sanitize_object_name,
+    suggest_object_name,
+    summarize_object,
+    validate_object_name,
+    validate_resume_prerequisites,
+    write_object_meta,
 )
 from scripts.dashboard.pipeline_runner import broadcast, run_pipeline
 from scripts.dashboard.sam2_service import SAM2Service
@@ -70,11 +70,11 @@ def _active_output_dir() -> Path:
     cfg_out = (session.config.output_dir or "").strip()
     if cfg_out:
         return Path(cfg_out)
-    return _resolve_output_root(OUTPUT_DIR)
+    return resolve_output_root(OUTPUT_DIR)
 
 
 def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, Any]:
-    meta = _safe_json_load(object_dir / OBJECT_META_FILE)
+    meta = safe_json_load(object_dir / OBJECT_META_FILE)
     raw_cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
     cfg = build_pipeline_config(
         raw_cfg,
@@ -86,8 +86,8 @@ def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, A
     session.reset()
     session.config = cfg
     session.hydrate_from_output_dir(object_dir)
-    session.resume_from_stage = PipelineStage(_infer_resume_stage(object_dir))
-    return _summarize_object(object_name, object_dir, include_files=True)
+    session.resume_from_stage = PipelineStage(infer_resume_stage(object_dir))
+    return summarize_object(object_name, object_dir, include_files=True)
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────
@@ -110,11 +110,11 @@ async def _startup() -> None:
     log_broadcaster.install()
     asyncio.create_task(log_broadcaster.drain(session.ws_clients))
     try:
-        base_output = _resolve_output_root(OUTPUT_DIR)
-        objects = _list_objects(base_output)
+        base_output = resolve_output_root(OUTPUT_DIR)
+        objects = list_objects(base_output)
         if objects:
             latest = objects[0]["name"]
-            _load_object_into_session(latest, _object_dir(latest, base_output))
+            _load_object_into_session(latest, object_dir(latest, base_output))
     except Exception:
         # Best-effort auto-load only.
         pass
@@ -180,15 +180,15 @@ async def pipeline_videos():
                     "name": f.name,
                     "path": str(f),
                     "size_mb": round(f.stat().st_size / 1024 / 1024, 1),
-                    "suggested_object_name": _suggest_object_name(str(f)),
+                    "suggested_object_name": suggest_object_name(str(f)),
                 })
     return JSONResponse({"videos": videos})
 
 
 @app.get("/api/pipeline/objects")
 async def pipeline_objects():
-    base_output = _resolve_output_root(OUTPUT_DIR)
-    objects = _list_objects(base_output)
+    base_output = resolve_output_root(OUTPUT_DIR)
+    objects = list_objects(base_output)
     return JSONResponse(
         {
             "objects": objects,
@@ -200,15 +200,15 @@ async def pipeline_objects():
 @app.get("/api/pipeline/object-info")
 async def pipeline_object_info(name: str):
     try:
-        object_name = _validate_object_name(name)
+        object_name = validate_object_name(name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = _resolve_output_root(OUTPUT_DIR)
-    out = _object_dir(object_name, base_output)
+    base_output = resolve_output_root(OUTPUT_DIR)
+    out = object_dir(object_name, base_output)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
-    return JSONResponse({"object": _summarize_object(object_name, out, include_files=True)})
+    return JSONResponse({"object": summarize_object(object_name, out, include_files=True)})
 
 
 @app.post("/api/pipeline/load-object")
@@ -218,12 +218,12 @@ async def pipeline_load_object(body: dict | None = None):
 
     raw = body or {}
     try:
-        object_name = _validate_object_name(str(raw.get("name", "")).strip())
+        object_name = validate_object_name(str(raw.get("name", "")).strip())
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = _resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
-    out = _object_dir(object_name, base_output)
+    base_output = resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
+    out = object_dir(object_name, base_output)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
 
@@ -310,20 +310,20 @@ async def pipeline_start(body: dict | None = None):
     requested_object = str(raw.get("object_name", "")).strip()
     if requested_object:
         try:
-            object_name = _sanitize_object_name(requested_object)
+            object_name = sanitize_object_name(requested_object)
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
     else:
-        object_name = _suggest_object_name(video_path)
+        object_name = suggest_object_name(video_path)
 
-    output_root = _resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
-    object_output_dir = _object_dir(object_name, output_root)
-    existing_meta = _safe_json_load(object_output_dir / OBJECT_META_FILE)
+    output_root = resolve_output_root(str(raw.get("output_dir", OUTPUT_DIR)))
+    object_output_dir = object_dir(object_name, output_root)
+    existing_meta = safe_json_load(object_output_dir / OBJECT_META_FILE)
     if not video_path:
         video_path = str(existing_meta.get("video_path", "")).strip()
 
     inferred_stage = (
-        _infer_resume_stage(object_output_dir)
+        infer_resume_stage(object_output_dir)
         if object_output_dir.is_dir()
         else int(PipelineStage.EXTRACT_FRAMES)
     )
@@ -340,7 +340,7 @@ async def pipeline_start(body: dict | None = None):
     if start_stage > int(PipelineStage.EXTRACT_FRAMES):
         if not object_output_dir.is_dir():
             return JSONResponse({"error": "Object output does not exist for resume"}, status_code=400)
-        missing = _validate_resume_prerequisites(object_output_dir, start_stage)
+        missing = validate_resume_prerequisites(object_output_dir, start_stage)
         if missing:
             return JSONResponse(
                 {
@@ -351,9 +351,9 @@ async def pipeline_start(body: dict | None = None):
             )
 
     if start_stage == int(PipelineStage.EXTRACT_FRAMES):
-        _prepare_object_output_dir(object_output_dir)
+        prepare_object_output_dir(object_output_dir)
     else:
-        _reset_outputs_from_stage(object_output_dir, start_stage)
+        reset_outputs_from_stage(object_output_dir, start_stage)
 
     cfg_source = {}
     if isinstance(existing_meta.get("config"), dict):
@@ -370,7 +370,7 @@ async def pipeline_start(body: dict | None = None):
     session.config = cfg
     session.resume_from_stage = PipelineStage(start_stage)
     session.hydrate_from_output_dir(object_output_dir)
-    _write_object_meta(
+    write_object_meta(
         object_name,
         object_output_dir,
         cfg.video_path,
@@ -660,7 +660,7 @@ async def mesh_postprocess(body: dict | None = None):
             for rel in STAGE_RESET_PATHS.get(stage_id, {}).get("files", ())
         )
         if any((out / rel).is_file() for rel in downstream_files):
-            _reset_outputs_from_stage(out, invalidate_from)
+            reset_outputs_from_stage(out, invalidate_from)
             texture_invalidated = True
 
     session.mesh_ply = str(mesh_path)
@@ -863,12 +863,12 @@ async def sam2_mask(idx: int):
 async def preview_object_file(object_name: str, path: str):
     """Serve a file from any object's directory (not just active session)."""
     try:
-        object_name = _validate_object_name(object_name)
+        object_name = validate_object_name(object_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = _resolve_output_root(OUTPUT_DIR)
-    out = _object_dir(object_name, base_output)
+    base_output = resolve_output_root(OUTPUT_DIR)
+    out = object_dir(object_name, base_output)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
 
@@ -904,7 +904,7 @@ async def preview_object_file(object_name: str, path: str):
 async def preview_outputs():
     """List output files available for preview."""
     out = _active_output_dir()
-    files = _list_preview_files(out)
+    files = list_preview_files(out)
     for f in files:
         f.pop("size_bytes", None)
     return JSONResponse({"files": files})

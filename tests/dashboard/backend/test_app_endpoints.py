@@ -12,10 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import WebSocketDisconnect
 
 from scripts.dashboard.object_store import (
-    _safe_json_load,
-    _sanitize_object_name,
-    _suggest_object_name,
-    _validate_object_name,
+    safe_json_load,
+    sanitize_object_name,
+    suggest_object_name,
+    validate_object_name,
 )
 from scripts.dashboard.app import (
     mesh_postprocess,
@@ -65,21 +65,21 @@ def _json_payload(response) -> dict:
     return json.loads(response.body.decode("utf-8"))
 
 
-# ── _sanitize_object_name ─────────────────────────────────────────
+# ── sanitize_object_name ─────────────────────────────────────────
 
 
 class TestSanitizeObjectName(unittest.TestCase):
     def test_normal_name_unchanged(self) -> None:
-        self.assertEqual(_sanitize_object_name("coffee-mug"), "coffee-mug")
+        self.assertEqual(sanitize_object_name("coffee-mug"), "coffee-mug")
 
     def test_spaces_become_hyphens(self) -> None:
-        self.assertEqual(_sanitize_object_name("my cool object"), "my-cool-object")
+        self.assertEqual(sanitize_object_name("my cool object"), "my-cool-object")
 
     def test_slashes_become_hyphens(self) -> None:
-        self.assertEqual(_sanitize_object_name("a/b/c"), "a-b-c")
+        self.assertEqual(sanitize_object_name("a/b/c"), "a-b-c")
 
     def test_special_chars_replaced(self) -> None:
-        result = _sanitize_object_name("hello@world#2024!")
+        result = sanitize_object_name("hello@world#2024!")
         self.assertNotIn("@", result)
         self.assertNotIn("#", result)
         self.assertNotIn("!", result)
@@ -89,78 +89,78 @@ class TestSanitizeObjectName(unittest.TestCase):
         self.assertIn("2024", result)
 
     def test_consecutive_hyphens_collapsed(self) -> None:
-        result = _sanitize_object_name("a---b----c")
+        result = sanitize_object_name("a---b----c")
         self.assertNotIn("--", result)
         self.assertEqual(result, "a-b-c")
 
     def test_empty_string_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            _sanitize_object_name("")
+            sanitize_object_name("")
 
     def test_whitespace_only_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            _sanitize_object_name("   ")
+            sanitize_object_name("   ")
 
     def test_truncation_at_80_chars(self) -> None:
         long_name = "a" * 120
-        result = _sanitize_object_name(long_name)
+        result = sanitize_object_name(long_name)
         self.assertEqual(len(result), 80)
 
     def test_leading_trailing_dots_stripped(self) -> None:
-        result = _sanitize_object_name("..hello..")
+        result = sanitize_object_name("..hello..")
         self.assertFalse(result.startswith("."))
         self.assertFalse(result.endswith("."))
         self.assertIn("hello", result)
 
 
-# ── _validate_object_name ─────────────────────────────────────────
+# ── validate_object_name ─────────────────────────────────────────
 
 
 class TestValidateObjectName(unittest.TestCase):
     def test_normal_name_passes(self) -> None:
-        self.assertEqual(_validate_object_name("coffee-mug"), "coffee-mug")
+        self.assertEqual(validate_object_name("coffee-mug"), "coffee-mug")
 
     def test_empty_string_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("")
+            validate_object_name("")
 
     def test_dot_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name(".")
+            validate_object_name(".")
 
     def test_dotdot_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("..")
+            validate_object_name("..")
 
     def test_slash_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("a/b")
+            validate_object_name("a/b")
 
     def test_backslash_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("a\\b")
+            validate_object_name("a\\b")
 
 
-# ── _suggest_object_name ──────────────────────────────────────────
+# ── suggest_object_name ──────────────────────────────────────────
 
 
 class TestSuggestObjectName(unittest.TestCase):
     def test_stem_extracted_from_video_path(self) -> None:
-        result = _suggest_object_name("/data/input/coffee01.mp4")
+        result = suggest_object_name("/data/input/coffee01.mp4")
         self.assertEqual(result, "coffee01")
 
     def test_empty_path_returns_object(self) -> None:
-        result = _suggest_object_name("")
+        result = suggest_object_name("")
         self.assertEqual(result, "object")
 
     def test_special_chars_sanitized(self) -> None:
-        result = _suggest_object_name("/data/input/hello world!.mp4")
+        result = suggest_object_name("/data/input/hello world!.mp4")
         self.assertNotIn(" ", result)
         self.assertNotIn("!", result)
         self.assertTrue(len(result) > 0)
 
 
-# ── _safe_json_load ───────────────────────────────────────────────
+# ── safe_json_load ───────────────────────────────────────────────
 
 
 class TestSafeJsonLoad(unittest.TestCase):
@@ -168,25 +168,25 @@ class TestSafeJsonLoad(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "data.json"
             p.write_text('{"key": "value"}', encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {"key": "value"})
 
     def test_nonexistent_returns_empty_dict(self) -> None:
-        result = _safe_json_load(Path("/nonexistent/path/data.json"))
+        result = safe_json_load(Path("/nonexistent/path/data.json"))
         self.assertEqual(result, {})
 
     def test_broken_json_returns_empty_dict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "bad.json"
             p.write_text("{not valid json", encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {})
 
     def test_non_dict_returns_empty_dict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "list.json"
             p.write_text("[1, 2, 3]", encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {})
 
 
@@ -638,7 +638,7 @@ class TestPipelineVideosEndpoint(unittest.IsolatedAsyncioTestCase):
 
 class TestPipelineObjectsEndpoint(unittest.IsolatedAsyncioTestCase):
     @patch("scripts.dashboard.app.OUTPUT_DIR", "/tmp/test-out")
-    @patch("scripts.dashboard.app._list_objects", return_value=[
+    @patch("scripts.dashboard.app.list_objects", return_value=[
         {"name": "obj1", "updated_at": "2026-01-01"},
     ])
     async def test_returns_objects_and_active(self, mock_list: MagicMock) -> None:
@@ -663,7 +663,7 @@ class TestPipelineObjectInfoEndpoint(unittest.IsolatedAsyncioTestCase):
         self._patcher.stop()
         self._tmp.cleanup()
 
-    @patch("scripts.dashboard.app._summarize_object")
+    @patch("scripts.dashboard.app.summarize_object")
     async def test_valid_name_returns_info(self, mock_summarize: MagicMock) -> None:
         obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
         obj_dir.mkdir(parents=True)
@@ -1051,7 +1051,7 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         session.mesh_ply = self._snapshot["mesh_ply"]
         self._tmp.cleanup()
 
-    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("scripts.dashboard.app.reset_outputs_from_stage")
     @patch("asyncio.to_thread", new_callable=AsyncMock)
     @patch("scripts.dashboard.app._active_output_dir")
     async def test_postprocess_success(
@@ -1120,7 +1120,7 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         payload = _json_payload(response)
         self.assertEqual(payload["iterations"], 0)
 
-    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("scripts.dashboard.app.reset_outputs_from_stage")
     @patch("asyncio.to_thread", new_callable=AsyncMock)
     @patch("scripts.dashboard.app._active_output_dir")
     async def test_invalidate_texture_resets(
@@ -1227,8 +1227,8 @@ class TestMeshRepairConfirmDedup(unittest.IsolatedAsyncioTestCase):
 class TestPreviewObjectFileNormal(unittest.IsolatedAsyncioTestCase):
     """8.5.3 — preview_object_file normal file serving."""
 
-    @patch("scripts.dashboard.app._resolve_output_root")
-    @patch("scripts.dashboard.app._validate_object_name", side_effect=lambda n: n)
+    @patch("scripts.dashboard.app.resolve_output_root")
+    @patch("scripts.dashboard.app.validate_object_name", side_effect=lambda n: n)
     async def test_serves_existing_file(self, mock_validate, mock_root) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1330,8 +1330,8 @@ class TestVramInfo(unittest.IsolatedAsyncioTestCase):
 class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
     """8.8.1-8.8.3 — _startup installs LogBroadcaster and auto-loads."""
 
-    @patch("scripts.dashboard.app._list_objects", return_value=[])
-    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.list_objects", return_value=[])
+    @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
     async def test_startup_installs_broadcaster(self, mock_lb_cls, mock_root, mock_list) -> None:
         import tempfile
@@ -1349,8 +1349,8 @@ class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
             finally:
                 app_mod.log_broadcaster = old_broadcaster
 
-    @patch("scripts.dashboard.app._list_objects")
-    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.list_objects")
+    @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
     async def test_startup_auto_loads_latest_object(self, mock_lb_cls, mock_root, mock_list) -> None:
         import tempfile
