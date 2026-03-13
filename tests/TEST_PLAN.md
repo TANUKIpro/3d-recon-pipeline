@@ -45,8 +45,8 @@
 | 1.4.6 | `reset()` でキャンセル状態がクリアされる | [済] |
 | 1.4.7 | `reset()` でメッシュ修復状態がクリアされる | [済] |
 | 1.4.8 | `reset()` で SAM2 状態がクリアされる | [済] |
-| 1.4.9 | `reset()` で asyncio.Event が新規インスタンスに置換される | [ ] |
-| 1.4.10 | `reset()` で `_active_processes` がクリアされる | [ ] |
+| 1.4.9 | `reset()` で asyncio.Event が新規インスタンスに置換される | [済] |
+| 1.4.10 | `reset()` で `_active_processes` がクリアされる | [済] |
 
 ### 1.5 PipelineSession — ステージライフサイクル
 
@@ -66,7 +66,7 @@
 |---|-----------|------|
 | 1.6.1 | `require_next_stage_confirmation()` で confirmation フィールドが設定される | [済] |
 | 1.6.2 | `clear_next_stage_confirmation()` で confirmation フィールドがリセットされる | [済] |
-| 1.6.3 | `clear_next_stage_confirmation()` で event が新規インスタンスに置換される | [ ] |
+| 1.6.3 | `clear_next_stage_confirmation()` で event が新規インスタンスに置換される | [済] |
 
 ### 1.7 PipelineSession — キャンセル
 
@@ -104,8 +104,8 @@
 | 1.10.5 | `to_status_dict()` の stages キーが文字列 ("1"–"8") | [済] |
 | 1.10.6 | 実行中の elapsed が経過時間を返す | [済] |
 | 1.10.7 | アイドル時の elapsed が None を返す | [済] |
-| 1.10.8 | `to_status_dict()` に `next_stage_confirmation` が含まれる | [ ] |
-| 1.10.9 | `to_status_dict()` に `mesh_repair_ready` が含まれる | [ ] |
+| 1.10.8 | `to_status_dict()` に `next_stage_confirmation` が含まれる | [済] |
+| 1.10.9 | `to_status_dict()` に `mesh_repair_ready` が含まれる | [済] |
 
 ### 1.11 detect_stage_outputs / hydrate_from_output_dir
 
@@ -180,9 +180,9 @@
 | 2.2.20 | auto_accept が parse_bool 経由でパースされる | [済] |
 | 2.2.21 | mesh_method が parse_choice 経由でパースされる | [済] |
 | 2.2.22 | denoise プリセットが全キーを持つ | [済] |
-| 2.2.23 | ground_plane_enabled のパースと環境変数反映 | [ ] |
-| 2.2.24 | frame_interval / max_frames / pixel_limit の環境変数反映 | [ ] |
-| 2.2.25 | 全フィールドがデフォルト値のみで config 構築可能 (raw={}) | [ ] |
+| 2.2.23 | ground_plane_enabled のパースと環境変数反映 | [済] |
+| 2.2.24 | frame_interval / max_frames / pixel_limit の環境変数反映 | [済] |
+| 2.2.25 | 全フィールドがデフォルト値のみで config 構築可能 (raw={}) | [済] |
 
 ---
 
@@ -283,7 +283,7 @@
 | 5.2.2 | クリックでポイント・ラベル追加 | [済] |
 | 5.2.3 | PNG バイトが返る | [済] |
 | 5.2.4 | ground モードで ground リストに格納 | [済] |
-| 5.2.5 | 座標の正規化 (0–1 → ピクセル座標変換) | [ ] |
+| 5.2.5 | 座標の正規化 (0–1 → ピクセル座標変換) | [済] |
 
 ### 5.3 undo_click
 
@@ -292,7 +292,7 @@
 | 5.3.1 | 未初期化で例外 | [済] |
 | 5.3.2 | 最後のクリックが削除される | [済] |
 | 5.3.3 | 空リストで安全 | [済] |
-| 5.3.4 | ground モードでの undo が ground リストのみ影響 | [ ] |
+| 5.3.4 | ground モードでの undo が ground リストのみ影響 | [済] |
 
 ### 5.4 clear_clicks
 
@@ -301,7 +301,7 @@
 | 5.4.1 | 未初期化で例外 | [済] |
 | 5.4.2 | 全クリックが削除される | [済] |
 | 5.4.3 | ground clear で object クリックが保持される | [済] |
-| 5.4.4 | predictor.reset_state が呼ばれる | [ ] |
+| 5.4.4 | predictor.reset_state が呼ばれる | [済] |
 
 ### 5.5 propagate_and_save
 
@@ -310,9 +310,9 @@
 | 5.5.1 | 未初期化で例外 | [済] |
 | 5.5.2 | クリックなしで例外 | [済] |
 | 5.5.3 | 正常実行で (mask_dir, ground_mask_dir) タプル返却 | [済] |
-| 5.5.4 | progress_callback が各フレームで呼ばれる | [ ] |
-| 5.5.5 | マスクファイルがディスクに保存される | [ ] |
-| 5.5.6 | 既存マスクファイルがクリアされてから保存 | [ ] |
+| 5.5.4 | progress_callback が各フレームで呼ばれる | [済] |
+| 5.5.5 | マスクファイルがディスクに保存される | [済] |
+| 5.5.6 | 既存マスクファイルがクリアされてから保存 | [済] |
 
 ### 5.6 release
 
@@ -330,8 +330,8 @@
 | 5.7.1 | 未初期化で例外 | [済] |
 | 5.7.2 | 範囲外インデックスで例外 | [済] |
 | 5.7.3 | JPEG バイトが返る | [済] |
-| 5.7.4 | `get_mask_png` が存在するマスクの PNG バイトを返す | [ ] |
-| 5.7.5 | `get_mask_png` が存在しないマスクで None を返す | [ ] |
+| 5.7.4 | `get_mask_png` が存在するマスクの PNG バイトを返す | [済] |
+| 5.7.5 | `get_mask_png` が存在しないマスクで None を返す | [済] |
 
 ### 5.8 スレッドセーフティ
 
@@ -343,9 +343,9 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 5.9.1 | デフォルトモードが "object" | [ ] |
-| 5.9.2 | モード切替で segmentation_mode プロパティが更新される | [ ] |
-| 5.9.3 | has_ground_clicks が ground クリック有無を正しく返す | [ ] |
+| 5.9.1 | デフォルトモードが "object" | [済] |
+| 5.9.2 | モード切替で segmentation_mode プロパティが更新される | [済] |
+| 5.9.3 | has_ground_clicks が ground クリック有無を正しく返す | [済] |
 
 ---
 
@@ -400,8 +400,8 @@
 |---|-----------|------|
 | 6.6.1 | auto_accept=True で即時通過 | [済] |
 | 6.6.2 | 待機中のキャンセルで _CancelledError | [済] |
-| 6.6.3 | broadcast メッセージ構造 (required/cleared) | [ ] |
-| 6.6.4 | session の confirmation フィールドが設定・クリアされる | [ ] |
+| 6.6.3 | broadcast メッセージ構造 (required/cleared) | [済] |
+| 6.6.4 | session の confirmation フィールドが設定・クリアされる | [済] |
 
 ### 6.7 _mesh_method_label
 
@@ -414,33 +414,33 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 6.8.1 | Stage 1–8 の順次実行 (全モック) | [ ] |
-| 6.8.2 | resume_from_stage > 1 での途中開始 | [ ] |
-| 6.8.3 | キャンセル時の pipeline_error broadcast (reason_code="cancelled") | [ ] |
-| 6.8.4 | キャンセル後の hydrate_from_output_dir 呼び出し | [ ] |
-| 6.8.5 | 例外時の pipeline_error broadcast | [ ] |
-| 6.8.6 | finally での SAM2 release 呼び出し | [ ] |
-| 6.8.7 | SAM2 redo ループ (approve=false → 再初期化 → approve=true) | [ ] |
-| 6.8.8 | メッシュ修復 interactive フロー (候補表示 → ユーザ選択 → 修復) | [ ] |
-| 6.8.9 | auto_accept モードでの SAM2/confirmation 自動通過 | [ ] |
-| 6.8.10 | ground_plane_enabled=true 時の ground segmentation フロー | [ ] |
-| 6.8.11 | ground skip イベントでの ground フェーズスキップ | [ ] |
+| 6.8.1 | Stage 1–8 の順次実行 (全モック) | [済] |
+| 6.8.2 | resume_from_stage > 1 での途中開始 | [済] |
+| 6.8.3 | キャンセル時の pipeline_error broadcast (reason_code="cancelled") | [済] |
+| 6.8.4 | キャンセル後の hydrate_from_output_dir 呼び出し | [済] |
+| 6.8.5 | 例外時の pipeline_error broadcast | [済] |
+| 6.8.6 | finally での SAM2 release 呼び出し | [済] |
+| 6.8.7 | SAM2 redo ループ (approve=false → 再初期化 → approve=true) | [済] |
+| 6.8.8 | メッシュ修復 interactive フロー (候補表示 → ユーザ選択 → 修復) | [済] |
+| 6.8.9 | auto_accept モードでの SAM2/confirmation 自動通過 | [済] |
+| 6.8.10 | ground_plane_enabled=true 時の ground segmentation フロー | [済] |
+| 6.8.11 | ground skip イベントでの ground フェーズスキップ | [済] |
 
 ### 6.9 _run_stage
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 6.9.1 | stage_start → fn 実行 → stage_complete の順序 | [ ] |
-| 6.9.2 | fn 内例外で stage_failed + 再 raise | [ ] |
-| 6.9.3 | progress_cb / cancel_cb が fn に渡される | [ ] |
-| 6.9.4 | stage_log_scope 内での実行 | [ ] |
+| 6.9.1 | stage_start → fn 実行 → stage_complete の順序 | [済] |
+| 6.9.2 | fn 内例外で stage_failed + 再 raise | [済] |
+| 6.9.3 | progress_cb / cancel_cb が fn に渡される | [済] |
+| 6.9.4 | stage_log_scope 内での実行 | [済] |
 
 ### 6.10 _make_progress_cb / _make_cancel_cb
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 6.10.1 | progress_cb が loop.call_soon_threadsafe を使用 | [ ] |
-| 6.10.2 | cancel_cb がキャンセル状態で例外 | [ ] |
+| 6.10.1 | progress_cb が loop.call_soon_threadsafe を使用 | [済] |
+| 6.10.2 | cancel_cb がキャンセル状態で例外 | [済] |
 
 ---
 
@@ -470,12 +470,12 @@
 |---|-----------|------|
 | 7.2.1 | `STAGE_RESET_PATHS`: Stage 5 リセットに preview mesh が含まれる | [済] |
 | 7.2.2 | `RESUME_PREREQUISITES`: Stage 6/7 に mesh 出力が必要 | [済] |
-| 7.2.3 | `_reset_outputs_from_stage`: 指定ステージ以降のファイル/ディレクトリ削除 | [ ] |
-| 7.2.4 | `_infer_resume_stage`: 最初の未完了ステージを返す | [ ] |
-| 7.2.5 | `_validate_resume_prerequisites`: 必要ファイルの存在チェック | [ ] |
-| 7.2.6 | `_write_object_meta`: JSON 書き込み・created_at 保持 | [ ] |
-| 7.2.7 | `_summarize_object`: メタデータ辞書構築 | [ ] |
-| 7.2.8 | `_list_objects`: updated_at 降順ソート | [ ] |
+| 7.2.3 | `_reset_outputs_from_stage`: 指定ステージ以降のファイル/ディレクトリ削除 | [済] |
+| 7.2.4 | `_infer_resume_stage`: 最初の未完了ステージを返す | [済] |
+| 7.2.5 | `_validate_resume_prerequisites`: 必要ファイルの存在チェック | [済] |
+| 7.2.6 | `_write_object_meta`: JSON 書き込み・created_at 保持 | [済] |
+| 7.2.7 | `_summarize_object`: メタデータ辞書構築 | [済] |
+| 7.2.8 | `_list_objects`: updated_at 降順ソート | [済] |
 
 ### 7.3 safe_json_load
 
@@ -500,41 +500,41 @@
 | 8.1.4 | `POST /api/pipeline/confirm-next`: 非実行中 → 409 | [済] |
 | 8.1.5 | `POST /api/pipeline/confirm-next`: 確認待ちなし → 409 | [済] |
 | 8.1.6 | `POST /api/pipeline/confirm-next`: event 設定 | [済] |
-| 8.1.7 | `GET /api/pipeline/videos`: ビデオ一覧のフォーマット | [ ] |
-| 8.1.8 | `GET /api/pipeline/videos`: 対象拡張子のフィルタリング (.mp4, .avi, .mov, .mkv, .webm) | [ ] |
-| 8.1.9 | `GET /api/pipeline/objects`: オブジェクト一覧返却 | [ ] |
-| 8.1.10 | `GET /api/pipeline/object-info`: 正常返却 | [ ] |
-| 8.1.11 | `GET /api/pipeline/object-info`: 不正な名前 → 400 | [ ] |
-| 8.1.12 | `GET /api/pipeline/object-info`: 存在しない → 404 | [ ] |
-| 8.1.13 | `POST /api/pipeline/load-object`: 正常ロード | [ ] |
-| 8.1.14 | `POST /api/pipeline/load-object`: 実行中 → 409 | [ ] |
-| 8.1.15 | `POST /api/pipeline/start`: 正常開始 (タスク作成) | [ ] |
-| 8.1.16 | `POST /api/pipeline/start`: 実行中 → 409 | [ ] |
-| 8.1.17 | `POST /api/pipeline/start`: resume_from_stage 範囲外 → 400 | [ ] |
-| 8.1.18 | `POST /api/pipeline/start`: 前提条件未満足 → 400 | [ ] |
-| 8.1.19 | `GET /api/pipeline/video-info`: 正常 (fps, total_frames 等) | [ ] |
+| 8.1.7 | `GET /api/pipeline/videos`: ビデオ一覧のフォーマット | [済] |
+| 8.1.8 | `GET /api/pipeline/videos`: 対象拡張子のフィルタリング (.mp4, .avi, .mov, .mkv, .webm) | [済] |
+| 8.1.9 | `GET /api/pipeline/objects`: オブジェクト一覧返却 | [済] |
+| 8.1.10 | `GET /api/pipeline/object-info`: 正常返却 | [済] |
+| 8.1.11 | `GET /api/pipeline/object-info`: 不正な名前 → 400 | [済] |
+| 8.1.12 | `GET /api/pipeline/object-info`: 存在しない → 404 | [済] |
+| 8.1.13 | `POST /api/pipeline/load-object`: 正常ロード | [済] |
+| 8.1.14 | `POST /api/pipeline/load-object`: 実行中 → 409 | [済] |
+| 8.1.15 | `POST /api/pipeline/start`: 正常開始 (タスク作成) | [済] |
+| 8.1.16 | `POST /api/pipeline/start`: 実行中 → 409 | [済] |
+| 8.1.17 | `POST /api/pipeline/start`: resume_from_stage 範囲外 → 400 | [済] |
+| 8.1.18 | `POST /api/pipeline/start`: 前提条件未満足 → 400 | [済] |
+| 8.1.19 | `GET /api/pipeline/video-info`: 正常 (fps, total_frames 等) | [済] |
 | 8.1.20 | `GET /api/pipeline/video-info`: INPUT_DIR 外パス → 403 | [済] |
-| 8.1.21 | `GET /api/pipeline/pi3x-plan`: 正常返却 | [ ] |
+| 8.1.21 | `GET /api/pipeline/pi3x-plan`: 正常返却 | [済] |
 
 ### 8.2 SAM2 API
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
 | 8.2.1 | `POST /api/sam2/click`: 未初期化 → 409 | [済] |
-| 8.2.2 | `POST /api/sam2/click`: 正常 → PNG レスポンス | [ ] |
-| 8.2.3 | `POST /api/sam2/undo`: 正常 → PNG レスポンス | [ ] |
-| 8.2.4 | `POST /api/sam2/clear`: 正常 → PNG レスポンス | [ ] |
+| 8.2.2 | `POST /api/sam2/click`: 正常 → PNG レスポンス | [済] |
+| 8.2.3 | `POST /api/sam2/undo`: 正常 → PNG レスポンス | [済] |
+| 8.2.4 | `POST /api/sam2/clear`: 正常 → PNG レスポンス | [済] |
 | 8.2.5 | `POST /api/sam2/confirm`: 未初期化 → 409 | [済] |
 | 8.2.6 | `POST /api/sam2/confirm`: event 設定 | [済] |
 | 8.2.7 | `POST /api/sam2/approve`: フラグと event 設定 | [済] |
 | 8.2.8 | `POST /api/sam2/redo`: フラグクリアと event 設定 | [済] |
-| 8.2.9 | `POST /api/sam2/mode`: モード切替 | [ ] |
-| 8.2.10 | `GET /api/sam2/mode`: 現在のモード返却 | [ ] |
-| 8.2.11 | `POST /api/sam2/skip-ground`: event 設定 | [ ] |
-| 8.2.12 | `GET /api/sam2/frame/{idx}`: 正常 → JPEG | [ ] |
-| 8.2.13 | `GET /api/sam2/frame/{idx}`: 範囲外 → 404 | [ ] |
-| 8.2.14 | `GET /api/sam2/mask/{idx}`: 正常 → PNG | [ ] |
-| 8.2.15 | `GET /api/sam2/mask/{idx}`: 存在しない → 404 | [ ] |
+| 8.2.9 | `POST /api/sam2/mode`: モード切替 | [済] |
+| 8.2.10 | `GET /api/sam2/mode`: 現在のモード返却 | [済] |
+| 8.2.11 | `POST /api/sam2/skip-ground`: event 設定 | [済] |
+| 8.2.12 | `GET /api/sam2/frame/{idx}`: 正常 → JPEG | [済] |
+| 8.2.13 | `GET /api/sam2/frame/{idx}`: 範囲外 → 404 | [済] |
+| 8.2.14 | `GET /api/sam2/mask/{idx}`: 正常 → PNG | [済] |
+| 8.2.15 | `GET /api/sam2/mask/{idx}`: 存在しない → 404 | [済] |
 
 ### 8.3 Mesh Repair API
 
@@ -546,17 +546,17 @@
 | 8.3.4 | `POST /api/mesh-repair/confirm`: 空選択 (スキップ) 許可 | [済] |
 | 8.3.5 | `POST /api/mesh-repair/confirm`: 有効な loop_ids | [済] |
 | 8.3.6 | `POST /api/mesh-repair/confirm`: 不明な loop_ids → 400 | [済] |
-| 8.3.7 | `POST /api/mesh-repair/confirm`: 重複 ID の除去 | [ ] |
+| 8.3.7 | `POST /api/mesh-repair/confirm`: 重複 ID の除去 | [済] |
 
 ### 8.4 Mesh Post-Process API
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 8.4.1 | `POST /api/mesh/postprocess`: 正常実行 → 結果返却 | [ ] |
-| 8.4.2 | `POST /api/mesh/postprocess`: method バリデーション ("laplacian"/"taubin") | [ ] |
-| 8.4.3 | `POST /api/mesh/postprocess`: iterations クランプ (0–100) | [ ] |
-| 8.4.4 | `POST /api/mesh/postprocess`: invalidate_texture=true → ステージ 6–8 リセット | [ ] |
-| 8.4.5 | `POST /api/mesh/postprocess`: 実行中かつ非ステージ 5 待ち → 409 | [ ] |
+| 8.4.1 | `POST /api/mesh/postprocess`: 正常実行 → 結果返却 | [済] |
+| 8.4.2 | `POST /api/mesh/postprocess`: method バリデーション ("laplacian"/"taubin") | [済] |
+| 8.4.3 | `POST /api/mesh/postprocess`: iterations クランプ (0–100) | [済] |
+| 8.4.4 | `POST /api/mesh/postprocess`: invalidate_texture=true → ステージ 6–8 リセット | [済] |
+| 8.4.5 | `POST /api/mesh/postprocess`: 実行中かつ非ステージ 5 待ち → 409 | [済] |
 
 ### 8.5 Preview / File API
 
@@ -564,37 +564,37 @@
 |---|-----------|------|
 | 8.5.1 | `GET /api/preview/file/{path}`: no-cache ヘッダ | [済] |
 | 8.5.2 | `GET /api/preview/file/{path}`: パストラバーサル防止 | [済] |
-| 8.5.3 | `GET /api/preview/object-file/{name}/{path}`: 正常ファイル配信 | [ ] |
+| 8.5.3 | `GET /api/preview/object-file/{name}/{path}`: 正常ファイル配信 | [済] |
 | 8.5.4 | `GET /api/preview/object-file/{name}/{path}`: パス脱出 → 403 | [済] |
-| 8.5.5 | `GET /api/preview/outputs`: プレビュー対象ファイル一覧 | [ ] |
-| 8.5.6 | `GET /api/preview/crop-obb`: OBB 計算結果 | [ ] |
-| 8.5.7 | `GET /api/verification/frame/{idx}`: マスクオーバーレイ画像 | [ ] |
-| 8.5.8 | `GET /api/verification/ground-frame/{idx}`: ground オーバーレイ画像 | [ ] |
+| 8.5.5 | `GET /api/preview/outputs`: プレビュー対象ファイル一覧 | [済] |
+| 8.5.6 | `GET /api/preview/crop-obb`: OBB 計算結果 | [済] |
+| 8.5.7 | `GET /api/verification/frame/{idx}`: マスクオーバーレイ画像 | [済] |
+| 8.5.8 | `GET /api/verification/ground-frame/{idx}`: ground オーバーレイ画像 | [済] |
 
 ### 8.6 Utility API
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 8.6.1 | `GET /api/vram`: free_mb が数値または null | [ ] |
+| 8.6.1 | `GET /api/vram`: free_mb が数値または null | [済] |
 
 ### 8.7 WebSocket
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 8.7.1 | 接続時にクライアントリストに追加される | [ ] |
-| 8.7.2 | 接続直後に status スナップショットが送信される | [ ] |
-| 8.7.3 | 切断時にクライアントリストから除去される | [ ] |
-| 8.7.4 | 複数クライアントの同時接続 | [ ] |
+| 8.7.1 | 接続時にクライアントリストに追加される | [済] |
+| 8.7.2 | 接続直後に status スナップショットが送信される | [済] |
+| 8.7.3 | 切断時にクライアントリストから除去される | [済] |
+| 8.7.4 | 複数クライアントの同時接続 | [済] |
 
 ### 8.8 ライフサイクル
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 8.8.1 | startup で LogBroadcaster が install される | [ ] |
-| 8.8.2 | startup で drain タスクが作成される | [ ] |
-| 8.8.3 | startup で最新オブジェクトが自動ロードされる | [ ] |
-| 8.8.4 | shutdown で LogBroadcaster が uninstall される | [ ] |
-| 8.8.5 | shutdown で SAM2 が release される | [ ] |
+| 8.8.1 | startup で LogBroadcaster が install される | [済] |
+| 8.8.2 | startup で drain タスクが作成される | [済] |
+| 8.8.3 | startup で最新オブジェクトが自動ロードされる | [済] |
+| 8.8.4 | shutdown で LogBroadcaster が uninstall される | [済] |
+| 8.8.5 | shutdown で SAM2 が release される | [済] |
 
 ---
 
@@ -602,11 +602,11 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 9.1 | 各ラッパーが対応モジュールを遅延インポートする | [ ] |
-| 9.2 | `_stage_extract_frames` が正しい引数で stage 関数を呼ぶ | [ ] |
-| 9.3 | `_stage_pi3x_inference` が完了後に `cleanup_pytorch_vram` を呼ぶ | [ ] |
-| 9.4 | `_stage_diffcd` が register_process / unregister_process を渡す | [ ] |
-| 9.5 | 不要なコールバックが del されている | [ ] |
+| 9.1 | 各ラッパーが対応モジュールを遅延インポートする | [済] |
+| 9.2 | `_stage_extract_frames` が正しい引数で stage 関数を呼ぶ | [済] |
+| 9.3 | `_stage_pi3x_inference` が完了後に `cleanup_pytorch_vram` を呼ぶ | [済] |
+| 9.4 | `_stage_diffcd` が register_process / unregister_process を渡す | [済] |
+| 9.5 | 不要なコールバックが del されている | [済] |
 
 ---
 
@@ -656,11 +656,11 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 13.1 | hash 読み取りでビュー切り替え | [ ] |
-| 13.2 | `overview` / `pipeline` のみ有効 | [ ] |
-| 13.3 | 不明ハッシュでデフォルト (`overview`) | [ ] |
-| 13.4 | `onChange` コールバック発火 | [ ] |
-| 13.5 | `body[data-view]` 属性が設定される | [ ] |
+| 13.1 | hash 読み取りでビュー切り替え | [済] |
+| 13.2 | `overview` / `pipeline` のみ有効 | [済] |
+| 13.3 | 不明ハッシュでデフォルト (`overview`) | [済] |
+| 13.4 | `onChange` コールバック発火 | [済] |
+| 13.5 | `body[data-view]` 属性が設定される | [済] |
 
 ---
 
@@ -760,14 +760,14 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 17.5.1 | `setRunning(true)` で全入力無効化 | [ ] |
-| 17.5.2 | `setRunning(false)` で全入力有効化 | [ ] |
-| 17.5.3 | `setActiveStage` でステージ関連セクションのフィルタリング | [ ] |
-| 17.5.4 | denoise プリセット選択でパラメータ値の一括設定 | [ ] |
-| 17.5.5 | 個別パラメータ変更で preset が "custom" に | [ ] |
-| 17.5.6 | `refreshObjects()` でオブジェクト一覧再取得 | [ ] |
-| 17.5.7 | ビデオ選択変更で object_name の自動提案 | [ ] |
-| 17.5.8 | `onCropScaleChanged` コールバック発火 | [ ] |
+| 17.5.1 | `setRunning(true)` で全入力無効化 | [済] |
+| 17.5.2 | `setRunning(false)` で全入力有効化 | [済] |
+| 17.5.3 | `setActiveStage` でステージ関連セクションのフィルタリング | [済] |
+| 17.5.4 | denoise プリセット選択でパラメータ値の一括設定 | [済] |
+| 17.5.5 | 個別パラメータ変更で preset が "custom" に | [済] |
+| 17.5.6 | `refreshObjects()` でオブジェクト一覧再取得 | [済] |
+| 17.5.7 | ビデオ選択変更で object_name の自動提案 | [済] |
+| 17.5.8 | `onCropScaleChanged` コールバック発火 | [済] |
 
 ---
 
@@ -880,8 +880,8 @@
 | 23.2 | `remove`: null group で例外なし | [済] |
 | 23.3 | `setVisible`: null group で例外なし | [済] |
 | 23.4 | `applyOffset`: null group で例外なし | [済] |
-| 23.5 | `create` でフラスタム作成 | [ ] |
-| 23.6 | `setVisible(false)` でグループ非表示 | [ ] |
+| 23.5 | `create` でフラスタム作成 | [済] |
+| 23.6 | `setVisible(false)` でグループ非表示 | [済] |
 
 ---
 
@@ -904,8 +904,8 @@
 | 24.13 | `updateCropBbox` でスケール更新 | [済] |
 | 24.14 | `clearCropBbox` で OBB 除去 | [済] |
 | 24.15 | シーンフリップ判定 (`_shouldApplySceneFlipX`) | [済] |
-| 24.16 | Pi3X ポイントクラウドのロードとカメラポーズ表示 | [ ] |
-| 24.17 | OBJ + MTL テクスチャ付きメッシュのロード | [ ] |
+| 24.16 | Pi3X ポイントクラウドのロードとカメラポーズ表示 | [済] |
+| 24.17 | OBJ + MTL テクスチャ付きメッシュのロード | [済] |
 
 ---
 
@@ -995,13 +995,13 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 30.1 | `refresh` で `GET /api/pipeline/objects` から一覧取得 | [ ] |
-| 30.2 | カード表示 (サムネイル、名前、ステージドット) | [ ] |
-| 30.3 | カードクリックで `onOpenObject` コールバック | [ ] |
-| 30.4 | 新規パイプラインボタンで `onNewPipeline` コールバック | [ ] |
-| 30.5 | `markStale` → `refreshIfStale` で再取得 | [ ] |
-| 30.6 | `setActiveObject` でアクティブ表示 | [ ] |
-| 30.7 | オブジェクトなし時の空プレースホルダ表示 | [ ] |
+| 30.1 | `refresh` で `GET /api/pipeline/objects` から一覧取得 | [済] |
+| 30.2 | カード表示 (サムネイル、名前、ステージドット) | [済] |
+| 30.3 | カードクリックで `onOpenObject` コールバック | [済] |
+| 30.4 | 新規パイプラインボタンで `onNewPipeline` コールバック | [済] |
+| 30.5 | `markStale` → `refreshIfStale` で再取得 | [済] |
+| 30.6 | `setActiveObject` でアクティブ表示 | [済] |
+| 30.7 | オブジェクトなし時の空プレースホルダ表示 | [済] |
 
 ---
 
@@ -1009,21 +1009,21 @@
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 31.1 | WS `status` メッセージで statusHydrator.applySnapshot 呼び出し | [ ] |
-| 31.2 | WS `stage_start` でステージ切替 + UI 更新 | [ ] |
-| 31.3 | WS `stage_complete` でプレビューロード | [ ] |
-| 31.4 | WS `sam2_ready` で SAM2 キャンバスアクティベート | [ ] |
-| 31.5 | WS `sam2_verification_ready` で verification ストリップ表示 | [ ] |
-| 31.6 | WS `mesh_repair_ready` でメッシュ修復 UI アクティベート | [ ] |
-| 31.7 | WS `pipeline_complete` で完了 UI 表示 | [ ] |
-| 31.8 | WS `pipeline_error` でエラー UI 表示 | [ ] |
-| 31.9 | WS `next_stage_confirmation_required` で confirm バー表示 | [ ] |
-| 31.10 | VRAM ポーリング (5 秒間隔) | [ ] |
-| 31.11 | overview ↔ pipeline ビュー切替 | [ ] |
-| 31.12 | オブジェクト選択で `POST /api/pipeline/load-object` | [ ] |
-| 31.13 | Start ボタンで `POST /api/pipeline/start` | [ ] |
-| 31.14 | Cancel ボタンで `POST /api/pipeline/cancel` | [ ] |
-| 31.15 | `_objectLoadRequestId` によるスタル応答の排除 | [ ] |
+| 31.1 | WS `status` メッセージで statusHydrator.applySnapshot 呼び出し | [済] |
+| 31.2 | WS `stage_start` でステージ切替 + UI 更新 | [済] |
+| 31.3 | WS `stage_complete` でプレビューロード | [済] |
+| 31.4 | WS `sam2_ready` で SAM2 キャンバスアクティベート | [済] |
+| 31.5 | WS `sam2_verification_ready` で verification ストリップ表示 | [済] |
+| 31.6 | WS `mesh_repair_ready` でメッシュ修復 UI アクティベート | [済] |
+| 31.7 | WS `pipeline_complete` で完了 UI 表示 | [済] |
+| 31.8 | WS `pipeline_error` でエラー UI 表示 | [済] |
+| 31.9 | WS `next_stage_confirmation_required` で confirm バー表示 | [済] |
+| 31.10 | VRAM ポーリング (5 秒間隔) | [済] |
+| 31.11 | overview ↔ pipeline ビュー切替 | [済] |
+| 31.12 | オブジェクト選択で `POST /api/pipeline/load-object` | [済] |
+| 31.13 | Start ボタンで `POST /api/pipeline/start` | [済] |
+| 31.14 | Cancel ボタンで `POST /api/pipeline/cancel` | [済] |
+| 31.15 | `_objectLoadRequestId` によるスタル応答の排除 | [済] |
 
 ---
 
@@ -1031,38 +1031,38 @@
 
 | カテゴリ | 済 | 未実装 | 合計 |
 |---------|---:|------:|-----:|
-| Backend: State | 39 | 5 | 44 |
-| Backend: Configuration | 22 | 3 | 25 |
+| Backend: State | 61 | 0 | 61 |
+| Backend: Configuration | 47 | 0 | 47 |
 | Backend: Checkpoints | 23 | 0 | 23 |
-| Backend: Log Capture | 16 | 0 | 16 |
-| Backend: SAM2 Service | 18 | 8 | 26 |
-| Backend: Pipeline Runner | 20 | 15 | 35 |
-| Backend: Object Store | 17 | 6 | 23 |
-| Backend: App Endpoints | 14 | 23 | 37 |
-| Backend: Stage Wrappers | 0 | 5 | 5 |
+| Backend: Log Capture | 20 | 0 | 20 |
+| Backend: SAM2 Service | 35 | 0 | 35 |
+| Backend: Pipeline Runner | 41 | 0 | 41 |
+| Backend: Object Store | 25 | 0 | 25 |
+| Backend: App Endpoints | 66 | 0 | 66 |
+| Backend: Stage Wrappers | 5 | 0 | 5 |
 | Frontend: Constants | 8 | 0 | 8 |
 | Frontend: Utils | 6 | 0 | 6 |
 | Frontend: WsManager | 7 | 0 | 7 |
-| Frontend: Router | 0 | 5 | 5 |
+| Frontend: Router | 5 | 0 | 5 |
 | Frontend: I18n | 9 | 0 | 9 |
 | Frontend: PipelineUI | 11 | 0 | 11 |
 | Frontend: StageController | 6 | 0 | 6 |
-| Frontend: ConfigPanel | 18 | 8 | 26 |
+| Frontend: ConfigPanel | 31 | 0 | 31 |
 | Frontend: LogViewer | 19 | 0 | 19 |
 | Frontend: CheckpointPanel | 16 | 0 | 16 |
 | Frontend: TaskConfirmController | 11 | 0 | 11 |
 | Frontend: SAM2Canvas | 14 | 0 | 14 |
 | Frontend: SAM2Verification | 6 | 0 | 6 |
-| Frontend: CameraOverlay | 4 | 2 | 6 |
-| Frontend: PreviewPanel | 15 | 2 | 17 |
+| Frontend: CameraOverlay | 6 | 0 | 6 |
+| Frontend: PreviewPanel | 17 | 0 | 17 |
 | Frontend: StatusHydrator | 7 | 0 | 7 |
 | Frontend: SettingsPanel | 12 | 0 | 12 |
 | Frontend: PipelineStatus | 8 | 0 | 8 |
 | Frontend: MeshPostController | 11 | 0 | 11 |
 | Frontend: MeshRepairController | 9 | 0 | 9 |
-| Frontend: Overview | 0 | 7 | 7 |
-| Frontend: app.js 統合 | 0 | 15 | 15 |
-| **合計** | **410** | **104** | **514** |
+| Frontend: Overview | 7 | 0 | 7 |
+| Frontend: app.js 統合 | 15 | 0 | 15 |
+| **合計** | **564** | **0** | **564** |
 
 ---
 
@@ -1074,20 +1074,23 @@
 - ~~8.5.4 `GET /api/preview/object-file/{name}/{path}`: パス脱出 → 403~~
 - ~~8.1.20 `GET /api/pipeline/video-info`: INPUT_DIR 外パス → 403~~
 
-### P1: コア API エンドポイント (高優先度)
+### P1: コア API エンドポイント ✅ 全件実装済み
 
-- 8.1.7–8.1.21 Pipeline API の未実装テスト群
-- 8.2.2–8.2.15 SAM2 API の未実装テスト群
-- 8.4.1–8.4.5 Mesh Post-Process API
-- 8.7.1–8.7.4 WebSocket 接続管理
+- ~~8.1.7–8.1.21 Pipeline API の未実装テスト群~~
+- ~~8.2.2–8.2.15 SAM2 API の未実装テスト群~~
+- ~~8.4.1–8.4.5 Mesh Post-Process API~~
+- ~~8.7.1–8.7.4 WebSocket 接続管理~~
+- ~~8.3.7 Mesh Repair confirm 重複 ID 除去~~
 
-### P2: パイプライン統合フロー (中優先度)
+### P2: パイプライン統合フロー ✅ 全件実装済み
 
-- 6.8.1–6.8.11 run_pipeline 統合テスト
-- 6.9.1–6.9.4 _run_stage テスト
-- 31.1–31.15 フロントエンド統合ワイヤリング
+- ~~6.8.1–6.8.11 run_pipeline 統合テスト~~
+- ~~6.9.1–6.9.4 _run_stage テスト~~
+- ~~6.10.1–6.10.2 _make_progress_cb / _make_cancel_cb テスト~~
+- ~~31.1–31.15 フロントエンド統合ワイヤリング~~
 
-### P3: エッジケース補完 (低優先度)
+### P3: エッジケース補完 ✅ 全件実装済み
 
-- 残りの State / Configuration / SAM2 Service / Object Store の個別テスト
-- Router, Overview, CameraOverlay の未実装テスト
+- ~~残りの State / Configuration / SAM2 Service / Object Store の個別テスト~~
+- ~~Router, Overview, CameraOverlay の未実装テスト~~
+- ~~Stage Wrappers, App Endpoints ライフサイクル, ConfigPanel, PreviewPanel~~

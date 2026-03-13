@@ -638,5 +638,115 @@ class TestHydrateFromOutputDir(unittest.TestCase):
             self.assertIn("mask_count", result)
 
 
+# ---------------------------------------- PipelineSession reset events ---
+
+
+class TestPipelineSessionResetEvents(unittest.TestCase):
+    """1.4.9 — reset() replaces asyncio.Event instances."""
+
+    def test_reset_replaces_asyncio_events(self) -> None:
+        session = PipelineSession()
+        old_sam2_confirm = session.sam2_confirm_event
+        old_sam2_approve = session.sam2_approve_event
+        old_sam2_ground_skip = session.sam2_ground_skip_event
+        old_next_stage = session.next_stage_confirm_event
+        old_mesh_repair = session.mesh_repair_confirm_event
+
+        session.reset()
+
+        self.assertIsNot(session.sam2_confirm_event, old_sam2_confirm)
+        self.assertIsNot(session.sam2_approve_event, old_sam2_approve)
+        self.assertIsNot(session.sam2_ground_skip_event, old_sam2_ground_skip)
+        self.assertIsNot(session.next_stage_confirm_event, old_next_stage)
+        self.assertIsNot(session.mesh_repair_confirm_event, old_mesh_repair)
+        # All new events should not be set
+        self.assertFalse(session.sam2_confirm_event.is_set())
+        self.assertFalse(session.sam2_approve_event.is_set())
+        self.assertFalse(session.sam2_ground_skip_event.is_set())
+        self.assertFalse(session.next_stage_confirm_event.is_set())
+        self.assertFalse(session.mesh_repair_confirm_event.is_set())
+
+    def test_reset_clears_active_processes(self) -> None:
+        """1.4.10 — reset() clears _active_processes."""
+        session = PipelineSession()
+        proc = _FakeProcess()
+        session.register_active_process(proc)
+        self.assertIn(proc, session._active_processes)
+
+        session.reset()
+
+        self.assertEqual(session._active_processes, set())
+
+
+# ---------------------------------------- PipelineSession clear confirmation ---
+
+
+class TestPipelineSessionClearConfirmation(unittest.TestCase):
+    """1.6.3 / 1.10.8 / 1.10.9 — Confirmation fields and status dict coverage."""
+
+    def test_clear_resets_confirmation_fields(self) -> None:
+        """1.6.3 — clear_next_stage_confirmation() clears all fields."""
+        session = PipelineSession()
+        session.require_next_stage_confirmation(
+            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "msg"
+        )
+        self.assertTrue(session.next_stage_confirmation_required)
+        self.assertEqual(session.next_stage_confirmation_from, 4)
+        self.assertEqual(session.next_stage_confirmation_to, 5)
+        self.assertEqual(session.next_stage_confirmation_message, "msg")
+
+        session.clear_next_stage_confirmation()
+
+        self.assertFalse(session.next_stage_confirmation_required)
+        self.assertIsNone(session.next_stage_confirmation_from)
+        self.assertIsNone(session.next_stage_confirmation_to)
+        self.assertIsNone(session.next_stage_confirmation_message)
+
+    def test_status_dict_has_next_stage_confirmation(self) -> None:
+        """1.10.8 — to_status_dict() contains next_stage_confirmation sub-dict."""
+        session = PipelineSession()
+        d = session.to_status_dict()
+
+        self.assertIn("next_stage_confirmation", d)
+        nsc = d["next_stage_confirmation"]
+        self.assertIn("required", nsc)
+        self.assertIn("from_stage", nsc)
+        self.assertIn("to_stage", nsc)
+        self.assertIn("message", nsc)
+
+        # Verify values after setting confirmation
+        session.require_next_stage_confirmation(
+            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "proceed?"
+        )
+        d2 = session.to_status_dict()
+        nsc2 = d2["next_stage_confirmation"]
+        self.assertTrue(nsc2["required"])
+        self.assertEqual(nsc2["from_stage"], 4)
+        self.assertEqual(nsc2["to_stage"], 5)
+        self.assertEqual(nsc2["message"], "proceed?")
+
+    def test_status_dict_has_mesh_repair(self) -> None:
+        """1.10.9 — to_status_dict() contains mesh_repair sub-dict."""
+        session = PipelineSession()
+        d = session.to_status_dict()
+
+        self.assertIn("mesh_repair", d)
+        mr = d["mesh_repair"]
+        self.assertIn("ready", mr)
+        self.assertIsInstance(mr["ready"], bool)
+        self.assertFalse(mr["ready"])
+
+        # After setting candidates
+        session.set_mesh_repair_candidates(
+            "/tmp/mesh.ply",
+            [{"loop_id": 0}, {"loop_id": 1}],
+            {"total_loops": 2},
+        )
+        d2 = session.to_status_dict()
+        mr2 = d2["mesh_repair"]
+        self.assertTrue(mr2["ready"])
+        self.assertEqual(mr2["candidate_count"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()

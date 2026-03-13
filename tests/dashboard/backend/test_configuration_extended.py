@@ -318,6 +318,47 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         cfg_invalid = _build({"mesh_method": "invalid_method"})
         self.assertEqual(cfg_invalid.mesh_method, MESH_DEFAULT_METHOD)
 
+    def test_ground_plane_enabled_parse_and_env(self) -> None:
+        """2.2.23 — ground_plane_enabled parsing + env var."""
+        cfg_yes = _build({"ground_plane_enabled": "yes"})
+        self.assertTrue(cfg_yes.ground_plane_enabled)
+
+        cfg_env_off = _build({}, env={"GROUND_PLANE_ENABLED": "0"})
+        self.assertFalse(cfg_env_off.ground_plane_enabled)
+
+        # Default (empty env) uses config_defaults constant
+        cfg_default = _build({})
+        from scripts.config_defaults import GROUND_PLANE_ENABLED
+        self.assertEqual(cfg_default.ground_plane_enabled, GROUND_PLANE_ENABLED)
+
+    def test_frame_interval_max_frames_pixel_limit_env(self) -> None:
+        """2.2.24 — frame_interval / max_frames / pixel_limit env overrides."""
+        cfg_env = _build(
+            {},
+            env={
+                "FRAME_INTERVAL": "7",
+                "MAX_FRAMES": "30",
+                "PIXEL_LIMIT": "256000",
+            },
+        )
+        self.assertEqual(cfg_env.frame_interval, 7)
+        self.assertEqual(cfg_env.max_frames, 30)
+        self.assertEqual(cfg_env.pixel_limit, 256000)
+
+        # Raw overrides env
+        cfg_raw = _build(
+            {"frame_interval": 3},
+            env={"FRAME_INTERVAL": "7"},
+        )
+        self.assertEqual(cfg_raw.frame_interval, 3)
+
+    def test_empty_raw_produces_valid_config(self) -> None:
+        """2.2.25 — Empty raw {} produces valid config."""
+        cfg = _build({})
+        self.assertGreater(cfg.frame_interval, 0)
+        self.assertGreaterEqual(cfg.max_frames, 2)
+        self.assertEqual(cfg.video_path, "input.mp4")
+
 
 # ===================================================================
 # TestDenoisePresetDefaults

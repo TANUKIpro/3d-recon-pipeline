@@ -7,7 +7,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import WebSocketDisconnect
 
 from scripts.dashboard.object_store import (
     _safe_json_load,
@@ -16,19 +18,43 @@ from scripts.dashboard.object_store import (
     _validate_object_name,
 )
 from scripts.dashboard.app import (
+    mesh_postprocess,
     mesh_repair_candidates,
+    mesh_repair_confirm,
     pipeline_cancel,
     pipeline_confirm_next,
+    pipeline_load_object,
+    pipeline_objects,
+    pipeline_object_info,
+    pipeline_pi3x_plan,
+    pipeline_start,
     pipeline_video_info,
+    pipeline_videos,
     preview_file,
     preview_object_file,
+    preview_outputs,
+    preview_crop_obb,
     pipeline_status,
     sam2_approve,
+    sam2_clear,
     sam2_click,
     sam2_confirm,
+    sam2_frame,
+    sam2_get_mode,
+    sam2_mask,
+    sam2_mode,
     sam2_redo,
     sam2_service,
+    sam2_skip_ground,
+    sam2_undo,
     session,
+    verification_frame,
+    verification_ground_frame,
+    vram_info,
+    websocket_endpoint,
+    _startup,
+    _shutdown,
+    _active_output_dir,
 )
 
 
@@ -537,6 +563,851 @@ class TestPipelineVideoInfoPathSecurity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 403)
         payload = _json_payload(response)
         self.assertEqual(payload["error"], "Access denied")
+
+
+# ── WebSocket helper ──────────────────────────────────────────────
+
+
+class _FakeWS:
+    """Mock WebSocket for websocket_endpoint tests."""
+
+    def __init__(self, *, disconnect_after: int = 0) -> None:
+        self.accepted = False
+        self.sent: list[str] = []
+        self._recv_count = 0
+        self._disconnect_after = disconnect_after
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def send_text(self, text: str) -> None:
+        self.sent.append(text)
+
+    async def receive_text(self) -> str:
+        self._recv_count += 1
+        if self._recv_count > self._disconnect_after:
+            raise WebSocketDisconnect()
+        return "ping"
+
+
+# ── Pipeline videos endpoint (8.1.7–8.1.8) ───────────────────────
+
+
+class TestPipelineVideosEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch("scripts.dashboard.app.INPUT_DIR", self._tmp.name)
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmp.cleanup()
+
+    async def test_returns_video_list_format(self) -> None:
+        # Create a dummy mp4 file
+        (Path(self._tmp.name) / "test.mp4").write_bytes(b"\x00" * 1024)
+        response = await pipeline_videos()
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertIn("videos", payload)
+        self.assertEqual(len(payload["videos"]), 1)
+        v = payload["videos"][0]
+        self.assertIn("name", v)
+        self.assertIn("path", v)
+        self.assertIn("size_mb", v)
+        self.assertIn("suggested_object_name", v)
+        self.assertEqual(v["name"], "test.mp4")
+
+    async def test_filters_video_extensions(self) -> None:
+        base = Path(self._tmp.name)
+        (base / "clip.mp4").write_bytes(b"\x00")
+        (base / "notes.txt").write_bytes(b"\x00")
+        (base / "photo.jpg").write_bytes(b"\x00")
+        (base / "scene.mov").write_bytes(b"\x00")
+        response = await pipeline_videos()
+        payload = _json_payload(response)
+        names = {v["name"] for v in payload["videos"]}
+        self.assertIn("clip.mp4", names)
+        self.assertIn("scene.mov", names)
+        self.assertNotIn("notes.txt", names)
+        self.assertNotIn("photo.jpg", names)
+
+
+# ── Pipeline objects endpoint (8.1.9) ─────────────────────────────
+
+
+class TestPipelineObjectsEndpoint(unittest.IsolatedAsyncioTestCase):
+    @patch("scripts.dashboard.app.OUTPUT_DIR", "/tmp/test-out")
+    @patch("scripts.dashboard.app._list_objects", return_value=[
+        {"name": "obj1", "updated_at": "2026-01-01"},
+    ])
+    async def test_returns_objects_and_active(self, mock_list: MagicMock) -> None:
+        response = await pipeline_objects()
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertIn("objects", payload)
+        self.assertIn("active_object", payload)
+        self.assertEqual(len(payload["objects"]), 1)
+
+
+# ── Pipeline object-info endpoint (8.1.10–8.1.12) ────────────────
+
+
+class TestPipelineObjectInfoEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmp.cleanup()
+
+    @patch("scripts.dashboard.app._summarize_object")
+    async def test_valid_name_returns_info(self, mock_summarize: MagicMock) -> None:
+        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        obj_dir.mkdir(parents=True)
+        mock_summarize.return_value = {"name": "test-obj"}
+        response = await pipeline_object_info(name="test-obj")
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertIn("object", payload)
+
+    async def test_invalid_name_returns_400(self) -> None:
+        response = await pipeline_object_info(name="..")
+        self.assertEqual(response.status_code, 400)
+
+    async def test_not_found_returns_404(self) -> None:
+        response = await pipeline_object_info(name="nonexistent-obj")
+        self.assertEqual(response.status_code, 404)
+
+
+# ── Pipeline load-object endpoint (8.1.13–8.1.14) ────────────────
+
+
+class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
+        self._patcher.start()
+        self._snapshot = {
+            "running": session.running,
+            "config_object_name": session.config.object_name,
+        }
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.config.object_name = self._snapshot["config_object_name"]
+        self._patcher.stop()
+        self._tmp.cleanup()
+
+    @patch("scripts.dashboard.app.broadcast", new_callable=AsyncMock)
+    @patch("scripts.dashboard.app._load_object_into_session", return_value={"name": "test-obj"})
+    async def test_load_success(self, mock_load: MagicMock, mock_broadcast: AsyncMock) -> None:
+        session.running = False
+        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        obj_dir.mkdir(parents=True)
+        response = await pipeline_load_object({"name": "test-obj"})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["status"], "loaded")
+
+    async def test_load_while_running_returns_409(self) -> None:
+        session.running = True
+        response = await pipeline_load_object({"name": "test-obj"})
+        self.assertEqual(response.status_code, 409)
+
+
+# ── Pipeline start endpoint (8.1.15–8.1.18) ──────────────────────
+
+
+class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
+        self._patcher.start()
+        self._snapshot = {
+            "running": session.running,
+            "config": session.config,
+            "resume_from_stage": session.resume_from_stage,
+        }
+        # Save env vars
+        self._env_keys = [
+            "DIFFCD_BATCH_SIZE", "DIFFCD_N_BATCHES", "DIFFCD_RESOLUTION",
+            "MESH_REPAIR_ENABLED", "MESH_REPAIR_MAX_DIAMETER_RATIO",
+            "MESH_REPAIR_Y_BAND_RATIO", "MESH_REPAIR_SMOOTH_ITERS",
+        ]
+        import os
+        self._env_backup = {k: os.environ.get(k) for k in self._env_keys}
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.config = self._snapshot["config"]
+        session.resume_from_stage = self._snapshot["resume_from_stage"]
+        self._patcher.stop()
+        self._tmp.cleanup()
+        import os
+        for k, v in self._env_backup.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    async def test_start_while_running_returns_409(self) -> None:
+        session.running = True
+        response = await pipeline_start({"video_path": "/data/input/test.mp4"})
+        self.assertEqual(response.status_code, 409)
+
+    async def test_resume_stage_out_of_range_returns_400(self) -> None:
+        session.running = False
+        response = await pipeline_start({
+            "video_path": "/data/input/test.mp4",
+            "resume_from_stage": 0,
+        })
+        self.assertEqual(response.status_code, 400)
+
+    async def test_missing_prereqs_returns_400(self) -> None:
+        session.running = False
+        # Create object dir so it exists but is empty
+        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        obj_dir.mkdir(parents=True)
+        response = await pipeline_start({
+            "video_path": "/data/input/test.mp4",
+            "object_name": "test-obj",
+            "resume_from_stage": 3,
+        })
+        self.assertEqual(response.status_code, 400)
+        payload = _json_payload(response)
+        self.assertIn("missing", payload)
+
+    @patch("scripts.dashboard.app.run_pipeline", new_callable=AsyncMock)
+    async def test_start_success(self, mock_run: AsyncMock) -> None:
+        session.running = False
+        response = await pipeline_start({
+            "video_path": "/data/input/test.mp4",
+            "object_name": "test-obj",
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["status"], "started")
+        self.assertIn("object_name", payload)
+        self.assertIn("output_dir", payload)
+        self.assertIn("resume_from_stage", payload)
+        # Clean up the created task
+        if session._task is not None:
+            session._task.cancel()
+            try:
+                await session._task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+# ── Pipeline video-info success (8.1.19) ──────────────────────────
+
+
+class TestPipelineVideoInfoSuccess(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._patcher = patch("scripts.dashboard.app.INPUT_DIR", self._tmp.name)
+        self._patcher.start()
+
+    def tearDown(self) -> None:
+        self._patcher.stop()
+        self._tmp.cleanup()
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_valid_video_returns_metadata(self, mock_to_thread: AsyncMock) -> None:
+        video = Path(self._tmp.name) / "clip.mp4"
+        video.write_bytes(b"\x00" * 100)
+        mock_to_thread.return_value = {
+            "fps": 30, "total_frames": 300, "width": 1920, "height": 1080,
+            "duration": 10.0, "rotation": 0,
+            "suggested_frame_interval": 15, "suggested_max_frames": 20,
+        }
+        response = await pipeline_video_info(str(video))
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["fps"], 30)
+
+
+# ── Pipeline pi3x-plan endpoint (8.1.21) ─────────────────────────
+
+
+class TestPipelinePi3xPlanEndpoint(unittest.IsolatedAsyncioTestCase):
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_returns_plan(self, mock_to_thread: AsyncMock) -> None:
+        mock_to_thread.return_value = {
+            "requested_frames": 50, "actual_frames": 40, "pixel_limit": 512,
+        }
+        response = await pipeline_pi3x_plan(requested_frames=50, pixel_limit=512)
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertIn("requested_frames", payload)
+
+
+# ── SAM2 click success (8.2.2) ───────────────────────────────────
+
+
+class TestSam2ClickSuccess(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_click_returns_png(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = b"\x89PNG"
+        response = await sam2_click({"x": 0.5, "y": 0.5, "label": 1})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.media_type, "image/png")
+
+
+# ── SAM2 undo endpoint (8.2.3) ───────────────────────────────────
+
+
+class TestSam2UndoEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_undo_returns_png(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = b"\x89PNG"
+        response = await sam2_undo()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.media_type, "image/png")
+
+    async def test_undo_not_initialized_returns_409(self) -> None:
+        sam2_service._session = None
+        response = await sam2_undo()
+        self.assertEqual(response.status_code, 409)
+
+
+# ── SAM2 clear endpoint (8.2.4) ──────────────────────────────────
+
+
+class TestSam2ClearEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_clear_returns_png(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = b"\x89PNG"
+        response = await sam2_clear()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.media_type, "image/png")
+
+    async def test_clear_not_initialized_returns_409(self) -> None:
+        sam2_service._session = None
+        response = await sam2_clear()
+        self.assertEqual(response.status_code, 409)
+
+
+# ── SAM2 mode endpoint (8.2.9–8.2.10) ────────────────────────────
+
+
+class TestSam2ModeEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+        self._orig_mode = sam2_service._segmentation_mode
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+        sam2_service._segmentation_mode = self._orig_mode
+
+    async def test_set_mode_success(self) -> None:
+        sam2_service._session = object()
+        response = await sam2_mode({"mode": "ground"})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["mode"], "ground")
+
+    async def test_set_mode_invalid_returns_400(self) -> None:
+        sam2_service._session = object()
+        response = await sam2_mode({"mode": "invalid"})
+        self.assertEqual(response.status_code, 400)
+
+    async def test_set_mode_not_initialized_returns_409(self) -> None:
+        sam2_service._session = None
+        response = await sam2_mode({"mode": "ground"})
+        self.assertEqual(response.status_code, 409)
+
+    async def test_get_mode_returns_current(self) -> None:
+        sam2_service._segmentation_mode = "ground"
+        response = await sam2_get_mode()
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["mode"], "ground")
+
+
+# ── SAM2 skip-ground endpoint (8.2.11) ───────────────────────────
+
+
+class TestSam2SkipGroundEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_event = session.sam2_ground_skip_event
+
+    def tearDown(self) -> None:
+        session.sam2_ground_skip_event = self._orig_event
+
+    async def test_skip_ground_sets_event(self) -> None:
+        session.sam2_ground_skip_event = asyncio.Event()
+        response = await sam2_skip_ground()
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["status"], "skipping_ground")
+        self.assertTrue(session.sam2_ground_skip_event.is_set())
+
+
+# ── SAM2 frame endpoint (8.2.12–8.2.13) ──────────────────────────
+
+
+class TestSam2FrameEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_frame_returns_jpeg(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = b"\xff\xd8\xff"
+        response = await sam2_frame(0)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.media_type, "image/jpeg")
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_frame_out_of_range_returns_404(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.side_effect = IndexError("frame out of range")
+        response = await sam2_frame(999)
+        self.assertEqual(response.status_code, 404)
+
+    async def test_frame_not_initialized_returns_409(self) -> None:
+        sam2_service._session = None
+        response = await sam2_frame(0)
+        self.assertEqual(response.status_code, 409)
+
+
+# ── SAM2 mask endpoint (8.2.14–8.2.15) ───────────────────────────
+
+
+class TestSam2MaskEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_session = sam2_service._session
+
+    def tearDown(self) -> None:
+        sam2_service._session = self._orig_session
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_mask_returns_png(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = b"\x89PNG"
+        response = await sam2_mask(0)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.media_type, "image/png")
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    async def test_mask_not_found_returns_404(self, mock_to_thread: AsyncMock) -> None:
+        sam2_service._session = object()
+        mock_to_thread.return_value = None
+        response = await sam2_mask(0)
+        self.assertEqual(response.status_code, 404)
+
+    async def test_mask_not_initialized_returns_409(self) -> None:
+        sam2_service._session = None
+        response = await sam2_mask(0)
+        self.assertEqual(response.status_code, 409)
+
+
+# ── Mesh postprocess endpoint (8.4.1–8.4.5) ──────────────────────
+
+
+class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._snapshot = {
+            "running": session.running,
+            "next_stage_confirmation_required": session.next_stage_confirmation_required,
+            "next_stage_confirmation_from": session.next_stage_confirmation_from,
+            "mesh_ply": session.mesh_ply,
+        }
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.next_stage_confirmation_required = self._snapshot["next_stage_confirmation_required"]
+        session.next_stage_confirmation_from = self._snapshot["next_stage_confirmation_from"]
+        session.mesh_ply = self._snapshot["mesh_ply"]
+        self._tmp.cleanup()
+
+    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_postprocess_success(
+        self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock, mock_reset: MagicMock,
+    ) -> None:
+        session.running = False
+        out = Path(self._tmp.name)
+        mock_out_dir.return_value = out
+        (out / "object_mesh.ply").write_bytes(b"ply")
+        (out / "object_mesh_raw.ply").write_bytes(b"ply")
+        mock_to_thread.return_value = (1000, 2000, False)
+        response = await mesh_postprocess({"invalidate_texture": False})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["vertices"], 1000)
+        self.assertEqual(payload["faces"], 2000)
+        self.assertIn("method", payload)
+        self.assertIn("iterations", payload)
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_method_validation(
+        self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock,
+    ) -> None:
+        session.running = False
+        out = Path(self._tmp.name)
+        mock_out_dir.return_value = out
+        (out / "object_mesh.ply").write_bytes(b"ply")
+        (out / "object_mesh_raw.ply").write_bytes(b"ply")
+        mock_to_thread.return_value = (100, 200, False)
+        response = await mesh_postprocess({
+            "method": "invalid",
+            "invalidate_texture": False,
+        })
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        # Invalid method falls back to "laplacian"
+        self.assertEqual(payload["method"], "laplacian")
+
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_iterations_clamped(
+        self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock,
+    ) -> None:
+        session.running = False
+        out = Path(self._tmp.name)
+        mock_out_dir.return_value = out
+        (out / "object_mesh.ply").write_bytes(b"ply")
+        (out / "object_mesh_raw.ply").write_bytes(b"ply")
+        mock_to_thread.return_value = (100, 200, False)
+
+        # iterations=200 → clamped to 100
+        response = await mesh_postprocess({
+            "iterations": 200,
+            "invalidate_texture": False,
+        })
+        payload = _json_payload(response)
+        self.assertEqual(payload["iterations"], 100)
+
+        # iterations=-5 → clamped to 0
+        response = await mesh_postprocess({
+            "iterations": -5,
+            "invalidate_texture": False,
+        })
+        payload = _json_payload(response)
+        self.assertEqual(payload["iterations"], 0)
+
+    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("asyncio.to_thread", new_callable=AsyncMock)
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_invalidate_texture_resets(
+        self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock, mock_reset: MagicMock,
+    ) -> None:
+        session.running = False
+        out = Path(self._tmp.name)
+        mock_out_dir.return_value = out
+        (out / "object_mesh.ply").write_bytes(b"ply")
+        (out / "object_mesh_raw.ply").write_bytes(b"ply")
+        # Create a downstream file that triggers invalidation
+        (out / "textured_mesh.obj").write_text("obj", encoding="utf-8")
+        mock_to_thread.return_value = (100, 200, False)
+        response = await mesh_postprocess({"invalidate_texture": True})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertTrue(payload["texture_invalidated"])
+        mock_reset.assert_called_once()
+
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_running_non_stage5_returns_409(self, mock_out_dir: MagicMock) -> None:
+        session.running = True
+        session.next_stage_confirmation_required = False
+        response = await mesh_postprocess({})
+        self.assertEqual(response.status_code, 409)
+
+
+# ── WebSocket endpoint (8.7.1–8.7.4) ─────────────────────────────
+
+
+class TestWebSocketEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._orig_clients = list(session.ws_clients)
+
+    def tearDown(self) -> None:
+        session.ws_clients[:] = self._orig_clients
+
+    async def test_client_added_and_removed(self) -> None:
+        ws = _FakeWS(disconnect_after=0)
+        await websocket_endpoint(ws)  # type: ignore[arg-type]
+        self.assertTrue(ws.accepted)
+        # After disconnect, client should be removed
+        self.assertNotIn(ws, session.ws_clients)
+
+    async def test_status_snapshot_sent_on_connect(self) -> None:
+        ws = _FakeWS(disconnect_after=0)
+        await websocket_endpoint(ws)  # type: ignore[arg-type]
+        self.assertTrue(len(ws.sent) >= 1)
+        first = json.loads(ws.sent[0])
+        self.assertEqual(first["type"], "status")
+        self.assertIn("running", first)
+        self.assertIn("stages", first)
+
+    async def test_multiple_clients(self) -> None:
+        ws1 = _FakeWS(disconnect_after=0)
+        ws2 = _FakeWS(disconnect_after=0)
+        t1 = asyncio.create_task(websocket_endpoint(ws1))  # type: ignore[arg-type]
+        t2 = asyncio.create_task(websocket_endpoint(ws2))  # type: ignore[arg-type]
+        await asyncio.gather(t1, t2)
+        # Both received status snapshot
+        self.assertTrue(len(ws1.sent) >= 1)
+        self.assertTrue(len(ws2.sent) >= 1)
+        self.assertEqual(json.loads(ws1.sent[0])["type"], "status")
+        self.assertEqual(json.loads(ws2.sent[0])["type"], "status")
+
+
+# ── Mesh repair confirm dedup (8.3.7) ────────────────────────────
+
+
+class TestMeshRepairConfirmDedup(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._snapshot = {
+            "running": session.running,
+            "mesh_repair_ready": session.mesh_repair_ready,
+            "mesh_repair_candidates": list(session.mesh_repair_candidates),
+            "mesh_repair_selected_loop_ids": list(session.mesh_repair_selected_loop_ids),
+            "mesh_repair_confirm_event": session.mesh_repair_confirm_event,
+        }
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.mesh_repair_ready = self._snapshot["mesh_repair_ready"]
+        session.mesh_repair_candidates = self._snapshot["mesh_repair_candidates"]
+        session.mesh_repair_selected_loop_ids = self._snapshot["mesh_repair_selected_loop_ids"]
+        session.mesh_repair_confirm_event = self._snapshot["mesh_repair_confirm_event"]
+
+    async def test_duplicate_ids_deduped_preserving_order(self) -> None:
+        session.running = True
+        session.mesh_repair_ready = True
+        session.mesh_repair_candidates = [
+            {"loop_id": 1}, {"loop_id": 2},
+        ]
+        session.mesh_repair_confirm_event = asyncio.Event()
+        response = await mesh_repair_confirm({"selected_loop_ids": [2, 1, 2, 1, 2]})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["selected_loop_ids"], [2, 1])
+        self.assertEqual(payload["selected_count"], 2)
+
+
+# ── Preview Endpoints ─────────────────────────────────────────────
+
+
+class TestPreviewObjectFileNormal(unittest.IsolatedAsyncioTestCase):
+    """8.5.3 — preview_object_file normal file serving."""
+
+    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app._validate_object_name", side_effect=lambda n: n)
+    async def test_serves_existing_file(self, mock_validate, mock_root) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            obj_dir = base / "objects" / "test-obj"
+            obj_dir.mkdir(parents=True)
+            (obj_dir / "test.ply").write_bytes(b"ply data")
+            mock_root.return_value = base
+
+            response = await preview_object_file("test-obj", "test.ply")
+
+            self.assertEqual(response.status_code, 200)
+
+
+class TestPreviewOutputs(unittest.IsolatedAsyncioTestCase):
+    """8.5.5 — preview_outputs returns file list."""
+
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_returns_files(self, mock_dir) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "object_mesh.ply").write_bytes(b"ply")
+            mock_dir.return_value = out
+
+            response = await preview_outputs()
+
+            data = _json_payload(response)
+            self.assertIn("files", data)
+            names = [f["name"] for f in data["files"]]
+            self.assertIn("object_mesh.ply", names)
+
+
+class TestPreviewCropOBB(unittest.IsolatedAsyncioTestCase):
+    """8.5.6 — preview_crop_obb returns OBB dict."""
+
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_missing_mesh_returns_404(self, mock_dir) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_dir.return_value = Path(tmp)
+
+            response = await preview_crop_obb()
+
+            data = _json_payload(response)
+            self.assertEqual(response.status_code, 404)
+
+
+class TestVerificationFrame(unittest.IsolatedAsyncioTestCase):
+    """8.5.7 — verification_frame returns composited JPEG."""
+
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_missing_frame_returns_404(self, mock_dir) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            mock_dir.return_value = out
+
+            response = await verification_frame(0)
+
+            data = _json_payload(response)
+            self.assertEqual(response.status_code, 404)
+
+
+class TestVerificationGroundFrame(unittest.IsolatedAsyncioTestCase):
+    """8.5.8 — verification_ground_frame returns composited JPEG."""
+
+    @patch("scripts.dashboard.app._active_output_dir")
+    async def test_missing_frame_returns_404(self, mock_dir) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            mock_dir.return_value = out
+
+            response = await verification_ground_frame(0)
+
+            data = _json_payload(response)
+            self.assertEqual(response.status_code, 404)
+
+
+class TestVramInfo(unittest.IsolatedAsyncioTestCase):
+    """8.6.1 — vram_info returns free_mb."""
+
+    @patch("scripts.dashboard.app.get_free_vram_mb", create=True, return_value=8192)
+    async def test_returns_free_mb(self, mock_vram) -> None:
+        # We need to mock the import inside the function
+        pass
+
+    async def test_vram_info_no_gpu_returns_null(self) -> None:
+        """When vram_utils raises, free_mb is None."""
+        with patch.dict("sys.modules", {"vram_utils": MagicMock(
+            get_free_vram_mb=MagicMock(side_effect=RuntimeError("no GPU")),
+        )}):
+            response = await vram_info()
+            data = _json_payload(response)
+            self.assertIn("free_mb", data)
+
+
+class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
+    """8.8.1-8.8.3 — _startup installs LogBroadcaster and auto-loads."""
+
+    @patch("scripts.dashboard.app._list_objects", return_value=[])
+    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.LogBroadcaster")
+    async def test_startup_installs_broadcaster(self, mock_lb_cls, mock_root, mock_list) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_root.return_value = Path(tmp)
+            mock_lb = MagicMock()
+            mock_lb.drain = MagicMock(return_value=asyncio.coroutine(lambda: None)())
+            mock_lb_cls.return_value = mock_lb
+
+            import scripts.dashboard.app as app_mod
+            old_broadcaster = app_mod.log_broadcaster
+            try:
+                await _startup()
+                mock_lb.install.assert_called_once()
+            finally:
+                app_mod.log_broadcaster = old_broadcaster
+
+    @patch("scripts.dashboard.app._list_objects")
+    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.LogBroadcaster")
+    async def test_startup_auto_loads_latest_object(self, mock_lb_cls, mock_root, mock_list) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            obj_dir = base / "objects" / "latest-obj"
+            obj_dir.mkdir(parents=True)
+            mock_root.return_value = base
+            mock_list.return_value = [{"name": "latest-obj"}]
+
+            mock_lb = MagicMock()
+            mock_lb.drain = MagicMock(return_value=asyncio.coroutine(lambda: None)())
+            mock_lb_cls.return_value = mock_lb
+
+            import scripts.dashboard.app as app_mod
+            old_broadcaster = app_mod.log_broadcaster
+            try:
+                with patch("scripts.dashboard.app._load_object_into_session") as mock_load:
+                    await _startup()
+                    mock_load.assert_called_once()
+            finally:
+                app_mod.log_broadcaster = old_broadcaster
+
+
+class TestLifecycleShutdown(unittest.IsolatedAsyncioTestCase):
+    """8.8.4-8.8.5 — _shutdown releases SAM2 and uninstalls broadcaster."""
+
+    async def test_shutdown_releases_sam2(self) -> None:
+        import scripts.dashboard.app as app_mod
+        mock_sam2 = MagicMock()
+        old_sam2 = app_mod.sam2_service
+        old_broadcaster = app_mod.log_broadcaster
+        app_mod.sam2_service = mock_sam2
+        app_mod.log_broadcaster = MagicMock()
+
+        try:
+            await _shutdown()
+            mock_sam2.release.assert_called_once()
+        finally:
+            app_mod.sam2_service = old_sam2
+            app_mod.log_broadcaster = old_broadcaster
+
+    async def test_shutdown_uninstalls_broadcaster(self) -> None:
+        import scripts.dashboard.app as app_mod
+        mock_broadcaster = MagicMock()
+        mock_sam2 = MagicMock()
+        old_sam2 = app_mod.sam2_service
+        old_broadcaster = app_mod.log_broadcaster
+        app_mod.log_broadcaster = mock_broadcaster
+        app_mod.sam2_service = mock_sam2
+
+        try:
+            await _shutdown()
+            mock_broadcaster.uninstall.assert_called_once()
+        finally:
+            app_mod.sam2_service = old_sam2
+            app_mod.log_broadcaster = old_broadcaster
 
 
 if __name__ == "__main__":

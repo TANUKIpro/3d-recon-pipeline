@@ -562,5 +562,261 @@ class TestSAM2ServiceThreadSafety(unittest.TestCase):
         self.assertEqual(len(fake.click_labels), 10)
 
 
+# ====================================================================
+# TestSAM2ServiceCoordinateNormalization
+# ====================================================================
+
+
+class TestSAM2ServiceCoordinateNormalization(unittest.TestCase):
+    """5.2.5 — Verify _sanitize_normalized_point called during add_click."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        _setup_render_mocks()
+        self.service = SAM2Service()
+
+    def test_sanitize_called_with_coordinates(self) -> None:
+        fake = _make_fake_session()
+        self.service._session = fake
+        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.42, 0.58)
+        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+
+        self.service.add_click(0.42, 0.58, 1)
+
+        _mock_stage_sam2_ui._sanitize_normalized_point.assert_called_with(0.42, 0.58)
+        # Verify the sanitized values were used
+        self.assertEqual(fake.click_points[-1], (0.42, 0.58))
+
+
+# ====================================================================
+# TestSAM2ServiceGroundUndoIsolation
+# ====================================================================
+
+
+class TestSAM2ServiceGroundUndoIsolation(unittest.TestCase):
+    """5.3.4 — Ground undo only affects ground list."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        _setup_render_mocks()
+        self.service = SAM2Service()
+
+    def test_ground_undo_preserves_object_clicks(self) -> None:
+        fake = _make_fake_session()
+        fake.click_points = [(0.1, 0.2), (0.3, 0.4)]
+        fake.click_labels = [1, 1]
+        fake.ground_click_points = [(0.5, 0.6), (0.7, 0.8)]
+        fake.ground_click_labels = [1, 0]
+        self.service._session = fake
+        self.service._segmentation_mode = "ground"
+        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+
+        self.service.undo_click()
+
+        # Ground list shrunk
+        self.assertEqual(len(fake.ground_click_points), 1)
+        self.assertEqual(fake.ground_click_points, [(0.5, 0.6)])
+        # Object list unchanged
+        self.assertEqual(len(fake.click_points), 2)
+        self.assertEqual(fake.click_points, [(0.1, 0.2), (0.3, 0.4)])
+
+
+# ====================================================================
+# TestSAM2ServiceClearResetState
+# ====================================================================
+
+
+class TestSAM2ServiceClearResetState(unittest.TestCase):
+    """5.4.4 — clear_clicks() calls predictor.reset_state."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        _setup_render_mocks()
+        self.service = SAM2Service()
+
+    def test_clear_calls_predictor_reset_state(self) -> None:
+        fake = _make_fake_session()
+        fake.click_points = [(0.5, 0.5)]
+        fake.click_labels = [1]
+        self.service._session = fake
+
+        self.service.clear_clicks()
+
+        fake.predictor.reset_state.assert_called_once_with(fake.inference_state)
+
+
+# ====================================================================
+# TestSAM2ServicePropagateProgress
+# ====================================================================
+
+
+class TestSAM2ServicePropagateProgress(unittest.TestCase):
+    """5.5.4 / 5.5.6 — propagate_and_save progress callback + stale mask cleanup."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        self.service = SAM2Service()
+
+    def _setup_propagation(self, fake):
+        """Common propagation setup."""
+        mask_array = MagicMock()
+        mask_array.__mul__ = MagicMock(return_value=MagicMock())
+        self.service._current_mask = mask_array
+
+        mask_tensor = MagicMock()
+        mask_tensor.__getitem__ = MagicMock(
+            return_value=MagicMock(
+                __gt__=MagicMock(
+                    return_value=MagicMock(
+                        cpu=MagicMock(
+                            return_value=MagicMock(
+                                numpy=MagicMock(
+                                    return_value=MagicMock(
+                                        squeeze=MagicMock(return_value=MagicMock())
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        fake.predictor.propagate_in_video.return_value = [
+            (0, [1], mask_tensor),
+            (1, [1], mask_tensor),
+        ]
+        _mock_torch.inference_mode.return_value = MagicMock(
+            __enter__=MagicMock(return_value=None),
+            __exit__=MagicMock(return_value=False),
+        )
+
+    def test_progress_callback_called(self) -> None:
+        """5.5.4 — progress callback receives (frame_idx, total) args."""
+        fake = _make_fake_session()
+        fake.click_points = [(0.5, 0.5)]
+        fake.click_labels = [1]
+        self.service._session = fake
+        self._setup_propagation(fake)
+
+        progress = MagicMock()
+        self.service.propagate_and_save(progress_callback=progress)
+
+        self.assertTrue(progress.called)
+        # Called with (frame_idx, num_frames)
+        for call in progress.call_args_list:
+            args = call[0]
+            self.assertEqual(len(args), 2)
+
+    def test_stale_masks_cleared(self) -> None:
+        """5.5.6 — Existing mask files are cleaned before saving."""
+        fake = _make_fake_session()
+        fake.click_points = [(0.5, 0.5)]
+        fake.click_labels = [1]
+        self.service._session = fake
+        self._setup_propagation(fake)
+
+        # Pre-create stale mock files
+        stale_mask = MagicMock()
+        stale_mask.unlink = MagicMock()
+        fake.mask_dir.glob.return_value = [stale_mask]
+        fake.ground_mask_dir.glob.return_value = []
+
+        self.service.propagate_and_save()
+
+        # Stale masks should have been unlinked
+        stale_mask.unlink.assert_called_once()
+
+
+# ====================================================================
+# TestSAM2ServiceGetMaskPng
+# ====================================================================
+
+
+class TestSAM2ServiceGetMaskPng(unittest.TestCase):
+    """5.7.4 / 5.7.5 — get_mask_png returns bytes or None."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        self.service = SAM2Service()
+
+    def test_existing_mask_returns_bytes(self) -> None:
+        """5.7.4 — get_mask_png returns PNG bytes for existing mask."""
+        fake = _make_fake_session()
+        self.service._session = fake
+
+        # Make the mask path exist
+        mask_path = MagicMock()
+        mask_path.exists.return_value = True
+        fake.mask_dir.__truediv__ = lambda self, other: mask_path
+
+        _mock_cv2.imread.return_value = MagicMock(name="mask_img")
+        buf_mock = MagicMock()
+        buf_mock.tobytes.return_value = b"\x89PNGdata"
+        _mock_cv2.imencode.return_value = (True, buf_mock)
+
+        result = self.service.get_mask_png(0)
+
+        self.assertEqual(result, b"\x89PNGdata")
+
+    def test_missing_mask_returns_none(self) -> None:
+        """5.7.5 — get_mask_png returns None for missing mask."""
+        fake = _make_fake_session()
+        self.service._session = fake
+
+        # Make the mask path not exist
+        mask_path = MagicMock()
+        mask_path.exists.return_value = False
+        fake.mask_dir.__truediv__ = lambda self, other: mask_path
+
+        result = self.service.get_mask_png(5)
+
+        self.assertIsNone(result)
+
+
+# ====================================================================
+# TestSAM2ServiceSegmentationMode
+# ====================================================================
+
+
+class TestSAM2ServiceSegmentationMode(unittest.TestCase):
+    """5.9.1 / 5.9.2 / 5.9.3 — Segmentation mode and has_ground_clicks."""
+
+    def setUp(self) -> None:
+        _reset_all_mocks()
+        self.service = SAM2Service()
+
+    def test_default_mode_is_object(self) -> None:
+        """5.9.1 — Default segmentation mode is 'object'."""
+        self.assertEqual(self.service.segmentation_mode, "object")
+
+    def test_set_mode_updates_property(self) -> None:
+        """5.9.2 — set_mode changes segmentation_mode."""
+        self.service.set_mode("ground")
+        self.assertEqual(self.service.segmentation_mode, "ground")
+
+    def test_set_mode_invalid_raises(self) -> None:
+        """5.9.2 — Invalid mode raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.service.set_mode("invalid")
+
+    def test_has_ground_clicks_no_session(self) -> None:
+        """5.9.3 — has_ground_clicks False when no session."""
+        self.assertFalse(self.service.has_ground_clicks)
+
+    def test_has_ground_clicks_empty(self) -> None:
+        """5.9.3 — has_ground_clicks False when ground list empty."""
+        fake = _make_fake_session()
+        fake.ground_click_points = []
+        self.service._session = fake
+        self.assertFalse(self.service.has_ground_clicks)
+
+    def test_has_ground_clicks_nonempty(self) -> None:
+        """5.9.3 — has_ground_clicks True when ground list non-empty."""
+        fake = _make_fake_session()
+        fake.ground_click_points = [(0.5, 0.5)]
+        self.service._session = fake
+        self.assertTrue(self.service.has_ground_clicks)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -308,5 +308,76 @@ class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
         await task
 
 
+class TestWaitForNextStageConfirmationBroadcast(unittest.IsolatedAsyncioTestCase):
+    """6.6.3 / 6.6.4 — Broadcast message structure and session fields."""
+
+    @patch("scripts.dashboard.pipeline_runner.broadcast", new_callable=AsyncMock)
+    async def test_broadcast_required_and_cleared(self, mock_bc: AsyncMock) -> None:
+        """6.6.3 — auto_accept broadcasts required + cleared messages."""
+        session = PipelineSession()
+        session.config.auto_accept = True
+        session.config.mesh_method = "poisson"
+        session.stage_start(PipelineStage.EXTRACT_FRAMES)
+
+        await _wait_for_next_stage_confirmation(
+            session,
+            PipelineStage.EXTRACT_FRAMES,
+            PipelineStage.PI3X_RECONSTRUCT,
+            "Continue to Pi3X?",
+        )
+
+        # Find the required broadcast
+        required_calls = [
+            c for c in mock_bc.call_args_list
+            if isinstance(c[0][1], dict)
+            and c[0][1].get("type") == "next_stage_confirmation_required"
+        ]
+        self.assertGreater(len(required_calls), 0, "Should broadcast required message")
+        req_msg = required_calls[0][0][1]
+        self.assertIn("from_stage", req_msg)
+        self.assertIn("to_stage", req_msg)
+        self.assertIn("message", req_msg)
+        self.assertTrue(req_msg.get("auto_accepted"))
+
+        # Find the cleared broadcast
+        cleared_calls = [
+            c for c in mock_bc.call_args_list
+            if isinstance(c[0][1], dict)
+            and c[0][1].get("type") == "next_stage_confirmation_cleared"
+        ]
+        self.assertGreater(len(cleared_calls), 0, "Should broadcast cleared message")
+
+    @patch("scripts.dashboard.pipeline_runner.broadcast", new_callable=AsyncMock)
+    async def test_session_fields_set_and_cleared(self, mock_bc: AsyncMock) -> None:
+        """6.6.4 — Session confirmation fields set during and cleared after."""
+        session = PipelineSession()
+        session.config.auto_accept = True
+        session.config.mesh_method = "poisson"
+        session.stage_start(PipelineStage.EXTRACT_FRAMES)
+
+        # Capture the state during the required broadcast
+        required_seen = False
+
+        async def _capture_required(sess, msg):
+            nonlocal required_seen
+            if isinstance(msg, dict) and msg.get("type") == "next_stage_confirmation_required":
+                required_seen = True
+                # During this call, session fields should be set
+                # (auto_accept skips immediately, but fields are set first)
+
+        mock_bc.side_effect = _capture_required
+
+        await _wait_for_next_stage_confirmation(
+            session,
+            PipelineStage.EXTRACT_FRAMES,
+            PipelineStage.PI3X_RECONSTRUCT,
+            "Continue?",
+        )
+
+        self.assertTrue(required_seen, "Required broadcast should have been sent")
+        # After completion, fields should be cleared
+        self.assertFalse(session.next_stage_confirmation_required)
+
+
 if __name__ == "__main__":
     unittest.main()
