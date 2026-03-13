@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
@@ -25,31 +25,18 @@ from scripts.stage_texture_bake import (
 )
 
 
-class _FakeCuda:
-    @staticmethod
-    def is_available() -> bool:
-        return True
-
-
-class _FakeTorch:
-    cuda = _FakeCuda()
-
-
-class _FakeCudaUnavailable:
-    @staticmethod
-    def is_available() -> bool:
-        return False
-
-
-class _FakeTorchUnavailable:
-    cuda = _FakeCudaUnavailable()
+def _make_mock_torch(cuda_available: bool = True) -> MagicMock:
+    """Return a ``MagicMock`` that behaves like the ``torch`` module."""
+    mock = MagicMock()
+    mock.cuda.is_available.return_value = cuda_available
+    return mock
 
 
 class ResolveTextureDeviceTests(unittest.TestCase):
     def test_default_prefers_cuda(self) -> None:
         old = os.environ.pop("TEXTURE_DEVICE", None)
         try:
-            with patch("scripts.stage_texture_bake.torch", _FakeTorch()):
+            with patch("scripts.stage_texture_bake.torch", _make_mock_torch(cuda_available=True)):
                 self.assertEqual(_resolve_texture_device(), "cuda")
         finally:
             if old is not None:
@@ -58,7 +45,7 @@ class ResolveTextureDeviceTests(unittest.TestCase):
     def test_default_falls_back_to_cpu_without_cuda(self) -> None:
         old = os.environ.pop("TEXTURE_DEVICE", None)
         try:
-            with patch("scripts.stage_texture_bake.torch", _FakeTorchUnavailable()):
+            with patch("scripts.stage_texture_bake.torch", _make_mock_torch(cuda_available=False)):
                 self.assertEqual(_resolve_texture_device(), "cpu")
         finally:
             if old is not None:
@@ -76,17 +63,17 @@ class ResolveTextureDeviceTests(unittest.TestCase):
 
     def test_cpu_mode_is_always_cpu(self) -> None:
         with patch.dict(os.environ, {"TEXTURE_DEVICE": "cpu"}, clear=False):
-            with patch("scripts.stage_texture_bake.torch", _FakeTorch()):
+            with patch("scripts.stage_texture_bake.torch", _make_mock_torch(cuda_available=True)):
                 self.assertEqual(_resolve_texture_device(), "cpu")
 
     def test_auto_with_cuda_available_uses_cuda(self) -> None:
         with patch.dict(os.environ, {"TEXTURE_DEVICE": "auto"}, clear=False):
-            with patch("scripts.stage_texture_bake.torch", _FakeTorch()):
+            with patch("scripts.stage_texture_bake.torch", _make_mock_torch(cuda_available=True)):
                 self.assertEqual(_resolve_texture_device(), "cuda")
 
     def test_gpu_alias_maps_to_cuda(self) -> None:
         with patch.dict(os.environ, {"TEXTURE_DEVICE": "gpu"}, clear=False):
-            with patch("scripts.stage_texture_bake.torch", _FakeTorch()):
+            with patch("scripts.stage_texture_bake.torch", _make_mock_torch(cuda_available=True)):
                 self.assertEqual(_resolve_texture_device(), "cuda")
 
 
@@ -244,10 +231,10 @@ class ResolveTextureSizeTests(unittest.TestCase):
 
 
 class ResolveTextureViewAssignModeTests(unittest.TestCase):
-    def test_default_mode_is_legacy(self) -> None:
+    def test_default_mode_is_region_gc(self) -> None:
         old = os.environ.pop("TEXTURE_VIEW_ASSIGN_MODE", None)
         try:
-            self.assertEqual(_resolve_texture_view_assign_mode(), "legacy")
+            self.assertEqual(_resolve_texture_view_assign_mode(), "region_gc")
         finally:
             if old is not None:
                 os.environ["TEXTURE_VIEW_ASSIGN_MODE"] = old
@@ -255,9 +242,9 @@ class ResolveTextureViewAssignModeTests(unittest.TestCase):
     def test_explicit_region_gc_mode_is_kept(self) -> None:
         self.assertEqual(_resolve_texture_view_assign_mode("region_gc"), "region_gc")
 
-    def test_invalid_mode_falls_back_to_legacy(self) -> None:
+    def test_invalid_mode_falls_back_to_default(self) -> None:
         with patch.dict(os.environ, {"TEXTURE_VIEW_ASSIGN_MODE": "broken"}, clear=False):
-            self.assertEqual(_resolve_texture_view_assign_mode(), "legacy")
+            self.assertEqual(_resolve_texture_view_assign_mode(), "region_gc")
 
 
 class ResolveTextureQualityBoostTests(unittest.TestCase):
