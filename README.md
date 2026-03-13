@@ -156,15 +156,24 @@ RTX 4090 Laptop (16GB) での実測値:
 | 7. メッシュ補修 | [`docs/contact_hole_repair.md`](docs/contact_hole_repair.md) |
 | 8. テクスチャベイキング | [`docs/texture_bake.md`](docs/texture_bake.md) |
 
-## トラブルシューティング
+## テスト実行方法
 
-**Pi3X で OOM が発生する** — ダッシュボードの Advanced Settings で `MAX_FRAMES` を下げる (`PIXEL_LIMIT` はできるだけ維持)。
+```bash
+# コンテナビルド
+docker compose -f docker-compose.yml -f docker-compose.test.yml build test
 
-**ダッシュボードに接続できない** — `docker compose logs --tail 20` で `Uvicorn running on http://0.0.0.0:7860` が表示されているか確認。ポート競合は `lsof -i :7860` で調査。
+# 全テスト実行
+./run_tests.sh
 
-**DiffCD が遅い / 解像度を上げたい** — `DIFFCD_RESOLUTION=512` は A100 40GB 以上が必要。16GB GPU では `384` が上限。デフォルトで自動チューニング (`DIFFCD_AUTO_TUNE=1`) が有効。
+# GPU なしテストのみ（高速）
+./run_tests.sh -m "not gpu"
 
-**ビルドが失敗する** — NVIDIA Container Toolkit の動作を確認: `docker run --rm --gpus all nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04 nvidia-smi`
+# GPU テストのみ
+./run_tests.sh -m gpu
+
+# 特定テスト
+./run_tests.sh -k "test_sam2_service" -v
+```
 
 ## ライセンス
 
