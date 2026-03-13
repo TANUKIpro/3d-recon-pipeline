@@ -1319,7 +1319,7 @@ class TestVramInfo(unittest.IsolatedAsyncioTestCase):
 
     async def test_vram_info_no_gpu_returns_null(self) -> None:
         """When vram_utils raises, free_mb is None."""
-        with patch.dict("sys.modules", {"vram_utils": MagicMock(
+        with patch.dict("sys.modules", {"scripts.vram_utils": MagicMock(
             get_free_vram_mb=MagicMock(side_effect=RuntimeError("no GPU")),
         )}):
             response = await vram_info()

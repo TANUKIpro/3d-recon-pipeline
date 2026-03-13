@@ -14,7 +14,7 @@ from typing import Callable
 import numpy as np
 import open3d as o3d
 
-from config_defaults import (
+from scripts.config_defaults import (
     MESHWRAP_ALPHA_RATIO as _DEFAULT_WRAP_ALPHA_RATIO,
     MESHWRAP_CROP_SCALE as _DEFAULT_WRAP_CROP_SCALE,
     MESHWRAP_DENSITY_TRIM_Q as _DEFAULT_WRAP_DENSITY_TRIM_Q,
@@ -41,7 +41,7 @@ from config_defaults import (
     _MESHWRAP_SMOOTH_LAMBDA as _DEFAULT_WRAP_SMOOTH_LAMBDA,
     _MESHWRAP_SMOOTH_NU as _DEFAULT_WRAP_SMOOTH_NU,
 )
-from mesh_orientation import orient_faces_outward
+from scripts.mesh_orientation import orient_faces_outward
 
 ProgressCallback = Callable[[float, str | None], None]
 

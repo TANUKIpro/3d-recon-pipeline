@@ -49,7 +49,7 @@ from scripts.dashboard.state import (
     PipelineSession,
     PipelineStage,
 )
-from vram_utils import estimate_pi3x_frame_plan
+from scripts.vram_utils import estimate_pi3x_frame_plan
 
 # ── Globals ───────────────────────────────────────────────────────
 
@@ -252,7 +252,7 @@ async def pipeline_video_info(path: str):
 
     def _probe(p: str) -> dict:
         import cv2
-        from stage_extract_frames import _detect_rotation, _normalize_fps
+        from scripts.stage_extract_frames import _detect_rotation, _normalize_fps
         cap = cv2.VideoCapture(p)
         try:
             raw_fps = cap.get(cv2.CAP_PROP_FPS) or 0
@@ -597,8 +597,8 @@ async def mesh_postprocess(body: dict | None = None):
         source = "current"
 
     def _apply() -> tuple[int, int, bool]:
-        from stage_classical_mesh import generate_preview_mesh
-        from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
+        from scripts.stage_classical_mesh import generate_preview_mesh
+        from scripts.stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
         import open3d as o3d
 
         smooth_mesh_file(
@@ -968,7 +968,7 @@ async def preview_crop_obb():
 async def vram_info():
     """Return current VRAM usage."""
     try:
-        from vram_utils import get_free_vram_mb
+        from scripts.vram_utils import get_free_vram_mb
         free = get_free_vram_mb()
         return JSONResponse({"free_mb": free})
     except Exception:

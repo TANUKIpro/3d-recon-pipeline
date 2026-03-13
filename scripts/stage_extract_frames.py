@@ -8,7 +8,7 @@ from typing import Callable
 
 import cv2
 
-from config_defaults import _EXTRACT_FPS_FALLBACK
+from scripts.config_defaults import _EXTRACT_FPS_FALLBACK
 
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]

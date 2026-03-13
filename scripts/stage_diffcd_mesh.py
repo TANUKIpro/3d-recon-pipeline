@@ -19,7 +19,7 @@ from typing import Callable
 import numpy as np
 import trimesh
 
-from config_defaults import (
+from scripts.config_defaults import (
     DIFFCD_BATCH_SIZE as _DEFAULT_DIFFCD_BATCH_SIZE,
     DIFFCD_N_BATCHES as _DEFAULT_DIFFCD_N_BATCHES,
     DIFFCD_RESOLUTION as _DEFAULT_DIFFCD_RESOLUTION,
@@ -34,7 +34,7 @@ from config_defaults import (
     _DIFFCD_OOM_MARKERS as _OOM_MARKERS,
     _DIFFCD_SMOOTH_METHODS as _MESH_SMOOTH_METHODS,
 )
-from vram_utils import (
+from scripts.vram_utils import (
     get_gpu_inventory,
     log_vram,
     pick_gpu_with_most_free_vram,

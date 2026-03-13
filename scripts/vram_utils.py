@@ -5,7 +5,7 @@ import os
 import subprocess
 import time
 
-from config_defaults import (
+from scripts.config_defaults import (
     _VRAM_PI3X_ESTIMATED_MODEL_MB as _PI3X_ESTIMATED_MODEL_MB,
     _VRAM_PI3X_FRAME_PIXELS_PER_MB as _PI3X_FRAME_PIXELS_PER_MB,
     _VRAM_PI3X_RUNTIME_OVERHEAD_MB as _PI3X_RUNTIME_OVERHEAD_MB,

@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import torch
 
-from config_defaults import (
+from scripts.config_defaults import (
     _PI3X_ALIGN_MAX_PLANAR_RATIO as _ALIGN_MAX_PLANAR_RATIO,
     _PI3X_ALIGN_MIN_FRAMES as _ALIGN_MIN_FRAMES,
     _PI3X_ALIGN_MIN_LINE_RATIO as _ALIGN_MIN_LINE_RATIO,
@@ -29,7 +29,7 @@ from config_defaults import (
     _PI3X_TARGET_PLANE_NORMAL,
     _PI3X_USE_CHUNK_FALLBACK as _USE_CHUNK_FALLBACK,
 )
-from vram_utils import (
+from scripts.vram_utils import (
     cleanup_pytorch_vram,
     estimate_pi3x_frame_plan,
     log_vram,

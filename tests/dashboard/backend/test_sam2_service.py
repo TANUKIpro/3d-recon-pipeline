@@ -50,7 +50,7 @@ class _SAM2PatchBase(unittest.TestCase):
             {
                 "torch": self.mock_torch,
                 "cv2": self.mock_cv2,
-                "stage_sam2_ui": self.mock_sam2_ui,
+                "scripts.stage_sam2_ui": self.mock_sam2_ui,
             },
         )
         self._modules_patch.start()

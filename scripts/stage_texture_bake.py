@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 from plyfile import PlyData
 
-from config_defaults import (
+from scripts.config_defaults import (
     TEXTURE_ANGLE_EXP,
     TEXTURE_BLEND_HARD_RATIO,
     TEXTURE_BLEND_TOPK,
@@ -32,7 +32,7 @@ from config_defaults import (
     _TEXTURE_MASK_BUDGET_RATIO,
     _TEXTURE_MEM_FALLBACK_MB,
 )
-from mesh_orientation import orient_faces_outward
+from scripts.mesh_orientation import orient_faces_outward
 
 try:
     import torch

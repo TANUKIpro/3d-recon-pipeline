@@ -16,7 +16,7 @@ from typing import Any, Callable
 import numpy as np
 import open3d as o3d
 
-from config_defaults import (
+from scripts.config_defaults import (
     REPAIR_ENABLED as _DEFAULT_ENABLED,
     REPAIR_MAX_DIAMETER_RATIO as _DEFAULT_MAX_DIAMETER_RATIO,
     REPAIR_SMOOTH_ITERS as _DEFAULT_SMOOTH_ITERS,

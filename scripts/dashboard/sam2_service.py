@@ -46,7 +46,7 @@ class SAM2Service:
 
         Returns dict with frame metadata.
         """
-        from stage_sam2_ui import SAM2Session
+        from scripts.stage_sam2_ui import SAM2Session
 
         with self._lock:
             session = SAM2Session(frames_dir, output_dir, model_type)
@@ -64,7 +64,7 @@ class SAM2Service:
 
     def add_click(self, norm_x: float, norm_y: float, label: int) -> bytes:
         """Add a click point and return the mask overlay as PNG bytes."""
-        from stage_sam2_ui import _run_single_frame_inference_obj, _sanitize_normalized_point
+        from scripts.stage_sam2_ui import _run_single_frame_inference_obj, _sanitize_normalized_point
 
         with self._lock:
             s = self._session
@@ -92,7 +92,7 @@ class SAM2Service:
 
     def undo_click(self) -> bytes:
         """Remove last click from active mode and return updated overlay PNG."""
-        from stage_sam2_ui import _run_single_frame_inference_obj
+        from scripts.stage_sam2_ui import _run_single_frame_inference_obj
 
         with self._lock:
             s = self._session
@@ -127,7 +127,7 @@ class SAM2Service:
 
     def clear_clicks(self) -> bytes:
         """Clear clicks for the active mode only and return updated overlay PNG."""
-        from stage_sam2_ui import _run_single_frame_inference_obj
+        from scripts.stage_sam2_ui import _run_single_frame_inference_obj
 
         with self._lock:
             s = self._session
@@ -168,7 +168,7 @@ class SAM2Service:
         import cv2
         import numpy as np
         import torch
-        from stage_sam2_ui import _run_single_frame_inference_obj
+        from scripts.stage_sam2_ui import _run_single_frame_inference_obj
 
         with self._lock:
             s = self._session
@@ -277,7 +277,7 @@ class SAM2Service:
     def _render_overlay_png(self) -> bytes:
         """Render current state as overlay PNG (must hold lock)."""
         import cv2
-        from stage_sam2_ui import _create_mask_overlay
+        from scripts.stage_sam2_ui import _create_mask_overlay
 
         s = self._session
         vis = _create_mask_overlay(

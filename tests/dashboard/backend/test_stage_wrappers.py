@@ -26,16 +26,16 @@ from scripts.dashboard.stage_wrappers import (
 # Stub modules for the bare imports that stage_wrappers does at call time.
 # ---------------------------------------------------------------------------
 
-_stub_extract = types.ModuleType("stage_extract_frames")
-_stub_pi3x = types.ModuleType("stage_pi3x_reconstruct")
-_stub_vram = types.ModuleType("vram_utils")
-_stub_diffcd = types.ModuleType("stage_diffcd_mesh")
+_stub_extract = types.ModuleType("scripts.stage_extract_frames")
+_stub_pi3x = types.ModuleType("scripts.stage_pi3x_reconstruct")
+_stub_vram = types.ModuleType("scripts.vram_utils")
+_stub_diffcd = types.ModuleType("scripts.stage_diffcd_mesh")
 
 _STUBS = {
-    "stage_extract_frames": _stub_extract,
-    "stage_pi3x_reconstruct": _stub_pi3x,
-    "vram_utils": _stub_vram,
-    "stage_diffcd_mesh": _stub_diffcd,
+    "scripts.stage_extract_frames": _stub_extract,
+    "scripts.stage_pi3x_reconstruct": _stub_pi3x,
+    "scripts.vram_utils": _stub_vram,
+    "scripts.stage_diffcd_mesh": _stub_diffcd,
 }
 
 

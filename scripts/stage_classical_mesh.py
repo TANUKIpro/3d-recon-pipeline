@@ -11,7 +11,7 @@ from typing import Any, Callable
 import numpy as np
 import open3d as o3d
 
-from config_defaults import (
+from scripts.config_defaults import (
     CLASSICAL_AUTO_SMOOTH as _DEFAULT_AUTO_SMOOTH,
     CLASSICAL_DENSITY_TRIM_Q as _DEFAULT_DENSITY_TRIM_QUANTILE,
     CLASSICAL_DOWNSAMPLE_ENABLED as _DEFAULT_DOWNSAMPLE_ENABLED,
@@ -37,7 +37,7 @@ from config_defaults import (
     _CLASSICAL_POST_MIN_COMPONENT_TRIANGLES as _DEFAULT_POST_MIN_COMPONENT_TRIANGLES,
     _CLASSICAL_PREVIEW_TARGET_FACES as _DEFAULT_PREVIEW_TARGET_FACES,
 )
-from stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
+from scripts.stage_diffcd_mesh import mesh_vertex_face_count, smooth_mesh_file
 
 ProgressCallback = Callable[[float, str | None], None]
 

@@ -28,7 +28,7 @@ def _stage_extract_frames(
     unregister_process=None,
 ) -> None:
     del register_process, unregister_process
-    from stage_extract_frames import extract_frames
+    from scripts.stage_extract_frames import extract_frames
     extract_frames(
         video_path,
         output_dir,
@@ -49,8 +49,8 @@ def _stage_pi3x_inference(
     unregister_process=None,
 ) -> None:
     del register_process, unregister_process
-    from stage_pi3x_reconstruct import run_pi3x_inference
-    from vram_utils import cleanup_pytorch_vram
+    from scripts.stage_pi3x_reconstruct import run_pi3x_inference
+    from scripts.vram_utils import cleanup_pytorch_vram
     run_pi3x_inference(
         frames_dir, output_dir,
         pixel_limit=pixel_limit,
@@ -73,7 +73,7 @@ def _stage_apply_masks(
     unregister_process=None,
 ) -> None:
     del register_process, unregister_process
-    from stage_pi3x_reconstruct import apply_sam2_masks
+    from scripts.stage_pi3x_reconstruct import apply_sam2_masks
     apply_sam2_masks(
         cache_path,
         mask_dir,
@@ -102,7 +102,7 @@ def _stage_denoise(
     unregister_process=None,
 ) -> None:
     del cancel_cb, register_process, unregister_process
-    from stage_denoise import denoise
+    from scripts.stage_denoise import denoise
     denoise(
         ply_path,
         output_dir,
@@ -128,7 +128,7 @@ def _stage_diffcd(
     register_process=None,
     unregister_process=None,
 ) -> None:
-    from stage_diffcd_mesh import run_diffcd
+    from scripts.stage_diffcd_mesh import run_diffcd
     run_diffcd(
         denoised_ply,
         output_dir,
@@ -155,7 +155,7 @@ def _stage_classical_mesh(
     unregister_process=None,
 ) -> None:
     del cancel_cb, register_process, unregister_process
-    from stage_classical_mesh import run_classical_mesh
+    from scripts.stage_classical_mesh import run_classical_mesh
 
     run_classical_mesh(
         denoised_ply,
@@ -193,7 +193,7 @@ def _stage_mesh_wrap(
     unregister_process=None,
 ) -> None:
     del cancel_cb, register_process, unregister_process
-    from stage_mesh_wrap import run_mesh_wrap
+    from scripts.stage_mesh_wrap import run_mesh_wrap
 
     run_mesh_wrap(
         mesh_ply,
@@ -229,7 +229,7 @@ def _stage_mesh_repair(
     unregister_process=None,
 ) -> None:
     del register_process, unregister_process
-    from stage_contact_hole_repair import run_contact_hole_repair
+    from scripts.stage_contact_hole_repair import run_contact_hole_repair
 
     run_contact_hole_repair(
         mesh_ply,
@@ -249,7 +249,7 @@ def _stage_mesh_repair_analyze(
     progress_cb=None,
     cancel_cb=None,
 ) -> dict:
-    from stage_contact_hole_repair import analyze_contact_hole_candidates
+    from scripts.stage_contact_hole_repair import analyze_contact_hole_candidates
 
     with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
         analysis = analyze_contact_hole_candidates(
@@ -272,7 +272,7 @@ def _stage_mesh_repair_selected(
     cancel_cb=None,
     ground_plane: dict | None = None,
 ) -> None:
-    from stage_contact_hole_repair import run_selected_contact_hole_repair
+    from scripts.stage_contact_hole_repair import run_selected_contact_hole_repair
 
     with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
         run_selected_contact_hole_repair(
@@ -295,7 +295,7 @@ def _stage_extract_ground_plane(
     output_dir: str,
     object_mask_dir: str | None = None,
 ) -> dict | None:
-    from stage_pi3x_reconstruct import extract_ground_plane
+    from scripts.stage_pi3x_reconstruct import extract_ground_plane
 
     with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
         return extract_ground_plane(
@@ -317,7 +317,7 @@ def _stage_texture_bake(
     unregister_process=None,
 ) -> None:
     del cancel_cb, register_process, unregister_process
-    from stage_texture_bake import bake_texture
+    from scripts.stage_texture_bake import bake_texture
     bake_texture(
         mesh_ply,
         poses_path,
@@ -333,6 +333,6 @@ def _stage_texture_bake(
 
 def _vram_gate() -> None:
     from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB
-    from vram_utils import cleanup_pytorch_vram, ensure_vram_available
+    from scripts.vram_utils import cleanup_pytorch_vram, ensure_vram_available
     cleanup_pytorch_vram()
     ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before Pi3X")
