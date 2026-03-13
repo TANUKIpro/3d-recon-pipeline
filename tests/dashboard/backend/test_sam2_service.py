@@ -7,122 +7,106 @@ are mocked so the suite runs on CPU-only hosts.
 
 from __future__ import annotations
 
-import sys
 import threading
-import types
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
 
 # ---------------------------------------------------------------------------
-# Mock heavy modules that are imported *inside* SAM2Service methods.
-# Because the imports are deferred (`from stage_sam2_ui import ...`), we
-# install lightweight stubs into sys.modules before importing the module
-# under test.  Each test resets relevant return values in setUp.
-# ---------------------------------------------------------------------------
-
-_mock_stage_sam2_ui = types.ModuleType("stage_sam2_ui")
-_mock_stage_sam2_ui.SAM2Session = MagicMock(name="SAM2Session")
-_mock_stage_sam2_ui._run_single_frame_inference = MagicMock(
-    name="_run_single_frame_inference"
-)
-_mock_stage_sam2_ui._run_single_frame_inference_obj = MagicMock(
-    name="_run_single_frame_inference_obj"
-)
-_mock_stage_sam2_ui._sanitize_normalized_point = MagicMock(
-    name="_sanitize_normalized_point"
-)
-_mock_stage_sam2_ui._create_mask_overlay = MagicMock(name="_create_mask_overlay")
-
-_mock_cv2 = types.ModuleType("cv2")
-_mock_cv2.cvtColor = MagicMock(name="cv2.cvtColor")
-_mock_cv2.imencode = MagicMock(name="cv2.imencode")
-_mock_cv2.imread = MagicMock(name="cv2.imread")
-_mock_cv2.imwrite = MagicMock(name="cv2.imwrite")
-_mock_cv2.COLOR_RGB2BGR = 4
-_mock_cv2.IMREAD_GRAYSCALE = 0
-_mock_cv2.IMWRITE_JPEG_QUALITY = 1
-
-_mock_torch = types.ModuleType("torch")
-_mock_torch.inference_mode = MagicMock(name="torch.inference_mode")
-
-_mock_numpy = types.ModuleType("numpy")
-_mock_numpy.uint8 = "uint8"
-
-# Patch sys.modules so deferred imports resolve to our stubs.
-_MODULE_PATCHES = {
-    "stage_sam2_ui": _mock_stage_sam2_ui,
-    "cv2": _mock_cv2,
-    "torch": _mock_torch,
-    "numpy": _mock_numpy,
-}
-
-for _name, _mod in _MODULE_PATCHES.items():
-    sys.modules.setdefault(_name, _mod)
-
-from scripts.dashboard.sam2_service import SAM2Service  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Shared helpers
+# Shared constants
 # ---------------------------------------------------------------------------
 
 _FAKE_PNG = b"\x89PNG\r\n\x1a\nfakedata"
 
 
-def _reset_all_mocks() -> None:
-    """Reset all module-level mocks to avoid cross-test contamination."""
-    _mock_stage_sam2_ui.SAM2Session.reset_mock()
-    _mock_stage_sam2_ui.SAM2Session.side_effect = None
-    _mock_stage_sam2_ui._run_single_frame_inference.reset_mock()
-    _mock_stage_sam2_ui._run_single_frame_inference_obj.reset_mock()
-    _mock_stage_sam2_ui._sanitize_normalized_point.reset_mock()
-    _mock_stage_sam2_ui._create_mask_overlay.reset_mock()
-    _mock_cv2.cvtColor.reset_mock()
-    _mock_cv2.imencode.reset_mock()
-    _mock_cv2.imread.reset_mock()
-    _mock_cv2.imwrite.reset_mock()
-    _mock_torch.inference_mode.reset_mock()
+# ---------------------------------------------------------------------------
+# Base class — patches deferred imports used by SAM2Service
+# ---------------------------------------------------------------------------
 
 
-def _make_fake_session(**overrides) -> MagicMock:
-    """Return a MagicMock that behaves like a minimal SAM2Session."""
-    s = MagicMock(name="FakeSession")
-    s.frame_files = [Path("frame0.jpg"), Path("frame1.jpg")]
-    s.img_w = 640
-    s.img_h = 480
-    s.click_points = []
-    s.click_labels = []
-    s.ground_click_points = []
-    s.ground_click_labels = []
-    s.predictor = MagicMock(name="predictor")
-    s.inference_state = {"num_frames": 2}
-    # Use a MagicMock for mask_dir so .glob() is mockable, but str() works.
-    mask_dir = MagicMock(name="mask_dir")
-    mask_dir.__str__ = lambda self: "/tmp/test_masks"
-    mask_dir.__truediv__ = lambda self, other: Path(f"/tmp/test_masks/{other}")
-    mask_dir.glob.return_value = []
-    s.mask_dir = mask_dir
-    ground_mask_dir = MagicMock(name="ground_mask_dir")
-    ground_mask_dir.__str__ = lambda self: "/tmp/test_ground_masks"
-    ground_mask_dir.__truediv__ = lambda self, other: Path(f"/tmp/test_ground_masks/{other}")
-    ground_mask_dir.glob.return_value = []
-    s.ground_mask_dir = ground_mask_dir
-    s.first_frame = MagicMock(name="first_frame_array")
-    s.release_model = MagicMock(name="release_model")
-    for k, v in overrides.items():
-        setattr(s, k, v)
-    return s
+class _SAM2PatchBase(unittest.TestCase):
+    """Base class that patches deferred imports used by SAM2Service.
 
+    Uses ``patch.dict("sys.modules", ...)`` so that every deferred
+    ``import cv2`` / ``import torch`` / ``from stage_sam2_ui import …``
+    inside SAM2Service methods resolves to fresh MagicMock stubs.
+    """
 
-def _setup_render_mocks() -> None:
-    """Configure cv2/stage_sam2_ui mocks so _render_overlay_png returns bytes."""
-    _mock_stage_sam2_ui._create_mask_overlay.return_value = MagicMock(
-        name="overlay_array"
-    )
-    _mock_cv2.cvtColor.return_value = MagicMock(name="vis_bgr")
-    buf_mock = MagicMock()
-    buf_mock.tobytes.return_value = _FAKE_PNG
-    _mock_cv2.imencode.return_value = (True, buf_mock)
+    def setUp(self) -> None:
+        # -- build mock modules ------------------------------------------------
+        self.mock_torch = MagicMock(name="torch")
+
+        self.mock_cv2 = MagicMock(name="cv2")
+        self.mock_cv2.COLOR_RGB2BGR = 4
+        self.mock_cv2.IMREAD_GRAYSCALE = 0
+        self.mock_cv2.IMWRITE_JPEG_QUALITY = 1
+
+        self.mock_sam2_ui = MagicMock(name="stage_sam2_ui")
+
+        # -- install via patch.dict (auto-reverted in tearDown) ----------------
+        self._modules_patch = patch.dict(
+            "sys.modules",
+            {
+                "torch": self.mock_torch,
+                "cv2": self.mock_cv2,
+                "stage_sam2_ui": self.mock_sam2_ui,
+            },
+        )
+        self._modules_patch.start()
+
+        # Import SAM2Service *after* patching so the module is importable
+        # (it has no top-level heavy imports, but we need sys.modules ready
+        # for the deferred imports that fire during tests).
+        from scripts.dashboard.sam2_service import SAM2Service
+
+        self.SAM2Service = SAM2Service
+
+    def tearDown(self) -> None:
+        self._modules_patch.stop()
+
+    # -- shared helpers --------------------------------------------------------
+
+    def _make_fake_session(self, **overrides) -> MagicMock:
+        """Return a MagicMock that behaves like a minimal SAM2Session."""
+        s = MagicMock(name="FakeSession")
+        s.frame_files = [Path("frame0.jpg"), Path("frame1.jpg")]
+        s.img_w = 640
+        s.img_h = 480
+        s.click_points = []
+        s.click_labels = []
+        s.ground_click_points = []
+        s.ground_click_labels = []
+        s.predictor = MagicMock(name="predictor")
+        s.inference_state = {"num_frames": 2}
+        # Use a MagicMock for mask_dir so .glob() is mockable, but str() works.
+        mask_dir = MagicMock(name="mask_dir")
+        mask_dir.__str__ = lambda self: "/tmp/test_masks"
+        mask_dir.__truediv__ = lambda self, other: Path(f"/tmp/test_masks/{other}")
+        mask_dir.glob.return_value = []
+        s.mask_dir = mask_dir
+        ground_mask_dir = MagicMock(name="ground_mask_dir")
+        ground_mask_dir.__str__ = lambda self: "/tmp/test_ground_masks"
+        ground_mask_dir.__truediv__ = lambda self, other: Path(
+            f"/tmp/test_ground_masks/{other}"
+        )
+        ground_mask_dir.glob.return_value = []
+        s.ground_mask_dir = ground_mask_dir
+        s.first_frame = MagicMock(name="first_frame_array")
+        s.release_model = MagicMock(name="release_model")
+        for k, v in overrides.items():
+            setattr(s, k, v)
+        return s
+
+    def _setup_render_mocks(self) -> None:
+        """Configure cv2/stage_sam2_ui mocks so _render_overlay_png returns bytes."""
+        self.mock_sam2_ui._create_mask_overlay.return_value = MagicMock(
+            name="overlay_array"
+        )
+        self.mock_cv2.cvtColor.return_value = MagicMock(name="vis_bgr")
+        buf_mock = MagicMock()
+        buf_mock.tobytes.return_value = _FAKE_PNG
+        self.mock_cv2.imencode.return_value = (True, buf_mock)
 
 
 # ====================================================================
@@ -130,12 +114,12 @@ def _setup_render_mocks() -> None:
 # ====================================================================
 
 
-class TestSAM2ServiceInitialization(unittest.TestCase):
+class TestSAM2ServiceInitialization(_SAM2PatchBase):
     """Initial state, successful initialization, and double-init behaviour."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_initial_state_not_initialized(self) -> None:
         """A fresh service reports initialized=False."""
@@ -143,8 +127,8 @@ class TestSAM2ServiceInitialization(unittest.TestCase):
 
     def test_initialize_returns_metadata_and_sets_initialized(self) -> None:
         """initialize() returns frame metadata and flips initialized to True."""
-        fake = _make_fake_session()
-        _mock_stage_sam2_ui.SAM2Session.return_value = fake
+        fake = self._make_fake_session()
+        self.mock_sam2_ui.SAM2Session.return_value = fake
         fake._load_model = MagicMock()
         fake._init_inference_state = MagicMock()
 
@@ -159,10 +143,10 @@ class TestSAM2ServiceInitialization(unittest.TestCase):
 
     def test_double_initialize_replaces_session(self) -> None:
         """Calling initialize() twice replaces the old session."""
-        first = _make_fake_session()
-        second = _make_fake_session(img_w=1280, img_h=720)
+        first = self._make_fake_session()
+        second = self._make_fake_session(img_w=1280, img_h=720)
 
-        _mock_stage_sam2_ui.SAM2Session.side_effect = [first, second]
+        self.mock_sam2_ui.SAM2Session.side_effect = [first, second]
         self.service.initialize("/frames", "/output", "large")
         result = self.service.initialize("/frames2", "/output2", "large")
 
@@ -177,13 +161,13 @@ class TestSAM2ServiceInitialization(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceAddClick(unittest.TestCase):
+class TestSAM2ServiceAddClick(_SAM2PatchBase):
     """add_click: error when uninitialized, point appended, PNG returned."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_add_click_uninitialized_raises(self) -> None:
         """add_click raises RuntimeError when session is None."""
@@ -192,28 +176,29 @@ class TestSAM2ServiceAddClick(unittest.TestCase):
 
     def test_add_click_appends_point_and_label(self) -> None:
         """Click coordinates and label are stored on the session."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
-        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.5, 0.3)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._sanitize_normalized_point.return_value = (0.5, 0.3)
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         self.service.add_click(0.5, 0.3, 1)
 
         self.assertEqual(fake.click_points, [(0.5, 0.3)])
         self.assertEqual(fake.click_labels, [1])
-        _mock_stage_sam2_ui._sanitize_normalized_point.assert_called_with(0.5, 0.3)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
-            fake, obj_id=1,
+        self.mock_sam2_ui._sanitize_normalized_point.assert_called_with(0.5, 0.3)
+        self.mock_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
+            fake,
+            obj_id=1,
             click_points=fake.click_points,
             click_labels=fake.click_labels,
         )
 
     def test_add_click_returns_png_bytes(self) -> None:
         """Return value is bytes (the PNG overlay)."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
-        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.1, 0.2)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._sanitize_normalized_point.return_value = (0.1, 0.2)
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         result = self.service.add_click(0.1, 0.2, 0)
 
@@ -222,11 +207,11 @@ class TestSAM2ServiceAddClick(unittest.TestCase):
 
     def test_add_click_ground_mode_stores_on_ground_lists(self) -> None:
         """In ground mode, clicks go to ground_click_points/labels."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
         self.service._segmentation_mode = "ground"
-        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.6, 0.7)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._sanitize_normalized_point.return_value = (0.6, 0.7)
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         self.service.add_click(0.6, 0.7, 1)
 
@@ -235,8 +220,9 @@ class TestSAM2ServiceAddClick(unittest.TestCase):
         # Object lists untouched
         self.assertEqual(fake.click_points, [])
         self.assertEqual(fake.click_labels, [])
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
-            fake, obj_id=2,
+        self.mock_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
+            fake,
+            obj_id=2,
             click_points=fake.ground_click_points,
             click_labels=fake.ground_click_labels,
         )
@@ -247,13 +233,13 @@ class TestSAM2ServiceAddClick(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceUndoClick(unittest.TestCase):
+class TestSAM2ServiceUndoClick(_SAM2PatchBase):
     """undo_click: error when uninitialized, pops last, safe on empty."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_undo_click_uninitialized_raises(self) -> None:
         """undo_click raises RuntimeError when session is None."""
@@ -262,25 +248,26 @@ class TestSAM2ServiceUndoClick(unittest.TestCase):
 
     def test_undo_click_removes_last(self) -> None:
         """After undo, the most recent point/label pair is removed."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.1, 0.2), (0.3, 0.4)]
         fake.click_labels = [1, 0]
         self.service._session = fake
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         self.service.undo_click()
 
         self.assertEqual(fake.click_points, [(0.1, 0.2)])
         self.assertEqual(fake.click_labels, [1])
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
-            fake, obj_id=1,
+        self.mock_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
+            fake,
+            obj_id=1,
             click_points=fake.click_points,
             click_labels=fake.click_labels,
         )
 
     def test_undo_click_empty_is_safe(self) -> None:
         """Undoing when no clicks exist does not raise; mask becomes None."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = []
         fake.click_labels = []
         self.service._session = fake
@@ -296,13 +283,13 @@ class TestSAM2ServiceUndoClick(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceClearClicks(unittest.TestCase):
+class TestSAM2ServiceClearClicks(_SAM2PatchBase):
     """clear_clicks: error when uninitialized, all points removed."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_clear_clicks_uninitialized_raises(self) -> None:
         """clear_clicks raises RuntimeError when session is None."""
@@ -311,7 +298,7 @@ class TestSAM2ServiceClearClicks(unittest.TestCase):
 
     def test_clear_clicks_removes_all(self) -> None:
         """After clear, click_points and click_labels are empty."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)]
         fake.click_labels = [1, 0, 1]
         self.service._session = fake
@@ -326,14 +313,14 @@ class TestSAM2ServiceClearClicks(unittest.TestCase):
 
     def test_clear_ground_preserves_object_clicks(self) -> None:
         """Clearing in ground mode removes ground clicks but keeps object clicks."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.1, 0.2)]
         fake.click_labels = [1]
         fake.ground_click_points = [(0.5, 0.6), (0.7, 0.8)]
         fake.ground_click_labels = [1, 1]
         self.service._session = fake
         self.service._segmentation_mode = "ground"
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         result = self.service.clear_clicks()
 
@@ -345,8 +332,9 @@ class TestSAM2ServiceClearClicks(unittest.TestCase):
         self.assertEqual(fake.click_points, [(0.1, 0.2)])
         self.assertEqual(fake.click_labels, [1])
         fake.predictor.reset_state.assert_called_once_with(fake.inference_state)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
-            fake, obj_id=1,
+        self.mock_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
+            fake,
+            obj_id=1,
             click_points=fake.click_points,
             click_labels=fake.click_labels,
         )
@@ -358,12 +346,12 @@ class TestSAM2ServiceClearClicks(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServicePropagateAndSave(unittest.TestCase):
+class TestSAM2ServicePropagateAndSave(_SAM2PatchBase):
     """propagate_and_save: uninit, no clicks, and normal flow."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_propagate_uninitialized_raises(self) -> None:
         """propagate_and_save raises RuntimeError when session is None."""
@@ -372,7 +360,7 @@ class TestSAM2ServicePropagateAndSave(unittest.TestCase):
 
     def test_propagate_no_clicks_raises(self) -> None:
         """propagate_and_save raises ValueError with no click points."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = []
         self.service._session = fake
 
@@ -381,7 +369,7 @@ class TestSAM2ServicePropagateAndSave(unittest.TestCase):
 
     def test_propagate_normal_returns_mask_dir_tuple(self) -> None:
         """Normal propagation writes masks and returns (mask_dir, None) tuple."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.5, 0.5)]
         fake.click_labels = [1]
         fake.inference_state = {"num_frames": 2}
@@ -417,7 +405,7 @@ class TestSAM2ServicePropagateAndSave(unittest.TestCase):
         ]
 
         # torch.inference_mode() must work as a context manager
-        _mock_torch.inference_mode.return_value = MagicMock(
+        self.mock_torch.inference_mode.return_value = MagicMock(
             __enter__=MagicMock(return_value=None),
             __exit__=MagicMock(return_value=False),
         )
@@ -426,8 +414,8 @@ class TestSAM2ServicePropagateAndSave(unittest.TestCase):
 
         self.assertIsInstance(result, tuple)
         self.assertEqual(result[0], str(fake.mask_dir))
-        self.assertIsNone(result[1])  # no ground clicks → ground_dir is None
-        self.assertTrue(_mock_cv2.imwrite.called)
+        self.assertIsNone(result[1])  # no ground clicks -> ground_dir is None
+        self.assertTrue(self.mock_cv2.imwrite.called)
 
 
 # ====================================================================
@@ -435,16 +423,16 @@ class TestSAM2ServicePropagateAndSave(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceRelease(unittest.TestCase):
+class TestSAM2ServiceRelease(_SAM2PatchBase):
     """release: calls release_model, clears session, safe when uninit."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_release_calls_release_model(self) -> None:
         """release_model is called on the session."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
 
         self.service.release()
@@ -453,7 +441,7 @@ class TestSAM2ServiceRelease(unittest.TestCase):
 
     def test_release_sets_session_to_none(self) -> None:
         """After release, session is None and initialized is False."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
 
         self.service.release()
@@ -468,7 +456,7 @@ class TestSAM2ServiceRelease(unittest.TestCase):
 
     def test_release_clears_current_mask(self) -> None:
         """After release, _current_mask is None."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
         self.service._current_mask = MagicMock(name="some_mask")
 
@@ -482,12 +470,12 @@ class TestSAM2ServiceRelease(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceGetFrame(unittest.TestCase):
+class TestSAM2ServiceGetFrame(_SAM2PatchBase):
     """get_frame_jpeg: uninit error, out-of-range, and normal return."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_get_frame_uninitialized_raises(self) -> None:
         """get_frame_jpeg raises RuntimeError when session is None."""
@@ -496,7 +484,7 @@ class TestSAM2ServiceGetFrame(unittest.TestCase):
 
     def test_get_frame_out_of_range_raises(self) -> None:
         """get_frame_jpeg raises IndexError for invalid index."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
 
         with self.assertRaises(IndexError):
@@ -507,19 +495,19 @@ class TestSAM2ServiceGetFrame(unittest.TestCase):
 
     def test_get_frame_returns_jpeg_bytes(self) -> None:
         """get_frame_jpeg reads the file and returns encoded bytes."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
-        _mock_cv2.imread.return_value = MagicMock(name="img_array")
+        self.mock_cv2.imread.return_value = MagicMock(name="img_array")
         jpeg_bytes = b"\xff\xd8\xff\xe0jpegdata"
         buf_mock = MagicMock()
         buf_mock.tobytes.return_value = jpeg_bytes
-        _mock_cv2.imencode.return_value = (True, buf_mock)
+        self.mock_cv2.imencode.return_value = (True, buf_mock)
 
         result = self.service.get_frame_jpeg(0)
 
         self.assertIsInstance(result, bytes)
         self.assertEqual(result, jpeg_bytes)
-        _mock_cv2.imread.assert_called_with(str(fake.frame_files[0]))
+        self.mock_cv2.imread.assert_called_with(str(fake.frame_files[0]))
 
 
 # ====================================================================
@@ -527,18 +515,17 @@ class TestSAM2ServiceGetFrame(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceThreadSafety(unittest.TestCase):
+class TestSAM2ServiceThreadSafety(_SAM2PatchBase):
     """Concurrent add_click calls must not deadlock or corrupt state."""
 
     def test_concurrent_add_click_no_deadlock(self) -> None:
         """Multiple threads calling add_click complete without deadlock."""
-        _reset_all_mocks()
-        _setup_render_mocks()
-        service = SAM2Service()
-        fake = _make_fake_session()
+        self._setup_render_mocks()
+        service = self.SAM2Service()
+        fake = self._make_fake_session()
         service._session = fake
-        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.5, 0.5)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._sanitize_normalized_point.return_value = (0.5, 0.5)
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         errors: list[Exception] = []
 
@@ -567,23 +554,23 @@ class TestSAM2ServiceThreadSafety(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceCoordinateNormalization(unittest.TestCase):
+class TestSAM2ServiceCoordinateNormalization(_SAM2PatchBase):
     """5.2.5 — Verify _sanitize_normalized_point called during add_click."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_sanitize_called_with_coordinates(self) -> None:
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
-        _mock_stage_sam2_ui._sanitize_normalized_point.return_value = (0.42, 0.58)
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._sanitize_normalized_point.return_value = (0.42, 0.58)
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         self.service.add_click(0.42, 0.58, 1)
 
-        _mock_stage_sam2_ui._sanitize_normalized_point.assert_called_with(0.42, 0.58)
+        self.mock_sam2_ui._sanitize_normalized_point.assert_called_with(0.42, 0.58)
         # Verify the sanitized values were used
         self.assertEqual(fake.click_points[-1], (0.42, 0.58))
 
@@ -593,23 +580,23 @@ class TestSAM2ServiceCoordinateNormalization(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceGroundUndoIsolation(unittest.TestCase):
+class TestSAM2ServiceGroundUndoIsolation(_SAM2PatchBase):
     """5.3.4 — Ground undo only affects ground list."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_ground_undo_preserves_object_clicks(self) -> None:
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.1, 0.2), (0.3, 0.4)]
         fake.click_labels = [1, 1]
         fake.ground_click_points = [(0.5, 0.6), (0.7, 0.8)]
         fake.ground_click_labels = [1, 0]
         self.service._session = fake
         self.service._segmentation_mode = "ground"
-        _mock_stage_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
 
         self.service.undo_click()
 
@@ -626,16 +613,16 @@ class TestSAM2ServiceGroundUndoIsolation(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceClearResetState(unittest.TestCase):
+class TestSAM2ServiceClearResetState(_SAM2PatchBase):
     """5.4.4 — clear_clicks() calls predictor.reset_state."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        _setup_render_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self._setup_render_mocks()
+        self.service = self.SAM2Service()
 
     def test_clear_calls_predictor_reset_state(self) -> None:
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.5, 0.5)]
         fake.click_labels = [1]
         self.service._session = fake
@@ -650,12 +637,12 @@ class TestSAM2ServiceClearResetState(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServicePropagateProgress(unittest.TestCase):
+class TestSAM2ServicePropagateProgress(_SAM2PatchBase):
     """5.5.4 / 5.5.6 — propagate_and_save progress callback + stale mask cleanup."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def _setup_propagation(self, fake):
         """Common propagation setup."""
@@ -685,14 +672,14 @@ class TestSAM2ServicePropagateProgress(unittest.TestCase):
             (0, [1], mask_tensor),
             (1, [1], mask_tensor),
         ]
-        _mock_torch.inference_mode.return_value = MagicMock(
+        self.mock_torch.inference_mode.return_value = MagicMock(
             __enter__=MagicMock(return_value=None),
             __exit__=MagicMock(return_value=False),
         )
 
     def test_progress_callback_called(self) -> None:
         """5.5.4 — progress callback receives (frame_idx, total) args."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.5, 0.5)]
         fake.click_labels = [1]
         self.service._session = fake
@@ -709,7 +696,7 @@ class TestSAM2ServicePropagateProgress(unittest.TestCase):
 
     def test_stale_masks_cleared(self) -> None:
         """5.5.6 — Existing mask files are cleaned before saving."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.click_points = [(0.5, 0.5)]
         fake.click_labels = [1]
         self.service._session = fake
@@ -732,16 +719,16 @@ class TestSAM2ServicePropagateProgress(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceGetMaskPng(unittest.TestCase):
+class TestSAM2ServiceGetMaskPng(_SAM2PatchBase):
     """5.7.4 / 5.7.5 — get_mask_png returns bytes or None."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_existing_mask_returns_bytes(self) -> None:
         """5.7.4 — get_mask_png returns PNG bytes for existing mask."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
 
         # Make the mask path exist
@@ -749,10 +736,10 @@ class TestSAM2ServiceGetMaskPng(unittest.TestCase):
         mask_path.exists.return_value = True
         fake.mask_dir.__truediv__ = lambda self, other: mask_path
 
-        _mock_cv2.imread.return_value = MagicMock(name="mask_img")
+        self.mock_cv2.imread.return_value = MagicMock(name="mask_img")
         buf_mock = MagicMock()
         buf_mock.tobytes.return_value = b"\x89PNGdata"
-        _mock_cv2.imencode.return_value = (True, buf_mock)
+        self.mock_cv2.imencode.return_value = (True, buf_mock)
 
         result = self.service.get_mask_png(0)
 
@@ -760,7 +747,7 @@ class TestSAM2ServiceGetMaskPng(unittest.TestCase):
 
     def test_missing_mask_returns_none(self) -> None:
         """5.7.5 — get_mask_png returns None for missing mask."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         self.service._session = fake
 
         # Make the mask path not exist
@@ -778,12 +765,12 @@ class TestSAM2ServiceGetMaskPng(unittest.TestCase):
 # ====================================================================
 
 
-class TestSAM2ServiceSegmentationMode(unittest.TestCase):
+class TestSAM2ServiceSegmentationMode(_SAM2PatchBase):
     """5.9.1 / 5.9.2 / 5.9.3 — Segmentation mode and has_ground_clicks."""
 
     def setUp(self) -> None:
-        _reset_all_mocks()
-        self.service = SAM2Service()
+        super().setUp()
+        self.service = self.SAM2Service()
 
     def test_default_mode_is_object(self) -> None:
         """5.9.1 — Default segmentation mode is 'object'."""
@@ -805,14 +792,14 @@ class TestSAM2ServiceSegmentationMode(unittest.TestCase):
 
     def test_has_ground_clicks_empty(self) -> None:
         """5.9.3 — has_ground_clicks False when ground list empty."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.ground_click_points = []
         self.service._session = fake
         self.assertFalse(self.service.has_ground_clicks)
 
     def test_has_ground_clicks_nonempty(self) -> None:
         """5.9.3 — has_ground_clicks True when ground list non-empty."""
-        fake = _make_fake_session()
+        fake = self._make_fake_session()
         fake.ground_click_points = [(0.5, 0.5)]
         self.service._session = fake
         self.assertTrue(self.service.has_ground_clicks)
