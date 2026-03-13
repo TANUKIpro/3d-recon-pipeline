@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import types
 import unittest
 from pathlib import Path
@@ -9,19 +8,8 @@ from unittest import mock
 import numpy as np
 from plyfile import PlyData
 
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-if "open3d" not in sys.modules:
-    open3d_stub = types.ModuleType("open3d")
-    open3d_stub.geometry = types.SimpleNamespace(TriangleMesh=object)
-    open3d_stub.utility = types.SimpleNamespace(Vector3dVector=object, Vector3iVector=object)
-    open3d_stub.io = types.SimpleNamespace(read_triangle_mesh=None, write_triangle_mesh=None)
-    sys.modules["open3d"] = open3d_stub
-
-from config_defaults import REPAIR_MAX_DIAMETER_RATIO, REPAIR_Y_BAND_RATIO
-from stage_contact_hole_repair import (
+from scripts.config_defaults import REPAIR_MAX_DIAMETER_RATIO, REPAIR_Y_BAND_RATIO
+from scripts.stage_contact_hole_repair import (
     GroundPlaneProbe,
     GroundPlaneSearchResult,
     GroundPlaneValidation,
@@ -675,10 +663,10 @@ class GroundPlaneRunTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "stage_contact_hole_repair._load_mesh_arrays",
+            "scripts.stage_contact_hole_repair._load_mesh_arrays",
             return_value=(object(), vertices, faces),
         ), mock.patch(
-            "stage_contact_hole_repair._find_ground_plane_shift",
+            "scripts.stage_contact_hole_repair._find_ground_plane_shift",
             return_value=search,
         ):
             with self.assertRaisesRegex(ValueError, "could not find a stable closed section loop"):
@@ -716,22 +704,22 @@ class GroundPlaneRunTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "stage_contact_hole_repair._load_mesh_arrays",
+            "scripts.stage_contact_hole_repair._load_mesh_arrays",
             return_value=(object(), vertices, faces),
         ), mock.patch(
-            "stage_contact_hole_repair._find_ground_plane_shift",
+            "scripts.stage_contact_hole_repair._find_ground_plane_shift",
             return_value=search,
         ), mock.patch(
-            "stage_contact_hole_repair._probe_ground_plane_shift",
+            "scripts.stage_contact_hole_repair._probe_ground_plane_shift",
             return_value=probe,
         ), mock.patch(
-            "stage_contact_hole_repair._clip_mesh_at_plane",
+            "scripts.stage_contact_hole_repair._clip_mesh_at_plane",
             return_value=(vertices, faces),
         ), mock.patch(
-            "stage_contact_hole_repair._cap_boundary_at_plane",
+            "scripts.stage_contact_hole_repair._cap_boundary_at_plane",
             return_value=(vertices, np.vstack((faces, faces[:2])), {0, 1, 2, 3}, 0.9998),
         ), mock.patch(
-            "stage_contact_hole_repair._finalize_ground_plane_outputs",
+            "scripts.stage_contact_hole_repair._finalize_ground_plane_outputs",
             return_value=(
                 vertices,
                 faces,
