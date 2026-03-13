@@ -1,0 +1,231 @@
+"""View scoring and selection for texture baking."""
+
+import numpy as np
+
+from scripts.texture.intrinsics import _project_simple
+
+
+def _rasterize_view_depth(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    c2w: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+) -> np.ndarray:
+    """Rasterize mesh depth into camera image space for a simple z-test.
+
+    Uses vectorized preprocessing to batch-filter faces before the per-face
+    rasterization loop (Optimization B).
+    """
+    uv_all, depth_all = _project_simple(vertices, c2w, K)
+    depth_buffer = np.full((img_h, img_w), np.inf, dtype=np.float32)
+    inside_eps = 1e-5
+
+    n_faces = len(faces)
+    if n_faces == 0:
+        return depth_buffer
+
+    # --- Vectorized pre-processing ---
+    i0s = faces[:, 0]
+    i1s = faces[:, 1]
+    i2s = faces[:, 2]
+
+    z0s = depth_all[i0s]
+    z1s = depth_all[i1s]
+    z2s = depth_all[i2s]
+
+    # Back-face culling: skip faces where all three depths <= 0.01
+    visible = ~((z0s <= 0.01) & (z1s <= 0.01) & (z2s <= 0.01))
+
+    x0s = uv_all[i0s, 0]
+    y0s = uv_all[i0s, 1]
+    x1s = uv_all[i1s, 0]
+    y1s = uv_all[i1s, 1]
+    x2s = uv_all[i2s, 0]
+    y2s = uv_all[i2s, 1]
+
+    # Bounding boxes (vectorized)
+    bb_min_x = np.floor(np.minimum(np.minimum(x0s, x1s), x2s)).astype(np.int32)
+    bb_max_x = np.ceil(np.maximum(np.maximum(x0s, x1s), x2s)).astype(np.int32)
+    bb_min_y = np.floor(np.minimum(np.minimum(y0s, y1s), y2s)).astype(np.int32)
+    bb_max_y = np.ceil(np.maximum(np.maximum(y0s, y1s), y2s)).astype(np.int32)
+
+    # Check overlap with image BEFORE clipping (matches original asymmetric clip logic)
+    bb_valid = (bb_max_x >= 0) & (bb_min_x <= img_w - 1) & (bb_max_y >= 0) & (bb_min_y <= img_h - 1)
+
+    np.clip(bb_min_x, 0, img_w - 1, out=bb_min_x)
+    np.clip(bb_max_x, 0, img_w - 1, out=bb_max_x)
+    np.clip(bb_min_y, 0, img_h - 1, out=bb_min_y)
+    np.clip(bb_max_y, 0, img_h - 1, out=bb_max_y)
+
+    # Barycentric denominator (vectorized)
+    denoms = (y1s - y2s) * (x0s - x2s) + (x2s - x1s) * (y0s - y2s)
+    non_degenerate = np.abs(denoms) >= 1e-12
+
+    # Combined filter
+    keep = visible & bb_valid & non_degenerate
+    keep_idx = np.where(keep)[0]
+
+    # Build contiguous arrays for the inner loop
+    _x0 = x0s[keep_idx]
+    _y0 = y0s[keep_idx]
+    _x1 = x1s[keep_idx]
+    _y1 = y1s[keep_idx]
+    _x2 = x2s[keep_idx]
+    _y2 = y2s[keep_idx]
+    _z0 = z0s[keep_idx]
+    _z1 = z1s[keep_idx]
+    _z2 = z2s[keep_idx]
+    _denom = denoms[keep_idx]
+    _bb_min_x = bb_min_x[keep_idx]
+    _bb_max_x = bb_max_x[keep_idx]
+    _bb_min_y = bb_min_y[keep_idx]
+    _bb_max_y = bb_max_y[keep_idx]
+
+    for i in range(len(keep_idx)):
+        mn_x = int(_bb_min_x[i])
+        mx_x = int(_bb_max_x[i])
+        mn_y = int(_bb_min_y[i])
+        mx_y = int(_bb_max_y[i])
+        d = _denom[i]
+
+        xs = np.arange(mn_x, mx_x + 1, dtype=np.float64) + 0.5
+        ys = np.arange(mn_y, mx_y + 1, dtype=np.float64) + 0.5
+        grid_x, grid_y = np.meshgrid(xs, ys)
+
+        gx2 = grid_x - _x2[i]
+        gy2 = grid_y - _y2[i]
+        w0 = ((_y1[i] - _y2[i]) * gx2 + (_x2[i] - _x1[i]) * gy2) / d
+        w1 = ((_y2[i] - _y0[i]) * gx2 + (_x0[i] - _x2[i]) * gy2) / d
+        w2 = 1.0 - w0 - w1
+
+        inside = (w0 >= -inside_eps) & (w1 >= -inside_eps) & (w2 >= -inside_eps)
+        if not np.any(inside):
+            continue
+
+        depth = w0 * _z0[i] + w1 * _z1[i] + w2 * _z2[i]
+        valid = inside & (depth > 0.01)
+        if not np.any(valid):
+            continue
+
+        tile = depth_buffer[mn_y:mx_y + 1, mn_x:mx_x + 1]
+        candidate = np.where(valid, depth, np.inf).astype(np.float32, copy=False)
+        np.minimum(tile, candidate, out=tile)
+
+    return depth_buffer
+
+
+def _evaluate_view_samples(
+    pos3d: np.ndarray,
+    normals: np.ndarray,
+    c2w: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+    mask_bool: np.ndarray,
+    depth_buffer: np.ndarray,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Evaluate which texels can be sampled from a view and return per-texel scores."""
+    cam_pos = c2w[:3, 3]
+    view_dirs = cam_pos[None, :] - pos3d
+    dists = np.linalg.norm(view_dirs, axis=1)
+    view_dirs_n = view_dirs / np.maximum(dists[:, None], 1e-10)
+    cos_angle = np.sum(normals * view_dirs_n, axis=1)
+
+    uv2d, depths = _project_simple(pos3d, c2w, K)
+    px_proj = uv2d[:, 0]
+    py_proj = uv2d[:, 1]
+    in_bounds = (
+        (depths > 0.01)
+        & (px_proj >= 0)
+        & (px_proj < img_w - 1)
+        & (py_proj >= 0)
+        & (py_proj < img_h - 1)
+    )
+
+    pxi = np.clip(np.rint(px_proj).astype(np.int32), 0, img_w - 1)
+    pyi = np.clip(np.rint(py_proj).astype(np.int32), 0, img_h - 1)
+    mask_ok = mask_bool[pyi, pxi]
+
+    depth_ref = depth_buffer[pyi, pxi].astype(np.float64)
+    cos_safe = np.maximum(np.abs(cos_angle), 0.1)
+    visibility_eps = np.maximum(1e-4, 0.003 * depth_ref / cos_safe)
+    visible = depths <= (depth_ref + visibility_eps)
+
+    facing = cos_angle > min_cos
+    valid = in_bounds & mask_ok & visible & facing
+
+    score = np.zeros(len(pos3d), dtype=np.float64)
+    if np.any(valid):
+        ang = np.power(np.maximum(cos_angle[valid], 0.0), angle_exp)
+        dist_term = np.power(np.maximum(dists[valid], 1e-6), dist_pow)
+        score[valid] = ang / np.maximum(dist_term, 1e-10)
+
+    return valid, score, px_proj, py_proj
+
+
+def _update_topk_scores(
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    valid: np.ndarray,
+    score: np.ndarray,
+    vidx: int,
+) -> None:
+    """Update per-texel top-K view scores in-place.
+
+    For texels where *valid* is True and *score* exceeds the current worst
+    entry in the top-K list, the worst slot is replaced and the array is
+    re-sorted to maintain descending order.
+
+    Args:
+        best_scores: (n_texels, K) float32 — scores kept in descending order.
+        best_views: (n_texels, K) int32 — corresponding view indices.
+        valid: (n_texels,) bool — which texels have a usable projection.
+        score: (n_texels,) float64 — per-texel score for view *vidx*.
+        vidx: View index to record.
+    """
+    K = best_scores.shape[1]
+    candidates = valid & (score > best_scores[:, K - 1])
+    idx = np.where(candidates)[0]
+    if idx.size == 0:
+        return
+
+    # Replace worst slot (last column)
+    best_scores[idx, K - 1] = score[idx].astype(np.float32)
+    best_views[idx, K - 1] = vidx
+
+    # Insert-sort: bubble the new element up from slot K-1
+    for j in range(K - 2, -1, -1):
+        swap = best_scores[idx, j] < best_scores[idx, j + 1]
+        swap_idx = idx[swap]
+        if swap_idx.size == 0:
+            break
+        tmp_s = best_scores[swap_idx, j].copy()
+        best_scores[swap_idx, j] = best_scores[swap_idx, j + 1]
+        best_scores[swap_idx, j + 1] = tmp_s
+        tmp_v = best_views[swap_idx, j].copy()
+        best_views[swap_idx, j] = best_views[swap_idx, j + 1]
+        best_views[swap_idx, j + 1] = tmp_v
+        idx = swap_idx
+
+
+def _apply_view_hardening(
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    hard_ratio: float,
+) -> int:
+    """Zero out non-dominant views when top-1 clearly wins."""
+    if best_scores.shape[1] <= 1 or hard_ratio <= 0:
+        return 0
+    s0 = best_scores[:, 0]
+    s1 = best_scores[:, 1]
+    dominant = (s0 > 0) & (s1 > 0) & (s0 > hard_ratio * s1)
+    n_hard = int(dominant.sum())
+    if n_hard > 0:
+        best_scores[dominant, 1:] = -1.0
+        best_views[dominant, 1:] = -1
+    return n_hard
