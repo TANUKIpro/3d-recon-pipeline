@@ -3,148 +3,19 @@
  */
 
 import {
-  parsePositiveInt,
-  parseNonNegativeInt,
-  parsePositiveFloat,
-  parseNonNegativeFloat,
-} from './utils.js';
-
-const NEW_OBJECT_VALUE = '__new__';
-const STAGE_LABELS = {
-  1: 'Extract Frames',
-  2: 'Pi3X',
-  3: 'SAM2',
-  4: 'Denoise',
-  5: 'Mesh Reconstruction',
-  6: 'Mesh Wrap',
-  7: 'Mesh Repair',
-  8: 'Texture Bake',
-};
-const DENOISE_CUSTOM_PRESET = 'custom';
-const DENOISE_ALGO_LABELS = {
-  dbscan_sor: 'DBSCAN + SOR',
-  dbscan_only: 'DBSCAN',
-  sor_only: 'SOR',
-  radius_only: 'Radius Outlier Removal',
-  dbscan_radius: 'DBSCAN + Radius Outlier Removal',
-};
-const DENOISE_ALGO_STEPS = {
-  dbscan_sor: { dbscan: true, sor: true, radius: false },
-  dbscan_only: { dbscan: true, sor: false, radius: false },
-  sor_only: { dbscan: false, sor: true, radius: false },
-  radius_only: { dbscan: false, sor: false, radius: true },
-  dbscan_radius: { dbscan: true, sor: false, radius: true },
-};
-const DENOISE_PRESETS = {
-  balanced: {
-    denoise_algorithm: 'dbscan_sor',
-    denoise_dbscan_eps: 0.0,
-    denoise_dbscan_eps_ratio: 0.02,
-    denoise_dbscan_min_samples: 10,
-    denoise_dbscan_max_points: 500000,
-    denoise_sor_neighbors: 20,
-    denoise_sor_std_ratio: 2.0,
-    denoise_radius_neighbors: 8,
-    denoise_radius_radius_ratio: 0.015,
-  },
-  detail_preserving: {
-    denoise_algorithm: 'sor_only',
-    denoise_dbscan_eps: 0.0,
-    denoise_dbscan_eps_ratio: 0.02,
-    denoise_dbscan_min_samples: 10,
-    denoise_dbscan_max_points: 500000,
-    denoise_sor_neighbors: 16,
-    denoise_sor_std_ratio: 2.6,
-    denoise_radius_neighbors: 8,
-    denoise_radius_radius_ratio: 0.015,
-  },
-  isolate_subject: {
-    denoise_algorithm: 'dbscan_only',
-    denoise_dbscan_eps: 0.0,
-    denoise_dbscan_eps_ratio: 0.018,
-    denoise_dbscan_min_samples: 8,
-    denoise_dbscan_max_points: 500000,
-    denoise_sor_neighbors: 20,
-    denoise_sor_std_ratio: 2.0,
-    denoise_radius_neighbors: 8,
-    denoise_radius_radius_ratio: 0.015,
-  },
-  sparse_noise: {
-    denoise_algorithm: 'radius_only',
-    denoise_dbscan_eps: 0.0,
-    denoise_dbscan_eps_ratio: 0.02,
-    denoise_dbscan_min_samples: 10,
-    denoise_dbscan_max_points: 500000,
-    denoise_sor_neighbors: 20,
-    denoise_sor_std_ratio: 2.0,
-    denoise_radius_neighbors: 6,
-    denoise_radius_radius_ratio: 0.012,
-  },
-  aggressive_cleanup: {
-    denoise_algorithm: 'dbscan_radius',
-    denoise_dbscan_eps: 0.0,
-    denoise_dbscan_eps_ratio: 0.024,
-    denoise_dbscan_min_samples: 14,
-    denoise_dbscan_max_points: 500000,
-    denoise_sor_neighbors: 20,
-    denoise_sor_std_ratio: 2.0,
-    denoise_radius_neighbors: 10,
-    denoise_radius_radius_ratio: 0.02,
-  },
-};
-
-const MESHWRAP_DEFAULTS = {
-  meshwrap_method: 'alpha_wrap',
-  meshwrap_poisson_depth: 8,
-  meshwrap_poisson_scale: 1.18,
-  meshwrap_iterations: 1,
-  meshwrap_sample_points: 400000,
-  meshwrap_density_trim_q: 0.003,
-  meshwrap_crop_scale: 1.08,
-  meshwrap_target_face_ratio: 2.20,
-  meshwrap_normal_radius_ratio: 0.02,
-  meshwrap_smooth_iterations: 2,
-  meshwrap_quality_threshold: 0.02,
-  meshwrap_alpha_ratio: 0.02,
-  meshwrap_offset_ratio: 0.3,
-};
-
-const MESH_REPAIR_DEFAULTS = {
-  mesh_repair_max_diameter_ratio: 0.46,
-  mesh_repair_y_band_ratio: 0.06,
-  mesh_repair_smooth_iters: 3,
-};
-
-const CLASSICAL_DEFAULTS = {
-  classical_preprocess_enabled: false,
-  classical_poisson_depth: 11,
-  classical_density_trim_q: 0.001,
-  classical_auto_smooth: false,
-  classical_smooth_iterations: 0,
-  classical_downsample_enabled: false,
-  classical_downsample_target_faces: 500000,
-};
-
-const CLASSICAL_PRESETS = {
-  lightweight: {
-    classical_preprocess_enabled: true,
-    classical_poisson_depth: 9,
-    classical_density_trim_q: 0.005,
-    classical_auto_smooth: false,
-    classical_smooth_iterations: 2,
-    classical_downsample_enabled: true,
-    classical_downsample_target_faces: 120000,
-  },
-  trust_point_cloud: {
-    classical_preprocess_enabled: false,
-    classical_poisson_depth: 11,
-    classical_density_trim_q: 0.001,
-    classical_auto_smooth: false,
-    classical_smooth_iterations: 0,
-    classical_downsample_enabled: false,
-    classical_downsample_target_faces: 500000,
-  },
-};
+  CLASSICAL_DEFAULTS,
+  CLASSICAL_PRESETS,
+  DENOISE_ALGO_LABELS,
+  DENOISE_ALGO_STEPS,
+  DENOISE_CUSTOM_PRESET,
+  DENOISE_PRESETS,
+  MESHWRAP_DEFAULTS,
+  MESH_REPAIR_DEFAULTS,
+  NEW_OBJECT_VALUE,
+  STAGE_LABELS,
+} from './config/presets.js';
+import * as FrameBudget from './config/frame-budget.js';
+import * as FormHelpers from './config/form-helpers.js';
 
 export class ConfigPanel {
   constructor() {
@@ -1265,302 +1136,41 @@ export class ConfigPanel {
     }
   }
 
-  _applySuggestedObjectName(force = false) {
-    const selectedExisting = this._objectSelect.value && this._objectSelect.value !== NEW_OBJECT_VALUE;
-    if (selectedExisting && !force) return;
-    if (this._objectNameDirty && !force) return;
-    const suggested = this._suggestObjectNameFromVideo();
-    if (!suggested) return;
-    this._objectNameInput.value = suggested;
-    this._objectNameDirty = false;
-    this._selectedObjectSummary = null;
-    this._renderObjectSummary(null, suggested);
-    this._renderArtifacts(null);
-    this._updateResumeHint();
-  }
-
-  _suggestObjectNameFromVideo() {
-    const option = this._videoSelect.selectedOptions?.[0];
-    const raw = option?.dataset?.suggestedObjectName || '';
-    return this._normalizeObjectName(raw);
-  }
-
-  _resolveResumeStage() {
-    return this._clampStage(this._startStage);
-  }
-
-  _clampStage(stage) {
-    const n = Number(stage) || 1;
-    return Math.max(1, Math.min(8, Math.round(n)));
-  }
-
-  _updateResumeHint() {
-    if (!this._resumeStageInfo) return;
-    const manualStage = this._resolveResumeStage();
-    const manualLabel = STAGE_LABELS[manualStage] || `Stage ${manualStage}`;
-    this._resumeStageInfo.textContent =
-      `Start Pipeline from selected task: Stage ${manualStage} (${manualLabel}).`;
-  }
-
-  async _applyObjectVideoPath(path) {
-    if (!path) return;
-    const target = String(path);
-    const matched = Array.from(this._videoSelect.options || []).some((opt) => opt.value === target);
-    if (!matched) return;
-    if (this._videoSelect.value === target) return;
-    this._videoSelect.value = target;
-    await this._onVideoChange();
-  }
-
-  _onFrameIntervalInput() {
-    if (this._videoMeta) {
-      const interval = this._parsePositiveInt(
-        this._inputs.frame_interval.value,
-        this._extractDefaults.frame_interval,
-      );
-      this._extractDefaults.frame_interval = interval;
-      if (this._maxFramesAuto) {
-        const maxFrames = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
-        this._extractDefaults.max_frames = maxFrames;
-        this._inputs.max_frames.value = String(maxFrames);
-      }
-    }
-    this._updateFrameBudgetPreview();
-  }
-
-  _onMaxFramesInput() {
-    const raw = (this._inputs.max_frames.value || '').trim();
-    if (!raw) {
-      this._maxFramesAuto = true;
-      this._onFrameIntervalInput();
-      return;
-    }
-    const parsed = Number.parseInt(raw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      this._maxFramesAuto = false;
-    }
-    this._updateFrameBudgetPreview();
-  }
-
-  _onPi3xFrameTargetInput() {
-    this._pi3xFrameTargetAuto = false;
-    this._syncPi3xFrameTargetInput();
-  }
-
-  _estimateMaxFrames(totalFrames, frameInterval) {
-    const total = this._parsePositiveInt(totalFrames, 0);
-    const interval = this._parsePositiveInt(frameInterval, 1);
-    if (total <= 0) return this._extractDefaults.max_frames;
-    return Math.max(2, Math.ceil(total / interval));
-  }
-
-  _resolveMaxFrames() {
-    return Math.max(
-      2,
-      this._parsePositiveInt(
-        this._inputs.max_frames.value,
-        this._extractDefaults.max_frames,
-      ),
-    );
-  }
-
-  _clampPi3xFrameTarget(targetFrames, maxFrames) {
-    const maxAllowed = Math.max(2, this._parsePositiveInt(maxFrames, this._extractDefaults.max_frames));
-    const parsed = this._parsePositiveInt(targetFrames, maxAllowed);
-    return Math.max(2, Math.min(parsed, maxAllowed));
-  }
-
-  _resolvePi3xFrameTarget(maxFrames = this._resolveMaxFrames()) {
-    const fallback = this._clampPi3xFrameTarget(
-      this._pi3xFrameTargetRecommended ?? maxFrames,
-      maxFrames,
-    );
-    const parsed = this._parsePositiveInt(this._inputs.pi3x_frame_target.value, fallback);
-    return this._clampPi3xFrameTarget(parsed, maxFrames);
-  }
-
-  _syncPi3xFrameTargetInput(opts = {}) {
-    const maxFrames = this._resolveMaxFrames();
-    const recommendedRaw = opts.recommendedFrames;
-    if (recommendedRaw != null) {
-      this._pi3xFrameTargetRecommended = this._clampPi3xFrameTarget(recommendedRaw, maxFrames);
-    } else if (this._pi3xFrameTargetRecommended == null) {
-      this._pi3xFrameTargetRecommended = maxFrames;
-    } else {
-      this._pi3xFrameTargetRecommended = this._clampPi3xFrameTarget(this._pi3xFrameTargetRecommended, maxFrames);
-    }
-
-    this._inputs.pi3x_frame_target.min = '2';
-    this._inputs.pi3x_frame_target.max = String(maxFrames);
-
-    const fallback = this._pi3xFrameTargetRecommended;
-    let selectedFrames = this._resolvePi3xFrameTarget(maxFrames);
-    if (this._pi3xFrameTargetAuto || !(this._inputs.pi3x_frame_target.value || '').trim()) {
-      selectedFrames = maxFrames;
-      this._inputs.pi3x_frame_target.value = String(selectedFrames);
-    } else {
-      this._inputs.pi3x_frame_target.value = String(selectedFrames);
-    }
-
-    if (this._pi3xFrameTargetValue) {
-      this._pi3xFrameTargetValue.textContent = String(selectedFrames);
-    }
-    if (this._pi3xFrameTargetNote) {
-      this._pi3xFrameTargetNote.textContent =
-        `AutoTarget recommendation: ${fallback} frames (max ${maxFrames})`;
-    }
-
-    this._updatePi3xFrameTargetMarker();
-
-    return {
-      requestedFrames: maxFrames,
-      selectedFrames,
-      recommendedFrames: fallback,
-    };
-  }
-
-  _updatePi3xFrameTargetMarker() {
-    if (!this._pi3xFrameTargetMarker) return;
-    const recommended = this._pi3xFrameTargetRecommended;
-    const input = this._inputs.pi3x_frame_target;
-    const min = parseFloat(input.min) || 2;
-    const max = parseFloat(input.max) || 50;
-    if (recommended == null || max <= min || recommended >= max) {
-      this._pi3xFrameTargetMarker.style.display = 'none';
-      return;
-    }
-    const pct = ((recommended - min) / (max - min)) * 100;
-    this._pi3xFrameTargetMarker.style.display = '';
-    this._pi3xFrameTargetMarker.style.left = `${pct}%`;
-  }
-
-  _resolveRequestedPi3xFrames() {
-    return this._resolveMaxFrames();
-  }
-
-  _updateFrameBudgetPreview() {
-    const requestedFrames = this._resolveRequestedPi3xFrames();
-    this._syncPi3xFrameTargetInput();
-    if (!this._pi3xPlanNote) return;
-    const pixelLimit = this._parsePositiveInt(this._inputs.pixel_limit.value, 255000);
-    this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: estimating...';
-    if (this._pi3xPlanDebounce) {
-      clearTimeout(this._pi3xPlanDebounce);
-    }
-    this._pi3xPlanDebounce = setTimeout(() => {
-      this._updatePi3xPlanPreview(requestedFrames, pixelLimit);
-    }, 120);
-  }
-
-  async _updatePi3xPlanPreview(requestedFrames, pixelLimit) {
-    const reqId = ++this._pi3xPlanRequestId;
-    try {
-      const res = await fetch(
-        `/api/pipeline/pi3x-plan?requested_frames=${requestedFrames}&pixel_limit=${pixelLimit}`,
-      );
-      if (reqId !== this._pi3xPlanRequestId) return;
-      if (!res.ok) {
-        this._syncPi3xFrameTargetInput({ recommendedFrames: requestedFrames });
-        this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
-        return;
-      }
-      const data = await res.json();
-      const autoFrames = this._parsePositiveInt(data.auto_target_frames, requestedFrames);
-      const synced = this._syncPi3xFrameTargetInput({ recommendedFrames: autoFrames });
-      const targetPct = Number(data.target_vram_utilization) * 100;
-      const usedPct = Number(data.predicted_used_pct);
-      const parts = [`Auto target: ${synced.recommendedFrames}/${synced.requestedFrames} frames`];
-      if (synced.selectedFrames !== synced.recommendedFrames) {
-        parts.push(`selected ${synced.selectedFrames}`);
-      }
-      if (Number.isFinite(targetPct) && targetPct > 0) {
-        parts.push(`target VRAM ${targetPct.toFixed(0)}%`);
-      }
-      if (Number.isFinite(usedPct) && usedPct > 0) {
-        parts.push(`estimated ${usedPct.toFixed(1)}%`);
-      }
-      if (data.auto_reduced) {
-        parts.push('auto-reduced');
-      }
-      this._pi3xPlanNote.textContent = parts.join(' | ');
-    } catch {
-      if (reqId !== this._pi3xPlanRequestId) return;
-      this._syncPi3xFrameTargetInput({ recommendedFrames: requestedFrames });
-      this._pi3xPlanNote.textContent = 'Pi3X VRAM plan: unavailable';
-    }
-  }
-
-  _normalizeObjectName(value) {
-    const raw = String(value || '').trim();
-    if (!raw) return '';
-    let normalized = raw
-      .replace(/[\\/]/g, '-')
-      .replace(/\s+/g, '-')
-      .replace(/[^\p{Letter}\p{Number}_.-]/gu, '-')
-      .replace(/-+/g, '-')
-      .replace(/^[.-]+/, '')
-      .replace(/[.-]+$/, '');
-    if (!normalized) normalized = 'object';
-    return normalized.slice(0, 80);
-  }
-
-  _formatSize(sizeMb) {
-    if (!Number.isFinite(sizeMb)) return '';
-    if (sizeMb < 0.01) return '<0.01 MB';
-    return `${Number(sizeMb).toFixed(2)} MB`;
-  }
-
-  _setSelectValue(select, value) {
-    if (!select) return;
-    if (!Array.from(select.options || []).some(opt => opt.value === value)) return;
-    select.value = value;
-  }
-
-  _valuesAlmostEqual(a, b) {
-    const aNum = Number(a);
-    const bNum = Number(b);
-    if (!Number.isFinite(aNum) || !Number.isFinite(bNum)) return false;
-    return Math.abs(aNum - bNum) <= 1e-9;
-  }
-
-  _parseTextureSize(value, fallback = 0) {
-    const n = Number.parseInt(value, 10);
-    if (!Number.isFinite(n)) return fallback;
-    if (n <= 0) return 0;
-    return n;
-  }
-
-  _computeAutoTextureSize(width, height) {
-    const w = Number.parseInt(width, 10);
-    const h = Number.parseInt(height, 10);
-    if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
-      return null;
-    }
-    return Math.max(1, Math.round(Math.sqrt(w * h)));
-  }
-
-  _updateTextureAutoOption(videoMeta) {
-    const textureInput = this._inputs.texture_size;
-    if (!textureInput) return;
-    const autoOption = Array.from(textureInput.options || []).find((opt) => opt.value === '0');
-    if (!autoOption) return;
-    const autoSize = this._computeAutoTextureSize(videoMeta?.width, videoMeta?.height);
-    autoOption.textContent = autoSize == null ? 'Auto' : `Auto (~${autoSize})`;
-  }
-
-  _parsePositiveInt(value, fallback) {
-    return parsePositiveInt(value, fallback);
-  }
-
-  _parseNonNegativeInt(value, fallback) {
-    return parseNonNegativeInt(value, fallback);
-  }
-
-  _parsePositiveFloat(value, fallback) {
-    return parsePositiveFloat(value, fallback);
-  }
-
-  _parseNonNegativeFloat(value, fallback) {
-    return parseNonNegativeFloat(value, fallback);
-  }
 }
+
+// ── Mixin: frame budget (from config/frame-budget.js) ─────────────
+Object.assign(ConfigPanel.prototype, {
+  _onFrameIntervalInput: FrameBudget._onFrameIntervalInput,
+  _onMaxFramesInput: FrameBudget._onMaxFramesInput,
+  _onPi3xFrameTargetInput: FrameBudget._onPi3xFrameTargetInput,
+  _estimateMaxFrames: FrameBudget._estimateMaxFrames,
+  _resolveMaxFrames: FrameBudget._resolveMaxFrames,
+  _clampPi3xFrameTarget: FrameBudget._clampPi3xFrameTarget,
+  _resolvePi3xFrameTarget: FrameBudget._resolvePi3xFrameTarget,
+  _syncPi3xFrameTargetInput: FrameBudget._syncPi3xFrameTargetInput,
+  _updatePi3xFrameTargetMarker: FrameBudget._updatePi3xFrameTargetMarker,
+  _resolveRequestedPi3xFrames: FrameBudget._resolveRequestedPi3xFrames,
+  _updateFrameBudgetPreview: FrameBudget._updateFrameBudgetPreview,
+  _updatePi3xPlanPreview: FrameBudget._updatePi3xPlanPreview,
+});
+
+// ── Mixin: form helpers (from config/form-helpers.js) ─────────────
+Object.assign(ConfigPanel.prototype, {
+  _normalizeObjectName: FormHelpers._normalizeObjectName,
+  _formatSize: FormHelpers._formatSize,
+  _setSelectValue: FormHelpers._setSelectValue,
+  _valuesAlmostEqual: FormHelpers._valuesAlmostEqual,
+  _parseTextureSize: FormHelpers._parseTextureSize,
+  _computeAutoTextureSize: FormHelpers._computeAutoTextureSize,
+  _updateTextureAutoOption: FormHelpers._updateTextureAutoOption,
+  _applySuggestedObjectName: FormHelpers._applySuggestedObjectName,
+  _suggestObjectNameFromVideo: FormHelpers._suggestObjectNameFromVideo,
+  _resolveResumeStage: FormHelpers._resolveResumeStage,
+  _clampStage: FormHelpers._clampStage,
+  _updateResumeHint: FormHelpers._updateResumeHint,
+  _applyObjectVideoPath: FormHelpers._applyObjectVideoPath,
+  _parsePositiveInt: FormHelpers._parsePositiveInt,
+  _parseNonNegativeInt: FormHelpers._parseNonNegativeInt,
+  _parsePositiveFloat: FormHelpers._parsePositiveFloat,
+  _parseNonNegativeFloat: FormHelpers._parseNonNegativeFloat,
+});
