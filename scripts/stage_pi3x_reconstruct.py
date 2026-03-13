@@ -148,11 +148,8 @@ def _load_images_from_paths(frame_paths: list[Path], pixel_limit: int) -> torch.
     first = cv2.cvtColor(first, cv2.COLOR_BGR2RGB)
     h, w = first.shape[:2]
     scale = min((pixel_limit / max(h * w, 1)) ** 0.5, 1.0)
-    if scale < 1.0:
-        new_h = max(int(h * scale) // 14 * 14, 14)
-        new_w = max(int(w * scale) // 14 * 14, 14)
-    else:
-        new_h, new_w = h, w
+    new_h = max(int(h * scale) // 14 * 14, 14)
+    new_w = max(int(w * scale) // 14 * 14, 14)
 
     imgs = []
     for path in frame_paths:
@@ -160,7 +157,7 @@ def _load_images_from_paths(frame_paths: list[Path], pixel_limit: int) -> torch.
         if img is None:
             raise RuntimeError(f"Failed to read frame: {path}")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        if scale < 1.0:
+        if (img.shape[0], img.shape[1]) != (new_h, new_w):
             img = cv2.resize(img, (new_w, new_h))
         imgs.append(torch.from_numpy(img).permute(2, 0, 1).float() / 255.0)
 

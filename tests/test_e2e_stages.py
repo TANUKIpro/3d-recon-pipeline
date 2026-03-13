@@ -154,10 +154,14 @@ class TestTextureBakeE2E:
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
-        # Copy fixture mesh to output_dir as bake_texture expects it there
+        # Copy fixture files to output_dir as bake_texture expects them there
         shutil.copy(
             FIXTURE_DIR / "object_mesh_repaired.ply",
             output_dir / "object_mesh_repaired.ply",
+        )
+        shutil.copy(
+            FIXTURE_DIR / "object_denoised.ply",
+            output_dir / "object_denoised.ply",
         )
         result = bake_texture(
             str(output_dir / "object_mesh_repaired.ply"),

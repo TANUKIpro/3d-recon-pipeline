@@ -1338,7 +1338,7 @@ class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             mock_root.return_value = Path(tmp)
             mock_lb = MagicMock()
-            mock_lb.drain = MagicMock(return_value=asyncio.coroutine(lambda: None)())
+            mock_lb.drain = AsyncMock()
             mock_lb_cls.return_value = mock_lb
 
             import scripts.dashboard.app as app_mod
@@ -1362,7 +1362,7 @@ class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
             mock_list.return_value = [{"name": "latest-obj"}]
 
             mock_lb = MagicMock()
-            mock_lb.drain = MagicMock(return_value=asyncio.coroutine(lambda: None)())
+            mock_lb.drain = AsyncMock()
             mock_lb_cls.return_value = mock_lb
 
             import scripts.dashboard.app as app_mod

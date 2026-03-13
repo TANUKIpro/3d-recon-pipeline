@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 import unittest
@@ -11,7 +12,7 @@ from plyfile import PlyData
 
 # open3d is imported at module level by stage_contact_hole_repair.
 # Provide a minimal stub when it's not installed (e.g. host without GPU libs).
-if "open3d" not in sys.modules:
+if importlib.util.find_spec("open3d") is None:
     _o3d_stub = types.ModuleType("open3d")
     _o3d_stub.geometry = types.SimpleNamespace(TriangleMesh=object)  # type: ignore[attr-defined]
     _o3d_stub.utility = types.SimpleNamespace(Vector3dVector=object, Vector3iVector=object)  # type: ignore[attr-defined]
