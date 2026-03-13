@@ -5,6 +5,37 @@
 
 ---
 
+## テスト実行方法
+
+### Docker コンテナ内で実行（推奨）
+
+```bash
+# コンテナビルド
+docker compose -f docker-compose.yml -f docker-compose.test.yml build test
+
+# 全テスト実行
+./run_tests.sh
+
+# GPU なしテストのみ（高速）
+./run_tests.sh -m "not gpu"
+
+# GPU テストのみ
+./run_tests.sh -m gpu
+
+# 特定テスト
+./run_tests.sh -k "test_sam2_service" -v
+```
+
+### テストティア
+
+| ティア | マーカー | 説明 |
+|--------|----------|------|
+| Unit | なし | GPU 不要。モック使用のユニットテスト |
+| GPU | `@pytest.mark.gpu` | GPU + 実ライブラリが必要 |
+| E2E | `@pytest.mark.gpu` + `@pytest.mark.slow` | フィクスチャデータでステージを実行するスモークテスト |
+
+---
+
 ## 1. Backend: State (`state.py`)
 
 ### 1.1 Enum / 定数
@@ -1094,3 +1125,20 @@
 - ~~残りの State / Configuration / SAM2 Service / Object Store の個別テスト~~
 - ~~Router, Overview, CameraOverlay の未実装テスト~~
 - ~~Stage Wrappers, App Endpoints ライフサイクル, ConfigPanel, PreviewPanel~~
+
+---
+
+## E2E ステージテスト (`test_e2e_stages.py`)
+
+フィクスチャデータ (`tests/fixtures/coffee01/`) を使って各ステージを実行するスモークテスト。
+全テスト `@pytest.mark.gpu` + `@pytest.mark.slow`。
+
+| # | テスト項目 | 状態 |
+|---|-----------|------|
+| E2E.1 | Stage 1 (extract_frames): synthetic_video → フレーム抽出 | [済] |
+| E2E.2 | Stage 2 (Pi3X): フィクスチャフレーム → 点群生成 | [済] |
+| E2E.3 | Stage 4 (denoise): フィクスチャ PLY → ノイズ除去 | [済] |
+| E2E.4 | Stage 5 (classical_mesh): denoised PLY → メッシュ生成 | [済] |
+| E2E.5 | Stage 6 (mesh_wrap): メッシュ → ラッピング | [済] |
+| E2E.6 | Stage 7 (contact_hole_repair): wrapped メッシュ → 修復 | [済] |
+| E2E.7 | Stage 8 (texture_bake): メッシュ + フレーム → OBJ + テクスチャ | [済] |

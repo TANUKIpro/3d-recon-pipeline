@@ -90,8 +90,12 @@ RUN JAX_V=$(python3 -c "import jax; print(jax.__version__)") \
 # --- Layer 8: Application code ---
 COPY scripts/ /app/scripts/
 
+# --- Layer 9: Test dependencies & test files ---
+COPY tests/ /app/tests/
+RUN pip install --no-cache-dir pytest pytest-asyncio
+
 # Add repos to Python path
-ENV PYTHONPATH="/opt/pi3:/opt/sam2:${PYTHONPATH}"
+ENV PYTHONPATH="/app/scripts:/opt/pi3:/opt/sam2:${PYTHONPATH}"
 
 EXPOSE 7860
 

@@ -1,0 +1,19 @@
+services:
+  test:
+    build: .
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./tests:/app/tests
+      - ./scripts:/app/scripts
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - XLA_PYTHON_CLIENT_PREALLOCATE=false
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    entrypoint: ["python3", "-m", "pytest"]
+    command: ["tests/", "-v", "--tb=short", "-x"]

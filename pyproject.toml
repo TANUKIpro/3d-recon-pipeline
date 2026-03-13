@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*", "*Tests"]
+asyncio_mode = "auto"
+markers = [
+    "gpu: GPU推論が必要なテスト",
+    "slow: 30秒以上かかるテスト",
+]

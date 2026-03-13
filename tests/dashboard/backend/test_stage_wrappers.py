@@ -51,22 +51,13 @@ class TestStagePi3xVRAMCleanup(unittest.TestCase):
 
     def setUp(self) -> None:
         self.p_run = patch("stage_pi3x_reconstruct.run_pi3x_inference")
-        self.p_apply = patch("stage_pi3x_reconstruct.apply_sam2_masks")
-        self.p_ground = patch("stage_pi3x_reconstruct.extract_ground_plane")
         self.p_cleanup = patch("vram_utils.cleanup_pytorch_vram")
-        self.p_ensure = patch("vram_utils.ensure_vram_available")
         self.mock_run = self.p_run.start()
-        self.mock_apply = self.p_apply.start()
-        self.mock_ground = self.p_ground.start()
         self.mock_cleanup = self.p_cleanup.start()
-        self.mock_ensure = self.p_ensure.start()
 
     def tearDown(self) -> None:
         self.p_run.stop()
-        self.p_apply.stop()
-        self.p_ground.stop()
         self.p_cleanup.stop()
-        self.p_ensure.stop()
 
     def test_cleanup_called_after_inference(self) -> None:
         _stage_pi3x_inference(
@@ -133,26 +124,17 @@ class TestLazyImportVerification(unittest.TestCase):
     def setUp(self) -> None:
         self.p_extract = patch("stage_extract_frames.extract_frames")
         self.p_run = patch("stage_pi3x_reconstruct.run_pi3x_inference")
-        self.p_apply = patch("stage_pi3x_reconstruct.apply_sam2_masks")
-        self.p_ground = patch("stage_pi3x_reconstruct.extract_ground_plane")
         self.p_cleanup = patch("vram_utils.cleanup_pytorch_vram")
-        self.p_ensure = patch("vram_utils.ensure_vram_available")
         self.p_diffcd = patch("stage_diffcd_mesh.run_diffcd")
         self.mock_extract = self.p_extract.start()
         self.mock_run = self.p_run.start()
-        self.mock_apply = self.p_apply.start()
-        self.mock_ground = self.p_ground.start()
         self.mock_cleanup = self.p_cleanup.start()
-        self.mock_ensure = self.p_ensure.start()
         self.mock_diffcd = self.p_diffcd.start()
 
     def tearDown(self) -> None:
         self.p_extract.stop()
         self.p_run.stop()
-        self.p_apply.stop()
-        self.p_ground.stop()
         self.p_cleanup.stop()
-        self.p_ensure.stop()
         self.p_diffcd.stop()
 
     def test_extract_frames_calls_underlying(self) -> None:
