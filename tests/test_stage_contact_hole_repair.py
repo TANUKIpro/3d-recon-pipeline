@@ -674,10 +674,10 @@ class GroundPlaneRunTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "scripts.stage_contact_hole_repair._load_mesh_arrays",
+            "scripts.repair.pipeline._load_mesh_arrays",
             return_value=(object(), vertices, faces),
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._find_ground_plane_shift",
+            "scripts.repair.pipeline._find_ground_plane_shift",
             return_value=search,
         ):
             with self.assertRaisesRegex(ValueError, "could not find a stable closed section loop"):
@@ -715,22 +715,22 @@ class GroundPlaneRunTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "scripts.stage_contact_hole_repair._load_mesh_arrays",
+            "scripts.repair.pipeline._load_mesh_arrays",
             return_value=(object(), vertices, faces),
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._find_ground_plane_shift",
+            "scripts.repair.pipeline._find_ground_plane_shift",
             return_value=search,
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._probe_ground_plane_shift",
+            "scripts.repair.ground_plane._probe_ground_plane_shift",
             return_value=probe,
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._clip_mesh_at_plane",
+            "scripts.repair.pipeline._clip_mesh_at_plane",
             return_value=(vertices, faces),
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._cap_boundary_at_plane",
+            "scripts.repair.pipeline._cap_boundary_at_plane",
             return_value=(vertices, np.vstack((faces, faces[:2])), {0, 1, 2, 3}, 0.9998),
         ), mock.patch(
-            "scripts.stage_contact_hole_repair._finalize_ground_plane_outputs",
+            "scripts.repair.pipeline._finalize_ground_plane_outputs",
             return_value=(
                 vertices,
                 faces,
