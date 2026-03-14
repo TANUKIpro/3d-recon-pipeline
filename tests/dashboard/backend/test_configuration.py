@@ -121,7 +121,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(cfg.gs2mesh_gs_iterations, 30000)
-        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR")
+        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
         self.assertTrue(cfg.gs2mesh_use_masks)

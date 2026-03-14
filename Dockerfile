@@ -61,12 +61,16 @@ RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.
     && pip install --no-cache-dir --no-build-isolation \
         /opt/gaussian-splatting/submodules/fused-ssim 2>/dev/null || true
 
-# --- Layer 5b: gs2mesh ---
+# --- Layer 5b: gs2mesh + DLNR stereo weights ---
 RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
     && mkdir -p /opt/gs2mesh/third_party \
     && ln -s /opt/gaussian-splatting /opt/gs2mesh/third_party/gaussian-splatting \
     && cd /opt/gs2mesh \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null; true
+
+RUN mkdir -p /opt/gs2mesh/third_party/DLNR/pretrained \
+    && wget -q -O /opt/gs2mesh/third_party/DLNR/pretrained/DLNR_Middlebury.pth \
+        https://github.com/David-Zhao-1997/High-frequency-Stereo-Matching-Network/releases/download/v1.0.0/DLNR_Middlebury.pth
 
 # --- Layer 6: Application code ---
 COPY scripts/ /app/scripts/

@@ -65,7 +65,7 @@ def _stage_gs2mesh_reconstruct(
     mask_dir: str | None,
     output_dir: str,
     gs_iterations: int = 30000,
-    stereo_model: str = "DLNR",
+    stereo_model: str = "DLNR_Middlebury",
     tsdf_voxel_size: float = 0.005,
     tsdf_depth_trunc: float = 0.04,
     use_masks: bool = True,

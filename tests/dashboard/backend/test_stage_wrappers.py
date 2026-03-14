@@ -127,7 +127,7 @@ class TestStageGs2meshVRAMCleanup(_WrapperTestBase):
             "/data/output/masks",
             "/data/output",
             gs_iterations=30000,
-            stereo_model="DLNR",
+            stereo_model="DLNR_Middlebury",
             tsdf_voxel_size=0.005,
             tsdf_depth_trunc=0.04,
             use_masks=True,
