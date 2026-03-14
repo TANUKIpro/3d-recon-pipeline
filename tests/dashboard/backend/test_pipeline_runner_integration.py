@@ -790,5 +790,54 @@ class TestRunPipelineGroundSkip(_PipelineIntegrationBase):
         self.assertTrue(len(skipped) >= 1)
 
 
+class TestRunPipelineGroundPlaneAutoAccept(_PipelineIntegrationBase):
+    """6.8.12 — Ground plane phase runs even with auto_accept=True."""
+
+    auto_accept = True
+    ground_plane_enabled = True
+    with_ground_masks = True
+
+    async def test_ground_phase_runs_with_auto_accept(self) -> None:
+        async def _signal_events(delay=0.02):
+            # SAM2 object confirm
+            await asyncio.sleep(delay)
+            self.session.sam2_confirm_event.set()
+            # Ground plane confirm
+            await asyncio.sleep(delay)
+            self.session.sam2_confirm_event.set()
+            # Approve masks
+            await asyncio.sleep(delay)
+            self.session.sam2_approved = True
+            self.session.sam2_approve_event.set()
+
+        async def _auto_confirm_noop(session, from_stage, to_stage, message):
+            pass
+
+        with ExitStack() as stack:
+            mocks = self._enter_all_patches(stack)
+            stack.enter_context(
+                patch(f"{_MODULE}._wait_for_next_stage_confirmation", _auto_confirm_noop),
+            )
+            task = asyncio.create_task(_signal_events())
+            try:
+                await run_pipeline(self.session, self.sam2)
+            finally:
+                if not task.done():
+                    task.cancel()
+
+        bc = mocks["broadcast"]
+
+        # Ground phase broadcast must have been sent
+        ground_phase = self._broadcasts_of_type(bc, "sam2_ground_phase")
+        self.assertTrue(len(ground_phase) >= 1)
+
+        # SAM2 service mode sequence: ground → object
+        self.assertIn("ground", self.sam2.modes)
+        self.assertIn("object", self.sam2.modes)
+        ground_idx = self.sam2.modes.index("ground")
+        object_idx = self.sam2.modes.index("object")
+        self.assertLess(ground_idx, object_idx)
+
+
 if __name__ == "__main__":
     unittest.main()

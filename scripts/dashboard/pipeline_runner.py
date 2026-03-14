@@ -272,7 +272,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     _check_cancelled(session)
 
                     # Ground plane segmentation phase
-                    if cfg.ground_plane_enabled and not cfg.auto_accept:
+                    if cfg.ground_plane_enabled:
                         # Switch service to ground mode
                         sam2_service.set_mode("ground")
                         session.sam2_confirm_event.clear()
@@ -306,9 +306,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
                         # Switch back to object mode
                         sam2_service.set_mode("object")
-
-                    elif cfg.ground_plane_enabled and cfg.auto_accept:
-                        print("Ground plane segmentation skipped (auto-accept mode requires interactive clicks)")
 
                     # Propagate masks
                     await _broadcast_stage_progress(
