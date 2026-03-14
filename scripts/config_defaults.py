@@ -182,6 +182,8 @@ MESHWRAP_SMOOTH_ITERATIONS = 2
 MESHWRAP_QUALITY_THRESHOLD = 0.02
 MESHWRAP_ALPHA_RATIO = 0.02
 MESHWRAP_OFFSET_RATIO = 0.3
+MESHWRAP_METHOD = "alpha_wrap"
+MESHWRAP_METHODS: set[str] = {"poisson_iterative", "alpha_wrap"}
 
 # --- Stage 7: MeshRepair ---------------------------------
 REPAIR_ENABLED = True
@@ -205,6 +207,9 @@ TEXTURE_BLEND_HARD_RATIO = 2.0
 # --- Mesh Method ------------------------------------------
 MESH_METHODS: set[str] = {"poisson", "diffcd"}
 MESH_DEFAULT_METHOD = "poisson"
+
+# --- Infrastructure (user-facing) -------------------------
+OUTPUT_DIR_DEFAULT = "/data/output"
 
 
 # ============================================================
@@ -267,8 +272,8 @@ _DIFFCD_OOM_MARKERS: tuple[str, ...] = (
 
 # --- Stage 6: MeshWrap -----------------------------------
 _MESHWRAP_ENABLED = True
-_MESHWRAP_METHOD = "alpha_wrap"
-_MESHWRAP_METHODS: set[str] = {"poisson_iterative", "alpha_wrap"}
+_MESHWRAP_METHOD = MESHWRAP_METHOD  # backward-compat alias
+_MESHWRAP_METHODS = MESHWRAP_METHODS  # backward-compat alias
 _MESHWRAP_NORMAL_MAX_NN = 32
 _MESHWRAP_NORMAL_ORIENT_K = 24
 _MESHWRAP_POISSON_LINEAR_FIT = False
@@ -302,4 +307,4 @@ _VRAM_GATE_MIN_FREE_MB = 12_000
 
 # --- Infrastructure --------------------------------------
 _LOG_QUEUE_MAXSIZE = 4096
-_OUTPUT_DIR_DEFAULT = "/data/output"
+_OUTPUT_DIR_DEFAULT = OUTPUT_DIR_DEFAULT  # backward-compat alias

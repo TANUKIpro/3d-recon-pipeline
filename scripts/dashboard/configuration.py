@@ -43,8 +43,8 @@ from scripts.config_defaults import (
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
     TEXTURE_VIEW_ASSIGN_MODES,
-    _MESHWRAP_METHOD,
-    _MESHWRAP_METHODS,
+    MESHWRAP_METHOD,
+    MESHWRAP_METHODS,
 )
 from scripts.config_defaults import DENOISE_ALGORITHMS  # re-export
 from scripts.dashboard.state import PipelineConfig
@@ -275,8 +275,8 @@ def build_pipeline_config(
         ),
         meshwrap_method=parse_choice(
             raw.get("meshwrap_method"),
-            _MESHWRAP_METHODS,
-            _MESHWRAP_METHOD,
+            MESHWRAP_METHODS,
+            MESHWRAP_METHOD,
         ),
         meshwrap_alpha_ratio=max(
             0.001,
