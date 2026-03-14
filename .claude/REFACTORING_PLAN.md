@@ -314,18 +314,53 @@
 
 ---
 
-## Phase 9: HTML の構造改善
+## Phase 9: HTML インラインスタイルの排除 ✅
 
-**目標**: `index.html`（756 行）のインラインスクリプト・スタイルを排除
+**目標**: `index.html` に残るインラインスタイルを外部 CSS + クラスベースのトグルに移行
 
-### 9-1. HTML のクリーンアップ
-> **事前確認**: `index.html` を読み、インラインの `<script>` や `<style>` を確認
+コミット: `6c71f3f refactor: replace inline styles with .hidden utility class (Phase 9)`
 
-- [ ] インライン JavaScript があれば外部ファイルに移動
-- [ ] インライン CSS があれば外部ファイルに移動
-- [ ] セマンティック HTML 要素の利用状況を確認（過度な `<div>` ネストの解消）
-- [ ] ブラウザで視覚的確認
-- [ ] フロントエンドテスト実行して確認
+### 9-1. CSS ユーティリティクラスの追加
+- [x] `base.css` — `.hidden { display: none !important; }` ユーティリティ追加（ID セレクタの詳細度に勝つため `!important`）
+- [x] `config.css` — `.config-advanced > summary > .btn-small { margin-left: auto; }` ルール追加
+- [x] `pipeline.css` — `.stage-panel-empty.hidden { display: none; }` 削除（汎用 `.hidden` でカバー）
+- [x] `preview.css` — `.mesh-phase-status.hidden { display: none; }` 削除（同上）
+
+### 9-2. index.html のインラインスタイル除去（13 箇所）
+- [x] 11 要素: `style="display:none"` → `class="hidden"` に移行（既存 class がある場合はマージ）
+  - `#overview-empty`, `#frame-count-header`, `#pi3x-toolbar`, `#sam2-mode-toggle`,
+    `#sam2-skip-ground`, `#sam2-verification`, `#mesh-post-toolbar`, `#mesh-repair-toolbar`,
+    `#cfg-pi3x-frame-target-marker`, `#cfg-diffcd-controls`, `#cfg-meshwrap-poisson-group`
+- [x] 2 要素: `style="margin-left:auto"` 削除（CSS ルールで代替）
+  - `#btn-classical-reset`, `#btn-meshwrap-reset`
+- [x] `<script type="importmap">` は対象外（Web 標準仕様でインライン必須）
+- [x] セマンティック HTML 確認済み: `<header>/<nav>/<main>/<section>/<aside>` 使用中、問題なし
+
+### 9-3. JS の `style.display` を `classList` に変換（8 ファイル）
+- [x] `overview.js` — `style.display = ''/'none'` → `classList.remove/add('hidden')`
+- [x] `preview.js` — toolbar/header の show/hide を classList に統一（7 箇所）
+- [x] `sam2-canvas.js` — `classList.toggle('hidden', !visible)` パターンに変換（2 メソッド）
+- [x] `sam2-verification.js` — show/hide を classList に変換
+- [x] `mesh-post-controller.js` — `classList.toggle` + `classList.contains` に変換
+- [x] `mesh-repair-controller.js` — 同上
+- [x] `config/frame-budget.js` — marker の show/hide を classList に変換
+- [x] `config-panel.js` — `setMeshMethod()` と `_updateMeshWrapMethodVisibility()` を classList.toggle に変換
+
+### 9-4. テストの更新（7 ファイル）
+- [x] `dom-factory.js` — 7 テンプレートで `style="display:none"` → `class="hidden"`
+- [x] `mesh-post-controller.test.js` — 1 DOM + 6 アサーション
+- [x] `mesh-repair-controller.test.js` — 9 アサーション
+- [x] `overview.test.js` — 1 アサーション
+- [x] `config-panel.test.js` — 6 アサーション
+- [x] `sam2-verification.test.js` — 2 アサーション
+- [x] `preview.test.js` — 2 インライン DOM
+- [x] `app.test.js` — 1 アサーション
+- [x] 対象外維持: `sam2-canvas`/`sam2-placeholder` の `style.display` トグル（HTML にインラインスタイルなし）
+
+### 結果
+- [x] `index.html` の `style=` 属性: **ゼロ**（importmap 除く）
+- [x] 全554フロントエンドテストパス確認
+- [x] 21 ファイル変更、79 insertions / 79 deletions
 
 ---
 
@@ -379,4 +414,5 @@
 | **低** | Phase 6 (遅延 import 統一) | ✅ 完了 |
 | **低** | Phase 7 (CSS 分割) | ✅ 完了 |
 | **低** | Phase 8 (テスト構造改善) | ✅ 完了 |
-| **低** | Phase 9-10 | 未着手 |
+| **低** | Phase 9 (HTML インラインスタイル排除) | ✅ 完了 |
+| **低** | Phase 10 | 未着手 |
