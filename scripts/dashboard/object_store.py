@@ -26,7 +26,10 @@ PREVIEW_FILE_EXTENSIONS = {".ply", ".obj", ".mtl", ".png", ".jpg", ".json"}
 STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     1: {"dirs": ("frames",), "files": ()},
     2: {"dirs": ("colmap_sparse", "colmap_workspace"), "files": ("camera_poses.json", "colmap_sparse_points.ply")},
-    3: {"dirs": ("masks", "masks_ground"), "files": ("ground_plane.json",)},
+    3: {
+        "dirs": ("masks", "masks_ground", "masks_object_raw"),
+        "files": ("ground_plane.json",),
+    },
     4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }

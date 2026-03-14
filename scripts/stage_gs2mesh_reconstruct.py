@@ -84,8 +84,6 @@ def run_gs2mesh(
 
     Returns path to object_mesh.ply.
     """
-    del mask_dir
-
     out = Path(output_dir)
     gs2mesh_workdir = out / "gs2mesh_workspace"
     debug_dir = gs2mesh_workdir / "debug"
@@ -238,6 +236,10 @@ def run_gs2mesh(
 
     if cancel_cb:
         cancel_cb()
+
+    if use_masks and mask_dir is not None:
+        _report(79.0, "Materializing SAM2 masks for TSDF")
+        _materialize_tsdf_masks(gs2mesh_output, mask_dir)
 
     # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
     _report(80.0, "GPU TSDF fusion")
@@ -1080,6 +1082,120 @@ def _run_gs2mesh_stereo_with_retries(
 def _cleanup_gs2mesh_stereo_outputs(gs2mesh_output: Path) -> None:
     if gs2mesh_output.exists():
         shutil.rmtree(gs2mesh_output)
+
+
+def _iter_camera_string_fields(value: object) -> list[str]:
+    """Collect nested string fields from a camera-data entry."""
+    results: list[str] = []
+    if isinstance(value, str):
+        results.append(value)
+    elif isinstance(value, dict):
+        for nested in value.values():
+            results.extend(_iter_camera_string_fields(nested))
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            results.extend(_iter_camera_string_fields(nested))
+    return results
+
+
+def _resolve_camera_frame_index(camera_entry: dict[str, object]) -> int:
+    """Resolve the original 5-digit frame index from gs2mesh camera metadata."""
+    priority_keys = (
+        "image_name",
+        "image_path",
+        "file_name",
+        "filename",
+        "path",
+        "name",
+    )
+    candidate_strings: list[str] = []
+    for key in priority_keys:
+        value = camera_entry.get(key)
+        if isinstance(value, str):
+            candidate_strings.append(value)
+    for value in camera_entry.values():
+        candidate_strings.extend(_iter_camera_string_fields(value))
+
+    candidates: list[int] = []
+    seen: set[int] = set()
+    for text in candidate_strings:
+        path = Path(text)
+        search_space = [path.stem, path.name, text]
+        for candidate_text in search_space:
+            matches = re.findall(r"(?<!\d)(\d{5})(?!\d)", candidate_text)
+            for match in matches:
+                value = int(match)
+                if value not in seen:
+                    candidates.append(value)
+                    seen.add(value)
+        if candidates:
+            break
+
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise RuntimeError(
+            "Could not resolve frame index from gs2mesh camera_data entry"
+        )
+    raise RuntimeError(
+        "Ambiguous frame index in gs2mesh camera_data entry: "
+        + ", ".join(str(value) for value in candidates)
+    )
+
+
+def _materialize_tsdf_masks(gs2mesh_output: Path, mask_dir: str | Path) -> None:
+    """Convert canonical SAM2 masks into per-view ``left_mask.npy`` files."""
+    import cv2
+    import numpy as np
+
+    mask_root = Path(mask_dir)
+    camera_data_path = gs2mesh_output / "camera_data.json"
+    if not camera_data_path.is_file():
+        raise RuntimeError(
+            "Missing camera_data.json while preparing TSDF masks"
+        )
+
+    with camera_data_path.open("r", encoding="utf-8") as f:
+        camera_data = json.load(f)
+    if not isinstance(camera_data, list):
+        raise RuntimeError("camera_data.json must contain a list of camera entries")
+
+    for cam_idx, camera_record in enumerate(camera_data):
+        if not isinstance(camera_record, dict):
+            raise RuntimeError(
+                f"camera_data.json entry {cam_idx} is not an object"
+            )
+        left_entry = camera_record.get("left")
+        if not isinstance(left_entry, dict):
+            raise RuntimeError(
+                f"camera_data.json entry {cam_idx} is missing a 'left' object"
+            )
+        frame_idx = _resolve_camera_frame_index(left_entry)
+        mask_path = mask_root / f"{frame_idx:05d}.png"
+        if not mask_path.is_file():
+            raise RuntimeError(
+                f"Missing canonical SAM2 mask for frame {frame_idx:05d}: {mask_path}"
+            )
+
+        view_dir = gs2mesh_output / f"{cam_idx:03d}"
+        left_image_path = view_dir / "left.png"
+        if not left_image_path.is_file():
+            raise RuntimeError(f"Missing rendered left image: {left_image_path}")
+
+        left_image = cv2.imread(str(left_image_path), cv2.IMREAD_COLOR)
+        if left_image is None:
+            raise RuntimeError(f"Could not read rendered left image: {left_image_path}")
+        mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        if mask_img is None:
+            raise RuntimeError(f"Could not read canonical SAM2 mask: {mask_path}")
+        if mask_img.shape[:2] != left_image.shape[:2]:
+            mask_img = cv2.resize(
+                mask_img,
+                (left_image.shape[1], left_image.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        np.save(view_dir / "left_mask.npy", mask_img > 0)
 
 
 def _validate_gs2mesh_stereo_outputs(

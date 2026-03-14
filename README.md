@@ -61,9 +61,11 @@ docker compose up
 3. パラメータを必要に応じて調整 (Advanced Settings で詳細設定)
 4. **Start Pipeline** をクリック
 5. Stage 3 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
-6. **Confirm & Propagate** で全フレームにマスク伝播 → 残りのステージは自動進行
-7. ログ・進捗・3Dプレビューをリアルタイムで確認
-8. キャンセル/停止後の再開は、ステージバーで再開したいタスクを選択して **Start Pipeline** をクリック
+6. **Confirm Object** で対象物体を確定し、必要なら ground/contact surface を追加指定
+7. **Confirm Ground & Propagate** または ground を skip して全フレームへ反映
+8. 残りのステージは自動進行
+9. ログ・進捗・3Dプレビューをリアルタイムで確認
+10. キャンセル/停止後の再開は、ステージバーで再開したいタスクを選択して **Start Pipeline** をクリック
 
 ## 使い方
 
@@ -120,7 +122,8 @@ docker compose run --rm --service-ports \
 | `object_denoised.ply` | デノイズ済み点群 |
 | `object_mesh.ply` | Stage 5 出力メッシュ |
 | `camera_poses.json` | カメラ外部パラメータ |
-| `frames/` / `masks/` | 抽出フレーム / SAM2 マスク |
+| `frames/` / `masks/` | 抽出フレーム / 後段が使う canonical SAM2 final mask |
+| `masks_object_raw/` / `masks_ground/` | raw object mask / raw ground subtraction mask |
 
 全中間ファイルの詳細は各ステージのドキュメントを参照。
 

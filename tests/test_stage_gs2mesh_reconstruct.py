@@ -1,19 +1,26 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 from scripts.stage_gs2mesh_reconstruct import (
+    _Gs2meshRuntimeStack,
     _build_gs_train_args,
     _build_pythonpath,
     _build_stereo_runtime_stacks,
     _classify_gs2mesh_failure,
+    _materialize_tsdf_masks,
     _patch_gaussian_renderer_init,
     _normalize_runtime_profile,
     _patch_gs2mesh_renderer_utils,
+    _resolve_camera_frame_index,
     _validate_gs2mesh_stereo_outputs,
+    run_gs2mesh,
 )
 
 
@@ -432,6 +439,154 @@ class TestGs2meshRuntimeHelpers(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "Missing stereo outputs"):
                 _validate_gs2mesh_stereo_outputs(root, "DLNR_Middlebury")
+
+
+class TestTsdfMaskMaterialization(unittest.TestCase):
+    def test_resolve_camera_frame_index_from_image_name(self) -> None:
+        frame_idx = _resolve_camera_frame_index(
+            {"image_name": "frames/00017.jpg"}
+        )
+
+        self.assertEqual(frame_idx, 17)
+
+    def test_resolve_camera_frame_index_raises_when_missing(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "Could not resolve frame index"):
+            _resolve_camera_frame_index({"left_png": "rendered_left.png"})
+
+    def test_materialize_tsdf_masks_writes_resized_left_mask(self) -> None:
+        from PIL import Image
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            masks_dir = root / "masks"
+            masks_dir.mkdir(parents=True)
+            gs2mesh_output = root / "gs2mesh"
+            view_dir = gs2mesh_output / "000"
+            view_dir.mkdir(parents=True)
+
+            Image.fromarray(
+                np.array([[0, 255], [255, 255]], dtype=np.uint8)
+            ).save(masks_dir / "00003.png")
+            Image.fromarray(
+                np.zeros((4, 6, 3), dtype=np.uint8)
+            ).save(view_dir / "left.png")
+            (gs2mesh_output / "camera_data.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "left": {
+                                "image_name": "frames/00003.jpg",
+                            }
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            _materialize_tsdf_masks(gs2mesh_output, masks_dir)
+
+            saved = np.load(view_dir / "left_mask.npy")
+            self.assertEqual(saved.shape, (4, 6))
+            self.assertTrue(saved.dtype == np.bool_)
+            self.assertTrue(saved.any())
+
+    def test_materialize_tsdf_masks_requires_matching_mask_file(self) -> None:
+        from PIL import Image
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            masks_dir = root / "masks"
+            masks_dir.mkdir(parents=True)
+            gs2mesh_output = root / "gs2mesh"
+            view_dir = gs2mesh_output / "000"
+            view_dir.mkdir(parents=True)
+            Image.fromarray(np.zeros((2, 2, 3), dtype=np.uint8)).save(
+                view_dir / "left.png"
+            )
+            (gs2mesh_output / "camera_data.json").write_text(
+                json.dumps([{"left": {"image_name": "frames/00009.jpg"}}]),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Missing canonical SAM2 mask"):
+                _materialize_tsdf_masks(gs2mesh_output, masks_dir)
+
+
+class TestRunGs2meshMaskIntegration(unittest.TestCase):
+    @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
+    @patch("scripts.gpu_tsdf.gpu_tsdf_reconstruct", return_value="/tmp/gpu_mesh.ply")
+    @patch("scripts.stage_gs2mesh_reconstruct._materialize_tsdf_masks")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_gs2mesh_stereo_with_retries")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gaussian_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs2mesh_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_subprocess")
+    @patch("scripts.stage_gs2mesh_reconstruct._build_gs_train_args")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs_model_output_link")
+    @patch("scripts.stage_gs2mesh_reconstruct._setup_gs2mesh_dirs")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_sparse_0")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_colmap_cmd")
+    @patch("scripts.stage_gs2mesh_reconstruct._find_recon_dir")
+    @patch("scripts.stage_gs2mesh_reconstruct._resolve_training_runtime_stack")
+    def test_run_gs2mesh_materializes_masks_before_tsdf(
+        self,
+        mock_resolve_stack,
+        mock_find_recon_dir,
+        mock_run_colmap_cmd,
+        mock_ensure_sparse_0,
+        mock_setup_dirs,
+        mock_output_link,
+        mock_build_train_args,
+        mock_run_subprocess,
+        mock_renderer_compat,
+        mock_gaussian_compat,
+        mock_run_stereo,
+        mock_materialize_masks,
+        mock_gpu_tsdf,
+        mock_copy2,
+    ) -> None:
+        del mock_run_colmap_cmd, mock_ensure_sparse_0, mock_setup_dirs
+        del mock_output_link, mock_run_subprocess, mock_copy2
+        del mock_renderer_compat, mock_gaussian_compat
+
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            frames_dir = Path(tmp) / "frames"
+            colmap_sparse = Path(tmp) / "colmap_sparse"
+            frames_dir.mkdir(parents=True)
+            colmap_sparse.mkdir(parents=True)
+            mock_find_recon_dir.return_value = colmap_sparse
+            mock_resolve_stack.return_value = _Gs2meshRuntimeStack(
+                name="accel",
+                python_executable="python3",
+                gaussian_splatting_root=Path("/tmp/gs"),
+                env_overrides={},
+            )
+            mock_build_train_args.return_value = (
+                ["python3", "train.py"],
+                "auto",
+                "default",
+                None,
+            )
+
+            call_order: list[str] = []
+            mock_materialize_masks.side_effect = (
+                lambda *args, **kwargs: call_order.append("mask")
+            )
+            mock_gpu_tsdf.side_effect = (
+                lambda *args, **kwargs: call_order.append("tsdf") or "/tmp/gpu_mesh.ply"
+            )
+
+            run_gs2mesh(
+                str(frames_dir),
+                str(colmap_sparse),
+                str(Path(tmp) / "masks"),
+                str(out),
+                use_masks=True,
+            )
+
+            self.assertEqual(call_order, ["mask", "tsdf"])
+            mock_run_stereo.assert_called_once()
+            mock_materialize_masks.assert_called_once()
 
 
 if __name__ == "__main__":

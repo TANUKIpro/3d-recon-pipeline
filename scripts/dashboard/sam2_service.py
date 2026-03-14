@@ -127,7 +127,7 @@ class SAM2Service:
 
     def clear_clicks(self) -> bytes:
         """Clear clicks for the active mode only and return updated overlay PNG."""
-        from scripts.stage_sam2_ui import _run_single_frame_inference_obj
+        from scripts.stage_sam2_ui import _restore_interactive_masks
 
         with self._lock:
             s = self._session
@@ -143,20 +143,9 @@ class SAM2Service:
                 s.click_labels.clear()
                 self._current_mask = None
 
-            # Reset predictor state and re-add remaining points
-            s.predictor.reset_state(s.inference_state)
-            if s.click_points:
-                self._current_mask = _run_single_frame_inference_obj(
-                    s, obj_id=1,
-                    click_points=s.click_points,
-                    click_labels=s.click_labels,
-                )
-            if s.ground_click_points:
-                self._current_ground_mask = _run_single_frame_inference_obj(
-                    s, obj_id=2,
-                    click_points=s.ground_click_points,
-                    click_labels=s.ground_click_labels,
-                )
+            self._current_mask, self._current_ground_mask = (
+                _restore_interactive_masks(s)
+            )
 
             return self._render_overlay_png()
 
@@ -165,10 +154,7 @@ class SAM2Service:
 
         Returns (mask_dir, ground_mask_dir or None).
         """
-        import cv2
-        import numpy as np
-        import torch
-        from scripts.stage_sam2_ui import _run_single_frame_inference_obj
+        from scripts.stage_sam2_ui import _propagate_masks
 
         with self._lock:
             s = self._session
@@ -176,64 +162,13 @@ class SAM2Service:
                 raise RuntimeError("SAM2 not initialized")
             if not s.click_points:
                 raise ValueError("No click points to propagate")
-
-            has_ground = bool(s.ground_click_points)
-
-            # Clear stale masks from both directories
-            for stale_path in s.mask_dir.glob("*.png"):
-                try:
-                    stale_path.unlink()
-                except OSError:
-                    pass
-            # Always clean ground masks (prevent stale files on redo skip)
-            for stale_path in s.ground_mask_dir.glob("*.png"):
-                try:
-                    stale_path.unlink()
-                except OSError:
-                    pass
-
-            # Ensure frame 0 masks are on disk
-            if self._current_mask is None:
-                self._current_mask = _run_single_frame_inference_obj(
-                    s, obj_id=1,
-                    click_points=s.click_points,
-                    click_labels=s.click_labels,
-                )
-            if self._current_mask is not None:
-                mask0_path = s.mask_dir / "00000.png"
-                cv2.imwrite(str(mask0_path), (self._current_mask * 255).astype(np.uint8))
-
-            if has_ground:
-                if self._current_ground_mask is None:
-                    self._current_ground_mask = _run_single_frame_inference_obj(
-                        s, obj_id=2,
-                        click_points=s.ground_click_points,
-                        click_labels=s.ground_click_labels,
-                    )
-                if self._current_ground_mask is not None:
-                    gmask0_path = s.ground_mask_dir / "00000.png"
-                    cv2.imwrite(str(gmask0_path), (self._current_ground_mask * 255).astype(np.uint8))
-
-            # Propagate all objects in video
-            with torch.inference_mode():
-                num_frames = s.inference_state["num_frames"]
-                for frame_idx, obj_ids, masks_tensor in s.predictor.propagate_in_video(
-                    s.inference_state
-                ):
-                    # masks_tensor shape: (num_objects, 1, H, W)
-                    for i, oid in enumerate(obj_ids):
-                        mask = (masks_tensor[i] > 0).cpu().numpy().squeeze()
-                        if oid == 1:
-                            mask_path = s.mask_dir / f"{frame_idx:05d}.png"
-                            cv2.imwrite(str(mask_path), (mask * 255).astype(np.uint8))
-                        elif oid == 2 and has_ground:
-                            mask_path = s.ground_mask_dir / f"{frame_idx:05d}.png"
-                            cv2.imwrite(str(mask_path), (mask * 255).astype(np.uint8))
-                    if progress_callback:
-                        progress_callback(frame_idx, num_frames)
-
-            ground_dir = str(s.ground_mask_dir) if has_ground else None
-            return str(s.mask_dir), ground_dir
+            mask_dir, ground_dir = _propagate_masks(
+                s,
+                current_object_mask=self._current_mask,
+                current_ground_mask=self._current_ground_mask,
+                progress_callback=progress_callback,
+            )
+            return str(mask_dir), None if ground_dir is None else str(ground_dir)
 
     def release(self) -> None:
         """Release model and free VRAM."""

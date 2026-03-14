@@ -10,25 +10,25 @@
 
 ## 概要
 
-ユーザーのクリック操作で対象物体を指定し、SAM2 で全フレームへマスクを伝播する。  
-完了後に Stage 2 の `pi3x_cache.npz` へマスクを適用し、対象物体点群 `object.ply` を生成する。
+ユーザーのクリック操作で対象物体と ground/contact surface を指定し、SAM2 で全フレームへマスクを伝播する。
+保存時に `object_raw AND NOT ground_raw` で canonical final mask を合成し、後段ステージへ渡す。
 
 ## 入出力関係
 
 前段入力:
 
 - `<output_dir>/frames/*.jpg`
-- `<output_dir>/pi3x_cache.npz` (Stage 2 生成)
 
 主出力:
 
-- `<output_dir>/masks/*.png`
-- `<output_dir>/object.ply` (SAM2マスク適用後の点群)
+- `<output_dir>/masks/*.png` (canonical final mask)
+- `<output_dir>/masks_object_raw/*.png`
+- `<output_dir>/masks_ground/*.png` (ground 指定時のみ)
 
 後段利用:
 
-- Stage 4 (`denoise_point_cloud`) が `object.ply` を入力
-- Stage 8 (`texture_bake`) が `masks/` を利用
+- Stage 4 (`gs2mesh_reconstruct`) が `masks/` を TSDF 用 `left_mask.npy` へ変換
+- Stage 5 (`texture_bake`) が `masks/` を利用
 
 ## 詳細フロー
 
@@ -39,15 +39,16 @@
    - 左クリック=positive (`label=1`)
    - 右クリック=negative (`label=0`)
 3. 各クリックごとに frame0 で即時再推論し、オーバーレイ表示更新。
-4. `Confirm & Propagate` で全フレームへマスク伝播して `masks/*.png` 保存。
-5. Dashboard では検証UIで `Approve/Redo` 可能。
-6. 承認後、`apply_sam2_masks` を実行して `object.ply` を生成。
+4. Object 確定後、必要なら ground/contact surface を別フェーズで指定する。
+5. 伝播時に raw object / raw ground を保存し、`masks/` に final mask を保存する。
+6. Dashboard では検証UIで `Approve/Redo` 可能。
 
 ## アルゴリズム要点
 
 - インタラクティブ点ベースセグメンテーション (SAM2 video predictor)
 - クリック点は正規化座標で管理し、実画像座標に変換して推論
-- 伝播後に Pi3X の conf+edge フィルタ結果へ論理積を取る
+- final mask は `object_raw AND NOT ground_raw`
+- 後段は常に `masks/` を canonical source of truth として扱う
 
 ## パラメータ
 
@@ -67,7 +68,7 @@
 
 - `No JPEG frames ...`: Stage 1/2 の成果物不足
 - `No click points to propagate`: クリック未指定で確定した場合
-- マスク欠損: `apply_sam2_masks()` は欠損マスクをゼロ扱いで継続
+- `camera_data.json` と `masks/` の frame index が対応しない: Stage 4 の TSDF マスク生成が停止する
 
 ## 参考文献
 

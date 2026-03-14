@@ -80,6 +80,13 @@ class _SAM2PatchBase(unittest.TestCase):
         s.predictor = MagicMock(name="predictor")
         s.inference_state = {"num_frames": 2}
         # Use a MagicMock for mask_dir so .glob() is mockable, but str() works.
+        object_mask_raw_dir = MagicMock(name="object_mask_raw_dir")
+        object_mask_raw_dir.__str__ = lambda self: "/tmp/test_object_raw_masks"
+        object_mask_raw_dir.__truediv__ = lambda self, other: Path(
+            f"/tmp/test_object_raw_masks/{other}"
+        )
+        object_mask_raw_dir.glob.return_value = []
+        s.object_mask_raw_dir = object_mask_raw_dir
         mask_dir = MagicMock(name="mask_dir")
         mask_dir.__str__ = lambda self: "/tmp/test_masks"
         mask_dir.__truediv__ = lambda self, other: Path(f"/tmp/test_masks/{other}")
@@ -290,6 +297,7 @@ class TestSAM2ServiceClearClicks(_SAM2PatchBase):
         super().setUp()
         self._setup_render_mocks()
         self.service = self.SAM2Service()
+        self.mock_sam2_ui._restore_interactive_masks.return_value = (None, None)
 
     def test_clear_clicks_uninitialized_raises(self) -> None:
         """clear_clicks raises RuntimeError when session is None."""
@@ -308,7 +316,7 @@ class TestSAM2ServiceClearClicks(_SAM2PatchBase):
         self.assertEqual(fake.click_points, [])
         self.assertEqual(fake.click_labels, [])
         self.assertIsNone(self.service._current_mask)
-        fake.predictor.reset_state.assert_called_once_with(fake.inference_state)
+        self.mock_sam2_ui._restore_interactive_masks.assert_called_once_with(fake)
         self.assertIsInstance(result, bytes)
 
     def test_clear_ground_preserves_object_clicks(self) -> None:
@@ -320,7 +328,11 @@ class TestSAM2ServiceClearClicks(_SAM2PatchBase):
         fake.ground_click_labels = [1, 1]
         self.service._session = fake
         self.service._segmentation_mode = "ground"
-        self.mock_sam2_ui._run_single_frame_inference_obj.return_value = MagicMock()
+        rebuilt_object = MagicMock(name="rebuilt_object_mask")
+        self.mock_sam2_ui._restore_interactive_masks.return_value = (
+            rebuilt_object,
+            None,
+        )
 
         result = self.service.clear_clicks()
 
@@ -331,12 +343,10 @@ class TestSAM2ServiceClearClicks(_SAM2PatchBase):
         # Object clicks preserved and re-added after reset
         self.assertEqual(fake.click_points, [(0.1, 0.2)])
         self.assertEqual(fake.click_labels, [1])
-        fake.predictor.reset_state.assert_called_once_with(fake.inference_state)
-        self.mock_sam2_ui._run_single_frame_inference_obj.assert_called_once_with(
-            fake,
-            obj_id=1,
-            click_points=fake.click_points,
-            click_labels=fake.click_labels,
+        self.mock_sam2_ui._restore_interactive_masks.assert_called_once_with(fake)
+        self.assertIs(
+            self.service._current_mask,
+            rebuilt_object,
         )
         self.assertIsInstance(result, bytes)
 
@@ -374,48 +384,19 @@ class TestSAM2ServicePropagateAndSave(_SAM2PatchBase):
         fake.click_labels = [1]
         fake.inference_state = {"num_frames": 2}
         self.service._session = fake
-
-        # _current_mask is not None: skip re-inference
-        mask_array = MagicMock()
-        mask_array.__mul__ = MagicMock(return_value=MagicMock())
-        self.service._current_mask = mask_array
-
-        # Set up propagate_in_video to yield frames (obj_id=1 only)
-        mask_tensor = MagicMock()
-        mask_tensor.__getitem__ = MagicMock(
-            return_value=MagicMock(
-                __gt__=MagicMock(
-                    return_value=MagicMock(
-                        cpu=MagicMock(
-                            return_value=MagicMock(
-                                numpy=MagicMock(
-                                    return_value=MagicMock(
-                                        squeeze=MagicMock(return_value=MagicMock())
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
-        fake.predictor.propagate_in_video.return_value = [
-            (0, [1], mask_tensor),
-            (1, [1], mask_tensor),
-        ]
-
-        # torch.inference_mode() must work as a context manager
-        self.mock_torch.inference_mode.return_value = MagicMock(
-            __enter__=MagicMock(return_value=None),
-            __exit__=MagicMock(return_value=False),
-        )
+        self.mock_sam2_ui._propagate_masks.return_value = (fake.mask_dir, None)
 
         result = self.service.propagate_and_save()
 
         self.assertIsInstance(result, tuple)
         self.assertEqual(result[0], str(fake.mask_dir))
         self.assertIsNone(result[1])  # no ground clicks -> ground_dir is None
-        self.assertTrue(self.mock_cv2.imwrite.called)
+        self.mock_sam2_ui._propagate_masks.assert_called_once_with(
+            fake,
+            current_object_mask=None,
+            current_ground_mask=None,
+            progress_callback=None,
+        )
 
 
 # ====================================================================
@@ -620,6 +601,7 @@ class TestSAM2ServiceClearResetState(_SAM2PatchBase):
         super().setUp()
         self._setup_render_mocks()
         self.service = self.SAM2Service()
+        self.mock_sam2_ui._restore_interactive_masks.return_value = (None, None)
 
     def test_clear_calls_predictor_reset_state(self) -> None:
         fake = self._make_fake_session()
@@ -629,7 +611,7 @@ class TestSAM2ServiceClearResetState(_SAM2PatchBase):
 
         self.service.clear_clicks()
 
-        fake.predictor.reset_state.assert_called_once_with(fake.inference_state)
+        self.mock_sam2_ui._restore_interactive_masks.assert_called_once_with(fake)
 
 
 # ====================================================================
@@ -646,36 +628,7 @@ class TestSAM2ServicePropagateProgress(_SAM2PatchBase):
 
     def _setup_propagation(self, fake):
         """Common propagation setup."""
-        mask_array = MagicMock()
-        mask_array.__mul__ = MagicMock(return_value=MagicMock())
-        self.service._current_mask = mask_array
-
-        mask_tensor = MagicMock()
-        mask_tensor.__getitem__ = MagicMock(
-            return_value=MagicMock(
-                __gt__=MagicMock(
-                    return_value=MagicMock(
-                        cpu=MagicMock(
-                            return_value=MagicMock(
-                                numpy=MagicMock(
-                                    return_value=MagicMock(
-                                        squeeze=MagicMock(return_value=MagicMock())
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            )
-        )
-        fake.predictor.propagate_in_video.return_value = [
-            (0, [1], mask_tensor),
-            (1, [1], mask_tensor),
-        ]
-        self.mock_torch.inference_mode.return_value = MagicMock(
-            __enter__=MagicMock(return_value=None),
-            __exit__=MagicMock(return_value=False),
-        )
+        self.mock_sam2_ui._propagate_masks.return_value = (fake.mask_dir, None)
 
     def test_progress_callback_called(self) -> None:
         """5.5.4 — progress callback receives (frame_idx, total) args."""
@@ -688,30 +641,51 @@ class TestSAM2ServicePropagateProgress(_SAM2PatchBase):
         progress = MagicMock()
         self.service.propagate_and_save(progress_callback=progress)
 
-        self.assertTrue(progress.called)
-        # Called with (frame_idx, num_frames)
-        for call in progress.call_args_list:
-            args = call[0]
-            self.assertEqual(len(args), 2)
+        self.mock_sam2_ui._propagate_masks.assert_called_once()
+        self.assertIs(
+            self.mock_sam2_ui._propagate_masks.call_args.kwargs["progress_callback"],
+            progress,
+        )
 
     def test_stale_masks_cleared(self) -> None:
-        """5.5.6 — Existing mask files are cleaned before saving."""
+        """5.5.6 — Service delegates propagation to the shared helper."""
         fake = self._make_fake_session()
         fake.click_points = [(0.5, 0.5)]
         fake.click_labels = [1]
         self.service._session = fake
         self._setup_propagation(fake)
 
-        # Pre-create stale mock files
-        stale_mask = MagicMock()
-        stale_mask.unlink = MagicMock()
-        fake.mask_dir.glob.return_value = [stale_mask]
-        fake.ground_mask_dir.glob.return_value = []
+        self.service.propagate_and_save()
+
+        self.mock_sam2_ui._propagate_masks.assert_called_once_with(
+            fake,
+            current_object_mask=self.service._current_mask,
+            current_ground_mask=self.service._current_ground_mask,
+            progress_callback=None,
+        )
+
+    def test_ground_masks_are_subtracted_from_final_masks(self) -> None:
+        """Service keeps the shared helper contract for ground-aware saves."""
+        fake = self._make_fake_session()
+        fake.click_points = [(0.5, 0.5)]
+        fake.click_labels = [1]
+        fake.ground_click_points = [(0.4, 0.6)]
+        fake.ground_click_labels = [1]
+        fake.inference_state = {"num_frames": 2}
+        self.service._session = fake
+        self.mock_sam2_ui._propagate_masks.return_value = (
+            fake.mask_dir,
+            fake.ground_mask_dir,
+        )
 
         self.service.propagate_and_save()
 
-        # Stale masks should have been unlinked
-        stale_mask.unlink.assert_called_once()
+        self.mock_sam2_ui._propagate_masks.assert_called_once_with(
+            fake,
+            current_object_mask=None,
+            current_ground_mask=None,
+            progress_callback=None,
+        )
 
 
 # ====================================================================

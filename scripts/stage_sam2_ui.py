@@ -44,6 +44,8 @@ class SAM2Session:
         self.frames_dir = Path(frames_dir)
         self.output_dir = Path(output_dir)
         self.model_type = model_type
+        self.object_mask_raw_dir = self.output_dir / "masks_object_raw"
+        self.object_mask_raw_dir.mkdir(parents=True, exist_ok=True)
         self.mask_dir = self.output_dir / "masks"
         self.mask_dir.mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +120,165 @@ class SAM2Session:
         import gc
         gc.collect()
         log_vram("after SAM2 release")
+
+
+def _clear_saved_masks(session: SAM2Session) -> None:
+    """Remove stale raw/final mask PNGs before a fresh propagation."""
+    for mask_dir in (
+        session.mask_dir,
+        session.object_mask_raw_dir,
+        session.ground_mask_dir,
+    ):
+        for stale_path in mask_dir.glob("*.png"):
+            try:
+                stale_path.unlink()
+            except OSError:
+                pass
+
+
+def _mask_to_bool(mask: np.ndarray) -> np.ndarray:
+    """Normalize a propagated mask into a boolean array."""
+    return np.asarray(mask).astype(bool)
+
+
+def _write_mask_png(mask_path: Path, mask: np.ndarray) -> None:
+    """Persist a boolean mask as an 8-bit PNG."""
+    cv2.imwrite(str(mask_path), (_mask_to_bool(mask).astype(np.uint8) * 255))
+
+
+def _prediction_to_mask(mask_like) -> np.ndarray:
+    """Normalize a predictor output slice into a boolean mask."""
+    mask = mask_like > 0
+    if hasattr(mask, "cpu"):
+        mask = mask.cpu()
+    if hasattr(mask, "numpy"):
+        mask = mask.numpy()
+    if hasattr(mask, "squeeze"):
+        mask = mask.squeeze()
+    return _mask_to_bool(mask)
+
+
+def _compose_final_mask(
+    object_mask: np.ndarray,
+    ground_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Ground-priority composition used by all downstream stages."""
+    object_bool = _mask_to_bool(object_mask)
+    if ground_mask is None:
+        return object_bool
+    ground_bool = _mask_to_bool(ground_mask)
+    if ground_bool.shape != object_bool.shape:
+        raise ValueError(
+            "Ground mask shape does not match object mask shape: "
+            f"{ground_bool.shape} != {object_bool.shape}"
+        )
+    return object_bool & ~ground_bool
+
+
+def _restore_interactive_masks(
+    session: SAM2Session,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Reset predictor state and rebuild current interactive masks."""
+    session.predictor.reset_state(session.inference_state)
+    object_mask = None
+    ground_mask = None
+    if session.click_points:
+        object_mask = _run_single_frame_inference_obj(
+            session,
+            obj_id=1,
+            click_points=session.click_points,
+            click_labels=session.click_labels,
+        )
+    if session.ground_click_points:
+        ground_mask = _run_single_frame_inference_obj(
+            session,
+            obj_id=2,
+            click_points=session.ground_click_points,
+            click_labels=session.ground_click_labels,
+        )
+    return object_mask, ground_mask
+
+
+def _save_final_masks(
+    session: SAM2Session,
+    object_masks: dict[int, np.ndarray],
+    ground_masks: dict[int, np.ndarray] | None,
+    *,
+    num_frames: int,
+) -> None:
+    """Materialize canonical final masks in ``masks/``."""
+    for frame_idx in range(num_frames):
+        object_mask = object_masks.get(frame_idx)
+        if object_mask is None:
+            raise RuntimeError(
+                f"Missing propagated object mask for frame {frame_idx:05d}"
+            )
+        ground_mask = None if ground_masks is None else ground_masks.get(frame_idx)
+        final_mask = _compose_final_mask(object_mask, ground_mask)
+        _write_mask_png(session.mask_dir / f"{frame_idx:05d}.png", final_mask)
+
+
+def _propagate_masks(
+    session: SAM2Session,
+    *,
+    current_object_mask: np.ndarray | None = None,
+    current_ground_mask: np.ndarray | None = None,
+    progress_callback=None,
+) -> tuple[Path, Path | None]:
+    """Propagate SAM2 masks, save raw masks, and compose canonical finals."""
+    if not session.click_points:
+        raise ValueError("Add at least one click point first")
+
+    has_ground = bool(session.ground_click_points)
+    _clear_saved_masks(session)
+
+    if current_object_mask is None:
+        current_object_mask = _run_single_frame_inference_obj(
+            session,
+            obj_id=1,
+            click_points=session.click_points,
+            click_labels=session.click_labels,
+        )
+
+    object_masks: dict[int, np.ndarray] = {0: _mask_to_bool(current_object_mask)}
+    _write_mask_png(session.object_mask_raw_dir / "00000.png", object_masks[0])
+
+    ground_masks: dict[int, np.ndarray] | None = None
+    if has_ground:
+        if current_ground_mask is None:
+            current_ground_mask = _run_single_frame_inference_obj(
+                session,
+                obj_id=2,
+                click_points=session.ground_click_points,
+                click_labels=session.ground_click_labels,
+            )
+        ground_masks = {0: _mask_to_bool(current_ground_mask)}
+        _write_mask_png(session.ground_mask_dir / "00000.png", ground_masks[0])
+
+    with torch.inference_mode():
+        num_frames = int(session.inference_state["num_frames"])
+        for frame_idx, obj_ids, masks_tensor in session.predictor.propagate_in_video(
+            session.inference_state
+        ):
+            for i, oid in enumerate(obj_ids):
+                mask = _prediction_to_mask(masks_tensor[i])
+                if oid == 1:
+                    object_masks[frame_idx] = mask
+                    _write_mask_png(
+                        session.object_mask_raw_dir / f"{frame_idx:05d}.png",
+                        mask,
+                    )
+                elif oid == 2 and ground_masks is not None:
+                    ground_masks[frame_idx] = mask
+                    _write_mask_png(
+                        session.ground_mask_dir / f"{frame_idx:05d}.png",
+                        mask,
+                    )
+            if progress_callback:
+                progress_callback(frame_idx, num_frames)
+
+    _save_final_masks(session, object_masks, ground_masks, num_frames=num_frames)
+    return session.mask_dir, (session.ground_mask_dir if has_ground else None)
 
 
 def _create_mask_overlay(
@@ -195,8 +356,7 @@ def _run_single_frame_inference_obj(
             normalize_coords=True,
         )
     obj_idx = list(obj_ids_out).index(obj_id)
-    mask = (masks_out[obj_idx] > 0).cpu().numpy().squeeze()
-    return mask
+    return _prediction_to_mask(masks_out[obj_idx])
 
 
 def _run_single_frame_inference(session: SAM2Session) -> np.ndarray:
@@ -233,49 +393,143 @@ def run_sam2_interactive(
     # Pre-load model and initialize inference state before UI
     session._load_model()
     session._init_inference_state()
+    current_object_mask: np.ndarray | None = None
+    current_ground_mask: np.ndarray | None = None
+    ui_state = {"ground_phase": False}
 
-    def handle_click(image, evt: gr.SelectData, is_negative: bool):
-        """Handle click: accumulate point, run SAM2 inference, show overlay."""
+    def _status_text(target: str = "object") -> str:
+        obj_pos = sum(1 for label in session.click_labels if label == 1)
+        obj_neg = sum(1 for label in session.click_labels if label == 0)
+        ground_pos = sum(1 for label in session.ground_click_labels if label == 1)
+        ground_neg = sum(1 for label in session.ground_click_labels if label == 0)
+        phase = "ground" if ui_state["ground_phase"] else "object"
+        status = (
+            f"Phase: {phase} | Active target: {target}\n"
+            f"Object: {obj_pos}+ {obj_neg}- | "
+            f"Ground: {ground_pos}+ {ground_neg}-"
+        )
+        if ui_state["ground_phase"]:
+            status += "\nGround clicks will be subtracted from the final mask."
+        return status
+
+    def _render_overlay() -> np.ndarray:
+        return _create_mask_overlay(
+            session.first_frame,
+            current_object_mask,
+            session.click_points,
+            session.click_labels,
+            ground_mask=current_ground_mask,
+            ground_points=session.ground_click_points,
+            ground_labels=session.ground_click_labels,
+        )
+
+    def handle_click(image, evt: gr.SelectData, is_negative: bool, target: str):
+        """Handle click for the currently selected target."""
+        del image
+        nonlocal current_object_mask, current_ground_mask
+
         x, y = evt.index[0], evt.index[1]
         norm_x = x / session.img_w
         norm_y = y / session.img_h
-        session.click_points.append((norm_x, norm_y))
-        session.click_labels.append(0 if is_negative else 1)
+        label = 0 if is_negative else 1
+        if target == "ground":
+            session.ground_click_points.append((norm_x, norm_y))
+            session.ground_click_labels.append(label)
+            current_ground_mask = _run_single_frame_inference_obj(
+                session,
+                obj_id=2,
+                click_points=session.ground_click_points,
+                click_labels=session.ground_click_labels,
+            )
+        else:
+            session.click_points.append((norm_x, norm_y))
+            session.click_labels.append(label)
+            current_object_mask = _run_single_frame_inference_obj(
+                session,
+                obj_id=1,
+                click_points=session.click_points,
+                click_labels=session.click_labels,
+            )
 
-        mask = _run_single_frame_inference(session)
+        return _render_overlay(), _status_text(target)
 
-        vis = _create_mask_overlay(
-            session.first_frame, mask,
-            session.click_points, session.click_labels,
+    def undo_click(target: str):
+        """Undo the last click for the active target."""
+        nonlocal current_object_mask, current_ground_mask
+
+        if target == "ground":
+            if session.ground_click_points:
+                session.ground_click_points.pop()
+                session.ground_click_labels.pop()
+            if session.ground_click_points:
+                current_ground_mask = _run_single_frame_inference_obj(
+                    session,
+                    obj_id=2,
+                    click_points=session.ground_click_points,
+                    click_labels=session.ground_click_labels,
+                )
+            else:
+                current_ground_mask = None
+        else:
+            if session.click_points:
+                session.click_points.pop()
+                session.click_labels.pop()
+            if session.click_points:
+                current_object_mask = _run_single_frame_inference_obj(
+                    session,
+                    obj_id=1,
+                    click_points=session.click_points,
+                    click_labels=session.click_labels,
+                )
+            else:
+                current_object_mask = None
+
+        return _render_overlay(), _status_text(target)
+
+    def clear_clicks(target: str):
+        """Clear clicks for the active target and rebuild remaining masks."""
+        nonlocal current_object_mask, current_ground_mask
+
+        if target == "ground":
+            session.ground_click_points.clear()
+            session.ground_click_labels.clear()
+        else:
+            session.click_points.clear()
+            session.click_labels.clear()
+
+        current_object_mask, current_ground_mask = _restore_interactive_masks(
+            session
         )
-        pos = sum(1 for l in session.click_labels if l == 1)
-        neg = sum(1 for l in session.click_labels if l == 0)
-        status = f"Points: {pos} positive, {neg} negative"
-        return vis, status
+        return _render_overlay(), _status_text(target)
 
-    def clear_clicks():
-        session.click_points.clear()
-        session.click_labels.clear()
-        session.predictor.reset_state(session.inference_state)
-        return session.first_frame, "Clicks cleared"
+    def _signal_completion() -> None:
+        import time
 
-    def propagate_and_finish(progress=gr.Progress()):
+        time.sleep(2)
+        session.done_event.set()
+
+    def propagate_and_finish(
+        progress=gr.Progress(),
+        *,
+        status_target: str = "ground",
+    ):
         """Propagate masks to all frames, then signal completion."""
-        if not session.click_points:
-            return "Add at least one click point first"
+        nonlocal current_object_mask, current_ground_mask
 
         try:
             progress(0.3, desc="Propagating masks...")
-            with torch.inference_mode():
-                num_frames = session.inference_state["num_frames"]
-                for frame_idx, _, masks_tensor in session.predictor.propagate_in_video(
-                    session.inference_state
-                ):
-                    mask = (masks_tensor[0] > 0).cpu().numpy().squeeze()
-                    mask_path = session.mask_dir / f"{frame_idx:05d}.png"
-                    cv2.imwrite(str(mask_path), (mask * 255).astype(np.uint8))
-                    pct = 0.3 + 0.6 * (frame_idx + 1) / num_frames
-                    progress(pct, desc=f"Frame {frame_idx+1}/{num_frames}")
+            num_frames = int(session.inference_state["num_frames"])
+
+            def _progress(frame_idx: int, num_frames: int) -> None:
+                pct = 0.3 + 0.6 * (frame_idx + 1) / max(num_frames, 1)
+                progress(pct, desc=f"Frame {frame_idx + 1}/{num_frames}")
+
+            mask_dir_result, ground_dir_result = _propagate_masks(
+                session,
+                current_object_mask=current_object_mask,
+                current_ground_mask=current_ground_mask,
+                progress_callback=_progress,
+            )
 
             progress(0.95, desc="Releasing SAM2 model...")
             session.release_model()
@@ -283,31 +537,92 @@ def run_sam2_interactive(
             progress(1.0, desc="Done!")
             msg = (
                 f"Propagated masks to {num_frames} frames\n"
-                f"Masks saved to: {session.mask_dir}\n\n"
+                f"Final masks: {mask_dir_result}\n"
+            )
+            if ground_dir_result is not None:
+                msg += f"Ground masks: {ground_dir_result}\n"
+            msg += (
+                f"Raw object masks: {session.object_mask_raw_dir}\n\n"
                 "Pipeline will continue automatically..."
             )
 
-            # Signal completion after a short delay to let UI update
-            def _signal():
-                import time
-                time.sleep(2)
-                session.done_event.set()
-            threading.Thread(target=_signal, daemon=True).start()
-
-            return msg
+            threading.Thread(target=_signal_completion, daemon=True).start()
+            return (
+                _render_overlay(),
+                _status_text(status_target),
+                gr.update(visible=False, value="object"),
+                gr.update(value="Propagating...", interactive=False),
+                gr.update(visible=False),
+                msg,
+            )
 
         except Exception as e:
-            session.release_model()
-            return f"Error: {e}"
+            return (
+                _render_overlay(),
+                f"Error: {e}",
+                gr.update(
+                    visible=ui_state["ground_phase"],
+                    value="ground" if ui_state["ground_phase"] else "object",
+                ),
+                gr.update(
+                    value=(
+                        "Confirm Ground & Propagate"
+                        if ui_state["ground_phase"]
+                        else "Confirm Object"
+                    ),
+                    interactive=True,
+                ),
+                gr.update(visible=ui_state["ground_phase"]),
+                f"Error: {e}",
+            )
+
+    def enter_ground_phase():
+        """Advance to ground selection without propagating yet."""
+        if not session.click_points:
+            return (
+                _render_overlay(),
+                "Add at least one object click before confirming.",
+                gr.update(visible=False, value="object"),
+                gr.update(value="Confirm Object", interactive=True),
+                gr.update(visible=False),
+                "",
+            )
+
+        ui_state["ground_phase"] = True
+        return (
+            _render_overlay(),
+            _status_text("ground"),
+            gr.update(visible=True, value="ground"),
+            gr.update(value="Confirm Ground & Propagate", interactive=True),
+            gr.update(visible=True),
+            "",
+        )
+
+    def confirm_target(target: str, progress=gr.Progress()):
+        """Either enter ground phase or propagate, depending on current phase."""
+        if ui_state["ground_phase"]:
+            return propagate_and_finish(progress, status_target=target)
+        return enter_ground_phase()
+
+    def skip_ground_and_propagate(progress=gr.Progress()):
+        """Discard ground clicks and finish with object-only propagation."""
+        nonlocal current_object_mask, current_ground_mask
+
+        session.ground_click_points.clear()
+        session.ground_click_labels.clear()
+        current_object_mask, current_ground_mask = _restore_interactive_masks(
+            session
+        )
+        return propagate_and_finish(progress, status_target="object")
 
     # Build Gradio UI
     with gr.Blocks(title="SAM2 Segmentation") as demo:
         gr.Markdown("# SAM2 Object Segmentation")
         gr.Markdown(
-            "1. Click on the object to segment (green=include)\n"
-            "2. Toggle 'Negative mode' and click to exclude regions (red)\n"
-            "   → Segmentation preview updates on each click\n"
-            "3. Click **Confirm & Propagate** to process all frames"
+            "1. Click on the object to segment (green=include, red=exclude)\n"
+            "2. Click **Confirm Object** to move to ground selection\n"
+            "3. Optionally click the ground/contact surface to subtract it\n"
+            "4. Click **Confirm Ground & Propagate** or skip ground"
         )
 
         with gr.Row():
@@ -319,19 +634,32 @@ def run_sam2_interactive(
                     type="numpy",
                 )
                 with gr.Row():
+                    undo_btn = gr.Button("Undo", size="sm")
                     clear_btn = gr.Button("Clear Clicks", size="sm")
                     negative_mode = gr.Checkbox(
                         label="Negative mode (exclude)", value=False
                     )
+                target_selector = gr.Radio(
+                    ["object", "ground"],
+                    value="object",
+                    label="Segmentation target",
+                    visible=False,
+                )
 
             with gr.Column(scale=1):
                 status_text = gr.Textbox(
                     label="Status", interactive=False, lines=2,
-                    value=f"Frame: {session.img_w}x{session.img_h}, "
-                          f"{len(session.frame_files)} frames",
+                    value=(
+                        f"Frame: {session.img_w}x{session.img_h}, "
+                        f"{len(session.frame_files)} frames\n"
+                        "Phase: object | Active target: object"
+                    ),
                 )
                 propagate_btn = gr.Button(
-                    "Confirm & Propagate", variant="primary", size="lg"
+                    "Confirm Object", variant="primary", size="lg"
+                )
+                skip_ground_btn = gr.Button(
+                    "Skip Ground & Propagate", variant="secondary", visible=False
                 )
                 propagate_status = gr.Textbox(
                     label="Propagation Result", interactive=False, lines=6
@@ -339,11 +667,42 @@ def run_sam2_interactive(
 
         image_display.select(
             fn=handle_click,
-            inputs=[image_display, negative_mode],
+            inputs=[image_display, negative_mode, target_selector],
             outputs=[image_display, status_text],
         )
-        clear_btn.click(fn=clear_clicks, outputs=[image_display, status_text])
-        propagate_btn.click(fn=propagate_and_finish, outputs=propagate_status)
+        undo_btn.click(
+            fn=undo_click,
+            inputs=[target_selector],
+            outputs=[image_display, status_text],
+        )
+        clear_btn.click(
+            fn=clear_clicks,
+            inputs=[target_selector],
+            outputs=[image_display, status_text],
+        )
+        propagate_btn.click(
+            fn=confirm_target,
+            inputs=[target_selector],
+            outputs=[
+                image_display,
+                status_text,
+                target_selector,
+                propagate_btn,
+                skip_ground_btn,
+                propagate_status,
+            ],
+        )
+        skip_ground_btn.click(
+            fn=skip_ground_and_propagate,
+            outputs=[
+                image_display,
+                status_text,
+                target_selector,
+                propagate_btn,
+                skip_ground_btn,
+                propagate_status,
+            ],
+        )
 
     # Launch in a thread, wait for completion
     print("Starting SAM2 segmentation UI on port 7860...")
