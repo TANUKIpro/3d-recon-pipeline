@@ -6,8 +6,6 @@ import asyncio
 import os
 from pathlib import Path
 
-import scripts.dashboard.app as _app
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
@@ -18,6 +16,9 @@ from scripts.dashboard.configuration import (
     parse_float,
     parse_int,
 )
+from scripts.dashboard.dependencies import MESH_POSTPROCESS_METHODS, get_state
+from scripts.dashboard.object_store import STAGE_RESET_PATHS, reset_outputs_from_stage
+from scripts.dashboard.pipeline_runner import broadcast
 from scripts.dashboard.state import PipelineStage
 
 router = APIRouter()
@@ -25,16 +26,17 @@ router = APIRouter()
 
 @router.get("/api/mesh-repair/candidates")
 async def mesh_repair_candidates():
-    if not _app.session.running:
+    session = get_state().session
+    if not session.running:
         return JSONResponse({"error": "Pipeline is not running"}, status_code=409)
-    if not _app.session.mesh_repair_ready:
+    if not session.mesh_repair_ready:
         return JSONResponse({"error": "Mesh repair selection is not ready"}, status_code=409)
 
     source_rel: str | None = None
-    source_path = _app.session.mesh_repair_source_mesh_path
+    source_path = session.mesh_repair_source_mesh_path
     if source_path:
         try:
-            out = _app._active_output_dir().resolve()
+            out = get_state().active_output_dir().resolve()
             source_obj = Path(source_path).resolve()
             source_rel = str(source_obj.relative_to(out))
         except Exception:
@@ -45,9 +47,9 @@ async def mesh_repair_candidates():
             "status": "ok",
             "source_mesh_path": source_path,
             "source_mesh_relpath": source_rel,
-            "loop_count": len(_app.session.mesh_repair_candidates),
-            "loops": _app.session.mesh_repair_candidates,
-            "analysis": _app.session.mesh_repair_analysis,
+            "loop_count": len(session.mesh_repair_candidates),
+            "loops": session.mesh_repair_candidates,
+            "analysis": session.mesh_repair_analysis,
             "color_scheme": {
                 "candidate": "#f4d03f",
                 "selected": "#e74c3c",
@@ -59,9 +61,10 @@ async def mesh_repair_candidates():
 
 @router.post("/api/mesh-repair/confirm")
 async def mesh_repair_confirm(body: dict | None = None):
-    if not _app.session.running:
+    session = get_state().session
+    if not session.running:
         return JSONResponse({"error": "Pipeline is not running"}, status_code=409)
-    if not _app.session.mesh_repair_ready:
+    if not session.mesh_repair_ready:
         return JSONResponse({"error": "Mesh repair selection is not ready"}, status_code=409)
 
     raw = body or {}
@@ -83,15 +86,15 @@ async def mesh_repair_confirm(body: dict | None = None):
 
     available_ids = {
         int(item.get("loop_id"))
-        for item in _app.session.mesh_repair_candidates
+        for item in session.mesh_repair_candidates
         if isinstance(item, dict) and item.get("loop_id") is not None
     }
     missing = sorted(loop_id for loop_id in selected if loop_id not in available_ids)
     if missing:
         return JSONResponse({"error": f"Unknown loop ids: {missing}"}, status_code=400)
 
-    _app.session.mesh_repair_selected_loop_ids = selected
-    _app.session.mesh_repair_confirm_event.set()
+    session.mesh_repair_selected_loop_ids = selected
+    session.mesh_repair_confirm_event.set()
     return JSONResponse(
         {
             "status": "confirmed",
@@ -104,10 +107,11 @@ async def mesh_repair_confirm(body: dict | None = None):
 
 @router.post("/api/mesh/postprocess")
 async def mesh_postprocess(body: dict | None = None):
-    if _app.session.running:
+    session = get_state().session
+    if session.running:
         waiting_stage5 = (
-            _app.session.next_stage_confirmation_required
-            and _app.session.next_stage_confirmation_from == int(PipelineStage.DIFFCD_MESH)
+            session.next_stage_confirmation_required
+            and session.next_stage_confirmation_from == int(PipelineStage.DIFFCD_MESH)
         )
         if not waiting_stage5:
             return JSONResponse(
@@ -121,7 +125,7 @@ async def mesh_postprocess(body: dict | None = None):
             )
 
     raw = body or {}
-    method = parse_choice(raw.get("method"), _app.MESH_POSTPROCESS_METHODS, "laplacian")
+    method = parse_choice(raw.get("method"), MESH_POSTPROCESS_METHODS, "laplacian")
     iterations = max(0, min(100, parse_int(raw.get("iterations"), 6)))
     lamb = max(0.01, min(1.5, parse_float(raw.get("lamb"), 0.5)))
     taubin_nu = max(-1.5, min(-0.01, parse_float(raw.get("taubin_nu"), -0.53)))
@@ -148,7 +152,7 @@ async def mesh_postprocess(body: dict | None = None):
         source = "raw"
     invalidate_texture = parse_bool(raw.get("invalidate_texture"), True)
 
-    out = _app._active_output_dir()
+    out = get_state().active_output_dir()
     mesh_path = out / "object_mesh.ply"
     if not mesh_path.is_file():
         return JSONResponse({"error": "object_mesh.ply not found"}, status_code=404)
@@ -219,16 +223,16 @@ async def mesh_postprocess(body: dict | None = None):
         downstream_files: tuple[str, ...] = tuple(
             rel
             for stage_id in range(invalidate_from, int(PipelineStage.TEXTURE_BAKE) + 1)
-            for rel in _app.STAGE_RESET_PATHS.get(stage_id, {}).get("files", ())
+            for rel in STAGE_RESET_PATHS.get(stage_id, {}).get("files", ())
         )
         if any((out / rel).is_file() for rel in downstream_files):
-            _app.reset_outputs_from_stage(out, invalidate_from)
+            reset_outputs_from_stage(out, invalidate_from)
             texture_invalidated = True
 
-    _app.session.mesh_ply = str(mesh_path)
-    if not _app.session.running:
-        _app.session.hydrate_from_output_dir(out)
-        await _app.broadcast(_app.session, {"type": "status", **_app.session.to_status_dict()})
+    session.mesh_ply = str(mesh_path)
+    if not session.running:
+        session.hydrate_from_output_dir(out)
+        await broadcast(session, {"type": "status", **session.to_status_dict()})
 
     return JSONResponse(
         {

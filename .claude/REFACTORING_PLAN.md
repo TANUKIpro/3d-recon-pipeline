@@ -182,26 +182,36 @@
 
 ---
 
-## Phase 4: `app.py` の共有状態管理の改善
+## Phase 4: `app.py` の共有状態管理の改善 ✅
 
 **目標**: グローバル変数によるモジュール間結合を緩和する
 
-### 4-1. 依存コンテナの導入
-> **事前確認**: `app.py` のグローバル変数 (`session`, `sam2_service`, `log_broadcaster`, `INPUT_DIR`, `OUTPUT_DIR`) の利用箇所を確認
+**設計判断**: テストが全ハンドラを直接コルーチン呼び出ししているため（TestClient 不使用）、
+`Depends()` をハンドラシグネチャに追加するとテスト全壊する。代わりに `get_state()`
+アクセサ関数をハンドラ本体内で呼ぶパターンを採用。
 
-- [ ] `scripts/dashboard/dependencies.py` を作成し、共有状態をまとめる
-  ```python
-  # 案（事前確認後に決定）
-  class AppState:
-      session: PipelineSession
-      sam2_service: SAM2Service
-      log_broadcaster: LogBroadcaster | None
-      input_dir: str
-      output_dir: str
-  ```
-- [ ] 各ルーターで FastAPI `Depends()` を使ってアクセス
-- [ ] `app.py` のグローバル変数を `AppState` インスタンスに置換
-- [ ] Dockerで全テスト実行して確認
+### 4-1. 依存コンテナの導入
+
+- [x] `scripts/dashboard/dependencies.py` を新規作成
+  - `AppState` クラス（`session`, `sam2_service`, `input_dir`, `output_dir`）
+  - `active_output_dir()`, `load_object_into_session()` メソッド（元 `app.py` のヘルパー）
+  - 定数移動: `VIDEO_EXTENSIONS`, `MESH_POSTPROCESS_METHODS`
+  - シングルトン管理: `init_state()`, `get_state()`
+- [x] `app.py` を薄い composition root に変換
+  - `init_state()` で `_app_state` 作成
+  - 後方互換エイリアス維持: `session`, `sam2_service`, `INPUT_DIR`, `OUTPUT_DIR`
+  - `_active_output_dir()`, `_load_object_into_session()` は薄いラッパーとして残存
+- [x] 全5ルートファイルから `import scripts.dashboard.app as _app` を除去
+  - `routes/verification.py`: `get_state().active_output_dir()`
+  - `routes/sam2.py`: `get_state().session`, `get_state().sam2_service`
+  - `routes/preview.py`: `get_state()` + `object_store` 直接 import
+  - `routes/mesh.py`: `get_state()` + `MESH_POSTPROCESS_METHODS`, `STAGE_RESET_PATHS`, `broadcast`
+  - `routes/pipeline.py`: `get_state()` + `object_store`, `pipeline_runner` 直接 import
+- [x] テストのパッチパス更新（~25 箇所）
+  - `_active_output_dir` → `AppState.active_output_dir`
+  - `OUTPUT_DIR`/`INPUT_DIR` パッチ → `get_state().output_dir`/`input_dir` 直接設定
+  - `broadcast`/`run_pipeline` 等 → ルートモジュールのパス
+- [x] 全462 Pythonテストパス、全554フロントエンドテストパス確認
 
 ---
 
@@ -341,6 +351,6 @@
 | **高** | Phase 1 (パッケージ構造) | ✅ 完了 |
 | **高** | Phase 2 (命名修正) | ✅ 完了 |
 | **高** | Phase 3 (ファイル分割) | ✅ 完了 |
-| **中** | Phase 4 (状態管理) | 未着手 |
+| **中** | Phase 4 (状態管理) | ✅ 完了 |
 | **中** | Phase 5 (定数整理) | 未着手 |
 | **低** | Phase 6-10 | 未着手 |

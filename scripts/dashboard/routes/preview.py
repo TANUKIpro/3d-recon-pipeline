@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-import scripts.dashboard.app as _app
-
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
+
+from scripts.dashboard.dependencies import get_state
+from scripts.dashboard.object_store import (
+    list_preview_files,
+    object_dir,
+    resolve_output_root,
+    validate_object_name,
+)
 
 router = APIRouter()
 
@@ -14,12 +20,12 @@ router = APIRouter()
 async def preview_object_file(object_name: str, path: str):
     """Serve a file from any object's directory (not just active session)."""
     try:
-        object_name = _app.validate_object_name(object_name)
+        object_name = validate_object_name(object_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = _app.resolve_output_root(_app.OUTPUT_DIR)
-    out = _app.object_dir(object_name, base_output)
+    base_output = resolve_output_root(get_state().output_dir)
+    out = object_dir(object_name, base_output)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
 
@@ -52,8 +58,8 @@ async def preview_object_file(object_name: str, path: str):
 @router.get("/api/preview/outputs")
 async def preview_outputs():
     """List output files available for preview."""
-    out = _app._active_output_dir()
-    files = _app.list_preview_files(out)
+    out = get_state().active_output_dir()
+    files = list_preview_files(out)
     for f in files:
         f.pop("size_bytes", None)
     return JSONResponse({"files": files})
@@ -62,7 +68,7 @@ async def preview_outputs():
 @router.get("/api/preview/file/{path:path}")
 async def preview_file(path: str):
     """Serve an output file by relative path."""
-    out = _app._active_output_dir()
+    out = get_state().active_output_dir()
     target = (out / path).resolve()
     # Security: ensure target is within output directory
     if not str(target).startswith(str(out.resolve())):
@@ -93,7 +99,7 @@ async def preview_file(path: str):
 @router.get("/api/preview/crop-obb")
 async def preview_crop_obb():
     """Return OBB (center, extent, rotation) for the object mesh."""
-    out = _app._active_output_dir()
+    out = get_state().active_output_dir()
     mesh_path = out / "object_mesh.ply"
     if not mesh_path.is_file():
         return JSONResponse({"error": "object_mesh.ply not found"}, status_code=404)

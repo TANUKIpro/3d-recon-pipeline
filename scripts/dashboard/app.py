@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +18,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from scripts.dashboard.configuration import (
-    build_pipeline_config,
+from scripts.dashboard.dependencies import (
+    AppState,  # noqa: F401
+    MESH_POSTPROCESS_METHODS,  # noqa: F401
+    VIDEO_EXTENSIONS,  # noqa: F401
+    get_state,  # noqa: F401
+    init_state,
 )
 from scripts.dashboard.log_capture import LogBroadcaster
 from scripts.dashboard.object_store import (
@@ -43,7 +46,6 @@ from scripts.dashboard.object_store import (
     write_object_meta,  # noqa: F401
 )
 from scripts.dashboard.pipeline_runner import broadcast, run_pipeline  # noqa: F401
-from scripts.dashboard.sam2_service import SAM2Service
 from scripts.dashboard.state import (
     PipelineSession,
     PipelineStage,
@@ -52,40 +54,22 @@ from scripts.dashboard.state import (
 # ── Globals ───────────────────────────────────────────────────────
 
 app = FastAPI(title="clip2mesh Dashboard")
-session = PipelineSession()
-sam2_service = SAM2Service()
-log_broadcaster: LogBroadcaster | None = None
-
-INPUT_DIR = os.environ.get("INPUT_DIR", "/data/input")
-OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/data/output")
-
 STATIC_DIR = Path(__file__).parent / "static"
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
+
+_app_state = init_state()
+session = _app_state.session            # backward compat
+sam2_service = _app_state.sam2_service   # backward compat
+INPUT_DIR = _app_state.input_dir        # backward compat
+OUTPUT_DIR = _app_state.output_dir      # backward compat
+log_broadcaster: LogBroadcaster | None = None
 
 
 def _active_output_dir() -> Path:
-    cfg_out = (session.config.output_dir or "").strip()
-    if cfg_out:
-        return Path(cfg_out)
-    return resolve_output_root(OUTPUT_DIR)
+    return _app_state.active_output_dir()
 
 
 def _load_object_into_session(object_name: str, object_dir: Path) -> dict[str, Any]:
-    meta = safe_json_load(object_dir / OBJECT_META_FILE)
-    raw_cfg = meta.get("config") if isinstance(meta.get("config"), dict) else {}
-    cfg = build_pipeline_config(
-        raw_cfg,
-        video_path=str(meta.get("video_path", "")),
-        object_name=object_name,
-        output_dir=object_dir,
-    )
-
-    session.reset()
-    session.config = cfg
-    session.hydrate_from_output_dir(object_dir)
-    session.resume_from_stage = PipelineStage(infer_resume_stage(object_dir))
-    return summarize_object(object_name, object_dir, include_files=True)
+    return _app_state.load_object_into_session(object_name, object_dir)
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────
@@ -108,7 +92,7 @@ async def _startup() -> None:
     log_broadcaster.install()
     asyncio.create_task(log_broadcaster.drain(session.ws_clients))
     try:
-        base_output = resolve_output_root(OUTPUT_DIR)
+        base_output = resolve_output_root(_app_state.output_dir)
         objects = list_objects(base_output)
         if objects:
             latest = objects[0]["name"]

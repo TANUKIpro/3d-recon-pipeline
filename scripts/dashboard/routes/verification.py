@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import scripts.dashboard.app as _app
-
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
+
+from scripts.dashboard.dependencies import get_state
 
 router = APIRouter()
 
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/api/verification/frame/{idx}")
 async def verification_frame(idx: int):
     """Composite frame + green mask overlay at 40% opacity for verification."""
-    out = _app._active_output_dir()
+    out = get_state().active_output_dir()
     frame_path = out / "frames" / f"{idx:05d}.jpg"
     mask_path = out / "masks" / f"{idx:05d}.png"
 
@@ -54,7 +54,7 @@ async def verification_frame(idx: int):
 @router.get("/api/verification/ground-frame/{idx}")
 async def verification_ground_frame(idx: int):
     """Composite frame + orange ground mask overlay for verification."""
-    out = _app._active_output_dir()
+    out = get_state().active_output_dir()
     frame_path = out / "frames" / f"{idx:05d}.jpg"
     mask_path = out / "masks_ground" / f"{idx:05d}.png"
 
