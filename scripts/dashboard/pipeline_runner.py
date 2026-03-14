@@ -395,6 +395,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session.mask_dir,
                 output_dir,
                 cfg.gs2mesh_gs_iterations,
+                cfg.gs2mesh_runtime_profile,
                 cfg.gs2mesh_stereo_model,
                 cfg.gs2mesh_tsdf_voxel_size,
                 cfg.gs2mesh_tsdf_depth_trunc,

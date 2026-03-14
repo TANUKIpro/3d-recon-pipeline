@@ -127,12 +127,17 @@ class TestStageGs2meshVRAMCleanup(_WrapperTestBase):
             "/data/output/masks",
             "/data/output",
             gs_iterations=30000,
+            runtime_profile="compat",
             stereo_model="DLNR_Middlebury",
             tsdf_voxel_size=0.005,
             tsdf_depth_trunc=0.04,
             use_masks=True,
         )
         self.mock_gs2mesh.assert_called_once()
+        self.assertEqual(
+            self.mock_gs2mesh.call_args.kwargs.get("runtime_profile"),
+            "compat",
+        )
         self.mock_cleanup.assert_called_once()
 
 

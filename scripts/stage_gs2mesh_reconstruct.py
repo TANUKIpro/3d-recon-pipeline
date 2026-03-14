@@ -1,16 +1,22 @@
 """Stage 4: gs2mesh Reconstruction.
 
-Runs gs2mesh pipeline: 3DGS training → stereo depth → TSDF fusion → mesh.
+Runs gs2mesh pipeline: 3DGS training → stereo depth → GPU TSDF fusion → mesh.
 Takes COLMAP output + optional SAM2 masks, produces object_mesh.ply.
 """
 
 from __future__ import annotations
 
+import importlib
 import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
+
+from scripts.config_defaults import (
+    GS2MESH_RUNTIME_PROFILE,
+    GS2MESH_RUNTIME_PROFILES,
+)
 
 _GS2MESH_BASE = Path("/opt/gs2mesh")
 
@@ -21,6 +27,7 @@ def run_gs2mesh(
     mask_dir: str | None,
     output_dir: str,
     gs_iterations: int = 30000,
+    runtime_profile: str = GS2MESH_RUNTIME_PROFILE,
     stereo_model: str = "DLNR_Middlebury",
     tsdf_voxel_size: float = 0.005,
     tsdf_depth_trunc: float = 0.04,
@@ -30,7 +37,7 @@ def run_gs2mesh(
     register_process=None,
     unregister_process=None,
 ) -> str:
-    """gs2mesh pipeline: 3DGS training → stereo depth → TSDF → mesh.
+    """gs2mesh pipeline: 3DGS training → stereo depth → GPU TSDF → mesh.
 
     Returns path to object_mesh.ply.
     """
@@ -94,13 +101,21 @@ def run_gs2mesh(
         _GS2MESH_BASE / "splatting_output" / splatting_string / scene_name
     )
     gs_model_dir.mkdir(parents=True, exist_ok=True)
+    gs_train_args, resolved_profile, optimizer_type, fallback_reason = (
+        _build_gs_train_args(
+            gs2mesh_data,
+            gs_model_dir,
+            gs_iterations,
+            runtime_profile,
+        )
+    )
+    print(f"3DGS runtime profile: {resolved_profile}")
+    print(f"3DGS optimizer: {optimizer_type}")
+    if fallback_reason:
+        print(f"3DGS optimizer fallback: {fallback_reason}")
 
     _run_subprocess(
-        ["python3", "-u",
-         str(_GS2MESH_BASE / "third_party/gaussian-splatting/train.py"),
-         "--source_path", str(gs2mesh_data),
-         "--model_path", str(gs_model_dir),
-         "--iterations", str(gs_iterations)],
+        gs_train_args,
         prefix="3DGS",
         progress_fn=lambda line: _parse_gs_progress(
             line, gs_iterations, _report,
@@ -113,9 +128,9 @@ def run_gs2mesh(
     if cancel_cb:
         cancel_cb()
 
-    # Step 2: Run gs2mesh (rendering + stereo depth + TSDF fusion).
+    # Step 2: Run gs2mesh (rendering + stereo depth only; TSDF on GPU below).
     # GS training is skipped since we did it above.
-    _report(55.0, "Running gs2mesh stereo depth + TSDF fusion")
+    _report(55.0, "Running gs2mesh stereo depth estimation")
     tsdf_voxel = max(1, round(tsdf_voxel_size * 512))
 
     gs2mesh_args = [
@@ -127,6 +142,7 @@ def run_gs2mesh(
         "--skip_colmap",
         "--skip_GS",
         "--skip_masking",
+        "--skip_TSDF",
         "--GS_iterations", str(gs_iterations),
         "--stereo_model", stereo_model,
         "--TSDF_voxel", str(tsdf_voxel),
@@ -140,19 +156,32 @@ def run_gs2mesh(
         progress_fn=lambda line: _parse_gs2mesh_progress(line, _report),
         register_process=register_process,
         unregister_process=unregister_process,
-        error_msg="gs2mesh reconstruction failed",
+        error_msg="gs2mesh stereo estimation failed",
     )
 
-    # Step 3: Find and copy output mesh
-    _report(95.0, "Collecting output mesh")
-    gs2mesh_output = _GS2MESH_BASE / "output" / "clip2mesh" / scene_name
-    output_mesh = _find_output_mesh(gs2mesh_output)
-    if output_mesh is None:
-        raise RuntimeError(f"No mesh output found in {gs2mesh_output}")
+    if cancel_cb:
+        cancel_cb()
 
+    # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
+    _report(80.0, "GPU TSDF fusion")
+    gs2mesh_output = _GS2MESH_BASE / "output" / "clip2mesh" / scene_name
+
+    from scripts.gpu_tsdf import gpu_tsdf_reconstruct
+
+    gpu_mesh_path = gpu_tsdf_reconstruct(
+        output_dir_root=str(gs2mesh_output),
+        stereo_model=stereo_model,
+        tsdf_voxel=tsdf_voxel,
+        tsdf_sdf_trunc=tsdf_depth_trunc,
+        tsdf_use_mask=use_masks,
+        progress_cb=lambda pct, msg: _report(80.0 + pct * 15.0, msg),
+    )
+
+    # Step 4: Copy output mesh
+    _report(95.0, "Collecting output mesh")
     final_mesh = out / "object_mesh.ply"
-    shutil.copy2(str(output_mesh), str(final_mesh))
-    print(f"gs2mesh output mesh: {final_mesh}")
+    shutil.copy2(gpu_mesh_path, str(final_mesh))
+    print(f"GPU TSDF output mesh: {final_mesh}")
 
     _report(100.0, "gs2mesh reconstruction complete")
     return str(final_mesh)
@@ -196,6 +225,59 @@ def _setup_gs2mesh_dirs(gs2mesh_data: Path, undistorted_dir: Path) -> None:
             link.unlink()
         if not link.exists():
             link.symlink_to(target.resolve())
+
+
+def _normalize_runtime_profile(runtime_profile: str | None) -> str:
+    candidate = str(runtime_profile or "").strip().lower()
+    if candidate in GS2MESH_RUNTIME_PROFILES:
+        return candidate
+    return GS2MESH_RUNTIME_PROFILE
+
+
+def _sparse_adam_available() -> bool:
+    try:
+        rasterizer = importlib.import_module("diff_gaussian_rasterization")
+    except ImportError:
+        return False
+    return hasattr(rasterizer, "SparseGaussianAdam")
+
+
+def _resolve_optimizer_type(
+    runtime_profile: str,
+) -> tuple[str, str | None]:
+    if runtime_profile == "compat":
+        return "default", None
+    if _sparse_adam_available():
+        return "sparse_adam", None
+    return "default", "SparseGaussianAdam unavailable"
+
+
+def _build_gs_train_args(
+    source_path: Path,
+    model_path: Path,
+    iterations: int,
+    runtime_profile: str,
+) -> tuple[list[str], str, str, str | None]:
+    resolved_profile = _normalize_runtime_profile(runtime_profile)
+    optimizer_type, fallback_reason = _resolve_optimizer_type(
+        resolved_profile
+    )
+    # train.py always appends the final iteration to save_iterations.
+    # Use a sentinel just beyond the training horizon to suppress
+    # intermediate saves while still keeping the final checkpoint.
+    save_sentinel = max(iterations + 1, 1)
+    args = [
+        "python3", "-u",
+        str(_GS2MESH_BASE / "third_party/gaussian-splatting/train.py"),
+        "--source_path", str(source_path),
+        "--model_path", str(model_path),
+        "--iterations", str(iterations),
+        "--disable_viewer",
+        "--test_iterations", "-1",
+        "--save_iterations", str(save_sentinel),
+        "--optimizer_type", optimizer_type,
+    ]
+    return args, resolved_profile, optimizer_type, fallback_reason
 
 
 def _run_colmap_cmd(
@@ -281,17 +363,17 @@ def _parse_gs_progress(
 
 
 def _parse_gs2mesh_progress(line: str, report) -> None:
-    """Parse gs2mesh progress from output lines."""
+    """Parse gs2mesh progress from output lines.
+
+    With --skip_TSDF, gs2mesh only runs rendering + stereo (55%-80%).
+    GPU TSDF fusion is handled separately afterwards.
+    """
     lower = line.lower()
     if "stereo" in lower or "disparity" in lower:
         match = re.search(r"(\d+)%", line)
         if match:
             pct = 55.0 + int(match.group(1)) * 0.25  # 55% → 80%
             report(pct, "Stereo depth matching")
-    elif "tsdf" in lower or "fusion" in lower:
-        report(85.0, "TSDF fusion")
-    elif "clean" in lower and "mesh" in lower:
-        report(92.0, "Cleaning mesh")
 
 
 def _find_output_mesh(mesh_dir: Path) -> Path | None:

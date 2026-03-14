@@ -46,6 +46,7 @@ export class ConfigPanel {
 
       // Stage 4: gs2mesh Reconstruction
       gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
+      gs2mesh_runtime_profile: document.getElementById('cfg-gs2mesh-runtime-profile'),
       gs2mesh_stereo_model: document.getElementById('cfg-gs2mesh-stereo-model'),
       gs2mesh_tsdf_voxel_size: document.getElementById('cfg-gs2mesh-tsdf-voxel-size'),
       gs2mesh_tsdf_depth_trunc: document.getElementById('cfg-gs2mesh-tsdf-depth-trunc'),
@@ -171,6 +172,7 @@ export class ConfigPanel {
         this._inputs.gs2mesh_gs_iterations?.value,
         7000,
       ),
+      gs2mesh_runtime_profile: this._inputs.gs2mesh_runtime_profile?.value || 'auto',
       gs2mesh_stereo_model: this._inputs.gs2mesh_stereo_model?.value || 'DLNR',
       gs2mesh_tsdf_voxel_size: this._parsePositiveFloat(
         this._inputs.gs2mesh_tsdf_voxel_size?.value,
@@ -548,6 +550,9 @@ export class ConfigPanel {
     }
     if (cfg.gs2mesh_stereo_model != null) {
       this._setSelectValue(this._inputs.gs2mesh_stereo_model, String(cfg.gs2mesh_stereo_model));
+    }
+    if (cfg.gs2mesh_runtime_profile != null && this._inputs.gs2mesh_runtime_profile) {
+      this._setSelectValue(this._inputs.gs2mesh_runtime_profile, String(cfg.gs2mesh_runtime_profile));
     }
     if (cfg.gs2mesh_use_masks != null && this._inputs.gs2mesh_use_masks) {
       this._inputs.gs2mesh_use_masks.checked = cfg.gs2mesh_use_masks !== false;

@@ -121,6 +121,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(cfg.gs2mesh_gs_iterations, 30000)
+        self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
         self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
@@ -130,6 +131,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         cfg = build_pipeline_config(
             {
                 "gs2mesh_gs_iterations": 500,
+                "gs2mesh_runtime_profile": "compat",
                 "gs2mesh_tsdf_voxel_size": 0.0001,
                 "gs2mesh_tsdf_depth_trunc": 0.001,
                 "gs2mesh_use_masks": False,
@@ -141,6 +143,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
+        self.assertEqual(cfg.gs2mesh_runtime_profile, "compat")
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
         self.assertFalse(cfg.gs2mesh_use_masks)

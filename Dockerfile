@@ -55,11 +55,15 @@ RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
 ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
 
 RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
+    && cd /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \
+    && git checkout 3dgs_accel \
     && pip install --no-cache-dir --no-build-isolation \
         /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \
         /opt/gaussian-splatting/submodules/simple-knn \
     && pip install --no-cache-dir --no-build-isolation \
-        /opt/gaussian-splatting/submodules/fused-ssim 2>/dev/null || true
+        /opt/gaussian-splatting/submodules/fused-ssim 2>/dev/null || true \
+    && cd /opt/gaussian-splatting \
+    && python3 -c "from diff_gaussian_rasterization import SparseGaussianAdam"
 
 # --- Layer 5b: gs2mesh + DLNR stereo weights ---
 RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
@@ -67,6 +71,27 @@ RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
     && ln -s /opt/gaussian-splatting /opt/gs2mesh/third_party/gaussian-splatting \
     && cd /opt/gs2mesh \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null; true
+
+# Explicitly install gs2mesh/DLNR deps that fail silently from requirements.txt.
+# opt_einsum: DLNR core/update.py (confirmed missing).
+# matplotlib, plotly, tensorboard, imageio: currently installed via the error-
+# swallowing requirements.txt line — pin them here for robustness.
+RUN pip install --no-cache-dir opt_einsum matplotlib plotly tensorboard imageio
+
+# k3d is a Jupyter 3D widget imported by gs2mesh's visualize.py at module level.
+# It's never used in our headless pipeline; stub it to avoid pulling Jupyter deps.
+RUN mkdir -p /usr/local/lib/python3.11/dist-packages/k3d \
+    && touch /usr/local/lib/python3.11/dist-packages/k3d/__init__.py
+
+# GroundingDINO (auto-masking) has uninstalled deps (supervision, addict, yapf).
+# We skip masking (--skip_masking), but masker_utils.py imports it at module level.
+# Wrap in try/except so it doesn't crash at import time.
+RUN python3 -c "\
+p='/opt/gs2mesh/gs2mesh_utils/masker_utils.py'; \
+t=open(p).read().replace( \
+  'import third_party.GroundingDINO.groundingdino.util.inference as GD', \
+  'try:\n    import third_party.GroundingDINO.groundingdino.util.inference as GD\nexcept (ImportError, ModuleNotFoundError):\n    GD = None'); \
+open(p,'w').write(t)"
 
 RUN mkdir -p /opt/gs2mesh/third_party/DLNR/pretrained \
     && wget -q -O /opt/gs2mesh/third_party/DLNR/pretrained/DLNR_Middlebury.pth \

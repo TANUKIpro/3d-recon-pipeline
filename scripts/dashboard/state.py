@@ -19,6 +19,7 @@ from scripts.config_defaults import (
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
     GS2MESH_GS_ITERATIONS,
+    GS2MESH_RUNTIME_PROFILE,
     GS2MESH_STEREO_MODEL,
     GS2MESH_TSDF_DEPTH_TRUNC,
     GS2MESH_TSDF_VOXEL_SIZE,
@@ -102,6 +103,7 @@ class PipelineConfig:
     colmap_max_features: int = COLMAP_MAX_FEATURES
     colmap_image_size: int = COLMAP_IMAGE_SIZE
     gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS
+    gs2mesh_runtime_profile: str = GS2MESH_RUNTIME_PROFILE
     gs2mesh_stereo_model: str = GS2MESH_STEREO_MODEL
     gs2mesh_tsdf_voxel_size: float = GS2MESH_TSDF_VOXEL_SIZE
     gs2mesh_tsdf_depth_trunc: float = GS2MESH_TSDF_DEPTH_TRUNC

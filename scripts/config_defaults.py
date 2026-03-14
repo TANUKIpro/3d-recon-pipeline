@@ -48,6 +48,8 @@ SAM2_MODEL_CONFIGS: dict[str, dict[str, str]] = {
 
 # --- Stage 4: gs2mesh Reconstruction -----------------------
 GS2MESH_GS_ITERATIONS = 30000
+GS2MESH_RUNTIME_PROFILE = "auto"
+GS2MESH_RUNTIME_PROFILES: set[str] = {"auto", "compat"}
 GS2MESH_STEREO_MODEL = "DLNR_Middlebury"
 GS2MESH_TSDF_VOXEL_SIZE = 0.005
 GS2MESH_TSDF_DEPTH_TRUNC = 0.04

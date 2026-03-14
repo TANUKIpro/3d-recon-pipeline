@@ -160,30 +160,6 @@ describe('ConfigPanel', () => {
     });
   });
 
-  // ── setMeshMethod ───────────────────────────────────────────
-
-  describe('setMeshMethod', () => {
-    it('poisson: shows classical controls, hides diffcd', () => {
-      panel.setMeshMethod('poisson');
-      const poissonSummary = document.getElementById('cfg-poisson-summary');
-      const diffcdControls = document.getElementById('cfg-diffcd-controls');
-      const classicalControls = document.getElementById('cfg-classical-controls');
-      expect(poissonSummary.classList.contains('hidden')).toBe(false);
-      expect(diffcdControls.classList.contains('hidden')).toBe(true);
-      expect(classicalControls.classList.contains('hidden')).toBe(false);
-    });
-
-    it('diffcd: shows diffcd controls, hides classical', () => {
-      panel.setMeshMethod('diffcd');
-      const poissonSummary = document.getElementById('cfg-poisson-summary');
-      const diffcdControls = document.getElementById('cfg-diffcd-controls');
-      const classicalControls = document.getElementById('cfg-classical-controls');
-      expect(poissonSummary.classList.contains('hidden')).toBe(true);
-      expect(diffcdControls.classList.contains('hidden')).toBe(false);
-      expect(classicalControls.classList.contains('hidden')).toBe(true);
-    });
-  });
-
   // ── getConfig ───────────────────────────────────────────────
 
   describe('getConfig', () => {
@@ -201,15 +177,13 @@ describe('ConfigPanel', () => {
       const config = panel.getConfig();
       const expectedKeys = [
         'video_path', 'object_name', 'resume_from_stage',
-        'frame_interval', 'max_frames', 'pixel_limit',
-        'pi3x_frame_target', 'confidence_threshold', 'edge_rtol',
-        'sam2_model', 'denoise_preset', 'denoise_algorithm',
-        'mesh_method', 'diffcd_batch_size', 'diffcd_n_batches',
-        'diffcd_resolution', 'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
-        'meshwrap_poisson_depth', 'meshwrap_poisson_scale',
-        'meshwrap_iterations', 'meshwrap_crop_scale',
-        'classical_preset', 'classical_poisson_depth',
-        'mesh_repair_enabled', 'mesh_repair_max_diameter_ratio',
+        'frame_interval', 'max_frames',
+        'colmap_matcher', 'colmap_max_features', 'colmap_image_size',
+        'sam2_model', 'ground_plane_enabled',
+        'gs2mesh_gs_iterations', 'gs2mesh_runtime_profile',
+        'gs2mesh_stereo_model', 'gs2mesh_tsdf_voxel_size',
+        'gs2mesh_tsdf_depth_trunc', 'gs2mesh_use_masks',
+        'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
       ];
       for (const key of expectedKeys) {
         expect(config).toHaveProperty(key);
@@ -227,9 +201,9 @@ describe('ConfigPanel', () => {
       // Numeric fields should have fallback defaults (positive numbers)
       expect(config.frame_interval).toBeGreaterThan(0);
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
+      expect(config.gs2mesh_runtime_profile).toBe('auto');
       expect(config.texture_view_assign_mode).toBe('legacy');
       expect(config.texture_quality_boost).toBe(false);
-      expect(config.mesh_repair_max_diameter_ratio).toBe(0.46);
     });
 
     it('reads the selected texture view assignment mode', () => {
@@ -242,6 +216,12 @@ describe('ConfigPanel', () => {
       document.getElementById('cfg-texture-quality-boost').checked = true;
       const config = panel.getConfig();
       expect(config.texture_quality_boost).toBe(true);
+    });
+
+    it('reads the selected gs2mesh runtime profile', () => {
+      document.getElementById('cfg-gs2mesh-runtime-profile').value = 'compat';
+      const config = panel.getConfig();
+      expect(config.gs2mesh_runtime_profile).toBe('compat');
     });
   });
 

@@ -282,6 +282,14 @@
           <details class="config-advanced">
             <summary>Advanced Parameters</summary>
             <div class="config-advanced-body">
+              <div class="form-group">
+                <label for="cfg-gs2mesh-runtime-profile">3DGS Runtime Profile</label>
+                <select id="cfg-gs2mesh-runtime-profile">
+                  <option value="auto" selected>Auto (Sparse Adam + headless)</option>
+                  <option value="compat">Compat (default optimizer)</option>
+                </select>
+                <div class="config-note">Keeps quality knobs unchanged and only changes non-quality runtime behavior.</div>
+              </div>
               <div class="form-row">
                 <div class="form-group">
                   <label for="cfg-gs2mesh-tsdf-voxel-size">TSDF Voxel Size</label>

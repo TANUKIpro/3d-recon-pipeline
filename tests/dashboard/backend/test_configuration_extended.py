@@ -298,6 +298,16 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         cfg = _build({"gs2mesh_use_masks": False})
         self.assertFalse(cfg.gs2mesh_use_masks)
 
+    def test_gs2mesh_runtime_profile_parse_and_env(self) -> None:
+        cfg_raw = _build({"gs2mesh_runtime_profile": "compat"})
+        self.assertEqual(cfg_raw.gs2mesh_runtime_profile, "compat")
+
+        cfg_env = _build({}, env={"GS2MESH_RUNTIME_PROFILE": "compat"})
+        self.assertEqual(cfg_env.gs2mesh_runtime_profile, "compat")
+
+        cfg_invalid = _build({"gs2mesh_runtime_profile": "invalid"})
+        self.assertEqual(cfg_invalid.gs2mesh_runtime_profile, "auto")
+
     # -- colmap fields ---
 
     def test_colmap_max_features_clamped(self) -> None:

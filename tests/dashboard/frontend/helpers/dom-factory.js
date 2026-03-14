@@ -222,6 +222,18 @@ export function buildConfigPanelDOM() {
       <input type="checkbox" id="cfg-classical-downsample" checked>
       <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
 
+      <input type="number" id="cfg-gs2mesh-gs-iterations" value="30000">
+      <select id="cfg-gs2mesh-runtime-profile">
+        <option value="auto" selected>Auto</option>
+        <option value="compat">Compat</option>
+      </select>
+      <select id="cfg-gs2mesh-stereo-model">
+        <option value="DLNR" selected>DLNR</option>
+      </select>
+      <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005">
+      <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04">
+      <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
+
       <select id="cfg-texture-size">
         <option value="0">Auto</option>
         <option value="512">512</option>

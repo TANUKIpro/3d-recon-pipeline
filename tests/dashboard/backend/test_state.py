@@ -104,6 +104,7 @@ class TestPipelineConfig(unittest.TestCase):
         self.assertEqual(cfg.video_path, "")
         self.assertEqual(cfg.output_dir, "/data/output")
         self.assertEqual(cfg.object_name, "")
+        self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
         self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
         self.assertTrue(cfg.texture_quality_boost)
 
@@ -111,6 +112,7 @@ class TestPipelineConfig(unittest.TestCase):
         original = PipelineConfig(
             video_path="/tmp/v.mp4",
             max_frames=99,
+            gs2mesh_runtime_profile="compat",
             texture_view_assign_mode="region_gc",
             texture_quality_boost=True,
         )
@@ -118,6 +120,7 @@ class TestPipelineConfig(unittest.TestCase):
         restored = PipelineConfig.from_dict(d)
         self.assertEqual(restored.video_path, "/tmp/v.mp4")
         self.assertEqual(restored.max_frames, 99)
+        self.assertEqual(restored.gs2mesh_runtime_profile, "compat")
         self.assertEqual(restored.texture_view_assign_mode, "region_gc")
         self.assertTrue(restored.texture_quality_boost)
 

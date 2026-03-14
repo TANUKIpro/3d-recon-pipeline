@@ -13,6 +13,8 @@ from scripts.config_defaults import (
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
     GS2MESH_GS_ITERATIONS,
+    GS2MESH_RUNTIME_PROFILE,
+    GS2MESH_RUNTIME_PROFILES,
     GS2MESH_STEREO_MODEL,
     GS2MESH_TSDF_DEPTH_TRUNC,
     GS2MESH_TSDF_VOXEL_SIZE,
@@ -110,6 +112,11 @@ def build_pipeline_config(
         gs2mesh_gs_iterations=max(
             1000,
             parse_int(raw.get("gs2mesh_gs_iterations"), env_int("GS2MESH_GS_ITERATIONS", GS2MESH_GS_ITERATIONS, env_map)),
+        ),
+        gs2mesh_runtime_profile=parse_choice(
+            raw.get("gs2mesh_runtime_profile") or env_map.get("GS2MESH_RUNTIME_PROFILE"),
+            GS2MESH_RUNTIME_PROFILES,
+            GS2MESH_RUNTIME_PROFILE,
         ),
         gs2mesh_stereo_model=str(raw.get("gs2mesh_stereo_model") or env_map.get("GS2MESH_STEREO_MODEL", GS2MESH_STEREO_MODEL)),
         gs2mesh_tsdf_voxel_size=max(
