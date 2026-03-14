@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_HOME=/usr/local/cuda
+ENV QT_QPA_PLATFORM=offscreen
 
 # --- Layer 1: System dependencies + COLMAP ---
 RUN apt-get update && apt-get install -y --no-install-recommends \

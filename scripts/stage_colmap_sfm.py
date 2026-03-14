@@ -75,6 +75,7 @@ def run_colmap_sfm(
         "--ImageReader.single_camera", "1",
         "--SiftExtraction.max_num_features", str(max_features),
         "--SiftExtraction.max_image_size", str(image_size),
+        "--SiftExtraction.use_gpu", "0",
     ], "feature_extractor")
 
     if cancel_cb:
@@ -86,6 +87,7 @@ def run_colmap_sfm(
     _run_colmap([
         "colmap", matcher_cmd,
         "--database_path", str(colmap_db),
+        "--SiftMatching.use_gpu", "0",
     ], matcher_cmd)
 
     if cancel_cb:
