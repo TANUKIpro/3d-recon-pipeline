@@ -1,0 +1,363 @@
+/* ── Stage Progress Bar ───────────────────────────────────── */
+#stage-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  height: var(--stage-bar-h);
+  padding: 10px 12px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  gap: 0;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.stage-pill {
+  --progress: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.stage-pill::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: calc(var(--progress) * 1%);
+  background: rgba(74, 158, 255, 0.18);
+  transition: width 0.25s ease;
+}
+
+.stage-pill > * {
+  position: relative;
+  z-index: 1;
+}
+
+.stage-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  transition: background 0.3s ease;
+}
+
+.stage-label { font-weight: 500; }
+.stage-time { font-size: 10px; color: var(--text-dim); font-family: var(--font); }
+.stage-progress {
+  font-size: 10px;
+  color: var(--accent);
+  font-family: var(--font);
+  min-width: 32px;
+  text-align: right;
+}
+
+.stage-connector {
+  flex: 0 0 32px;
+  min-width: 16px;
+  height: 2px;
+  background: var(--text-dim);
+  transition: background 0.3s ease;
+  position: relative;
+}
+
+.stage-connector::after {
+  content: '';
+  position: absolute;
+  right: -3px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-dim);
+  transition: border-left-color 0.3s ease;
+}
+
+.stage-connector-main {
+  margin-top: 14px;
+}
+
+#mesh-branch-slot {
+  position: relative;
+  width: calc(var(--mesh-pill-min-w) + (var(--mesh-branch-arm-w) * 2));
+  height: 82px;
+  overflow: visible;
+  flex-shrink: 0;
+  isolation: isolate;
+}
+
+.mesh-method-pill {
+  min-width: var(--mesh-pill-min-w);
+  justify-content: flex-start;
+  white-space: nowrap;
+}
+
+#mesh-branch-slot .mesh-stage-pill {
+  z-index: 2;
+}
+
+#mesh-pill-diffcd {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+#mesh-pill-poisson {
+  position: absolute;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+#mesh-branch-slot.poisson-inactive #mesh-pill-poisson {
+  opacity: 0.52;
+}
+
+#mesh-branch-slot.poisson-inactive .stage-connector-branch {
+  opacity: 0.72;
+}
+
+.mesh-method-pill:not(.active) {
+  opacity: 0.5;
+}
+
+.mesh-method-pill.active {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.mesh-method-pill.method-disabled {
+  opacity: 0.72;
+}
+
+.stage-connector-branch {
+  position: absolute;
+  top: 54px;
+  height: 2px;
+  opacity: 1;
+  background: var(--text-dim);
+  z-index: 1;
+}
+
+.stage-connector-branch::after { display: none; }
+
+#mesh-connector-poisson-left {
+  left: 0;
+  width: var(--mesh-branch-arm-w);
+}
+
+#mesh-connector-poisson-right {
+  right: 0;
+  width: var(--mesh-branch-arm-w);
+}
+
+/* ── DiffCD Path Connectors ─────────────────────────────── */
+.stage-connector-diffcd {
+  position: absolute;
+  top: 14px;
+  height: 2px;
+  background: var(--text-dim);
+  z-index: 1;
+}
+.stage-connector-diffcd::after { display: none; }
+
+#mesh-connector-diffcd-left {
+  left: 0;
+  width: var(--mesh-branch-arm-w);
+}
+#mesh-connector-diffcd-right {
+  right: 0;
+  width: var(--mesh-branch-arm-w);
+}
+
+/* Hide when Poisson is the active method */
+#mesh-branch-slot:not(.poisson-inactive) .stage-connector-diffcd {
+  display: none;
+}
+
+.stage-connector.active {
+  background: var(--accent);
+}
+.stage-connector.active::after { border-left-color: var(--accent); }
+
+/* Stage states */
+.stage-pill.running { border-color: var(--accent); background: rgba(74, 158, 255, 0.1); }
+.stage-pill.running .stage-dot { background: var(--accent); animation: pulse 1.5s infinite; }
+.stage-pill.complete { border-color: var(--success); }
+.stage-pill.complete .stage-dot { background: var(--success); }
+.stage-pill.complete::before { background: rgba(74, 222, 128, 0.2); }
+.stage-pill.failed { border-color: var(--danger); }
+.stage-pill.failed .stage-dot { background: var(--danger); }
+.stage-pill.failed::before { background: rgba(248, 113, 113, 0.18); }
+.stage-pill.interactive { border-color: var(--interactive); background: rgba(192, 132, 252, 0.1); }
+.stage-pill.interactive .stage-dot { background: var(--interactive); animation: pulse 1.5s infinite; }
+.stage-pill.interactive::before { background: rgba(192, 132, 252, 0.16); }
+
+.stage-connector.done { background: var(--success); }
+.stage-connector.done::after { border-left-color: var(--success); }
+
+/* ── Mesh Fork/Merge Vertical Lines ──────────────────────── */
+#mesh-branch-slot::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 15px;
+  width: 2px;
+  height: 40px;
+  background: var(--text-dim);
+  transition: background 0.3s ease;
+  z-index: 0;
+}
+
+#mesh-branch-slot::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 15px;
+  width: 2px;
+  height: 40px;
+  background: var(--text-dim);
+  transition: background 0.3s ease;
+  z-index: 0;
+}
+
+#mesh-branch-slot:has(.stage-connector-branch.active)::before,
+#mesh-branch-slot:has(.stage-connector-branch.active)::after {
+  background: var(--accent);
+}
+#mesh-branch-slot:has(.stage-connector-branch.done)::before,
+#mesh-branch-slot:has(.stage-connector-branch.done)::after {
+  background: var(--success);
+}
+#mesh-branch-slot:has(.stage-connector-diffcd.active)::before,
+#mesh-branch-slot:has(.stage-connector-diffcd.active)::after {
+  background: var(--accent);
+}
+#mesh-branch-slot:has(.stage-connector-diffcd.done)::before,
+#mesh-branch-slot:has(.stage-connector-diffcd.done)::after {
+  background: var(--success);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── Stage Panels ─────────────────────────────────────────── */
+.stage-panel {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.stage-panel.active { display: flex; }
+
+#task-confirm-dock {
+  flex: 0 0 auto;
+}
+
+#task-confirm-dock .task-confirm-bar {
+  display: none;
+}
+
+#task-confirm-dock .task-confirm-bar.is-visible {
+  display: flex;
+}
+
+.task-confirm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.task-confirm-message {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-confirm-btn {
+  min-width: 110px;
+}
+
+.task-confirm-bar.waiting {
+  border-top-color: var(--interactive);
+  background: rgba(192, 132, 252, 0.12);
+}
+
+.task-confirm-bar.waiting .task-confirm-message {
+  color: var(--text-primary);
+}
+
+.task-confirm-bar.confirmed {
+  border-top-color: var(--success);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.task-confirm-bar.confirmed .task-confirm-message {
+  color: var(--success);
+}
+
+.task-confirm-bar.sending {
+  border-top-color: var(--accent);
+}
+
+.task-confirm-bar.sending .task-confirm-message {
+  color: var(--accent);
+}
+
+.task-confirm-bar.task-confirm-final .task-confirm-message {
+  color: var(--text-secondary);
+}
+
+.task-confirm-bar.task-confirm-final .task-confirm-btn {
+  display: none;
+}
+
+.stage-panel-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  text-align: center;
+  padding: 20px;
+}
+.stage-panel-empty.hidden { display: none; }
+
+/* Stage pill clickable + selected indicator */
+.stage-pill { cursor: pointer; user-select: none; }
+.stage-pill.selected { box-shadow: 0 0 0 1px var(--accent); }
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #stage-bar {
+    overflow-x: auto;
+    overflow-y: visible;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .task-confirm-message {
+    white-space: normal;
+  }
+}

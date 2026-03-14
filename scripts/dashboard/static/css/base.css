@@ -1,0 +1,91 @@
+/* ── Reset & Variables ─────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary: #0f0f1a;
+  --bg-secondary: #1a1a2e;
+  --bg-tertiary: #16213e;
+  --bg-surface: #1e1e36;
+  --border: #2a2a4a;
+  --text-primary: #e0e0f0;
+  --text-secondary: #8888aa;
+  --text-dim: #555577;
+  --accent: #4a9eff;
+  --accent-hover: #6bb3ff;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --interactive: #c084fc;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --header-h: 48px;
+  --stage-bar-h: 104px;
+  --mesh-pill-min-w: 184px;
+  --mesh-branch-arm-w: 32px;
+  --font: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+/* ── Buttons ──────────────────────────────────────────────── */
+button {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+button:hover:not(:disabled) { background: var(--bg-surface); border-color: var(--text-dim); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(248, 113, 113, 0.1); }
+
+.btn-large { padding: 10px 24px; font-size: 14px; flex: 1; }
+.btn-small { padding: 3px 8px; font-size: 11px; }
+
+/* ── Scrollbar ────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ── Light Theme Override ─────────────────────────────────── */
+[data-theme="light"] {
+  --bg-primary: #f5f5f8;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e8e8ef;
+  --bg-surface: #eeeef4;
+  --border: #d0d0dd;
+  --text-primary: #1a1a2e;
+  --text-secondary: #555577;
+  --text-dim: #8888aa;
+  --accent: #2d7cd6;
+  --accent-hover: #1a6abf;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --interactive: #9333ea;
+}

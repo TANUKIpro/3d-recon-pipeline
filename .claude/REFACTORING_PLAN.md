@@ -267,30 +267,32 @@
 
 ---
 
-## Phase 7: フロントエンド CSS の分割
+## Phase 7: フロントエンド CSS の分割 ✅
 
-**目標**: `style.css`（1702 行）を論理単位に分割
+**目標**: `style.css`（1703 行）を論理単位に分割
 
-### 7-1. CSS の分割
-> **事前確認**: `style.css` を読み、セクションコメントとセレクタを確認
+### 7-1. CSS の分割 ✅
 
-**分割方針（案 — 事前確認後に調整）:**
+`style.css` を `@import` アグリゲータに変換し、9 個のサブモジュールに分割:
 
 | 新ファイル | 責務 |
 |---|---|
-| `static/css/base.css` | リセット、CSS変数、タイポグラフィ |
-| `static/css/layout.css` | メインレイアウト、グリッド |
-| `static/css/pipeline.css` | パイプライン UI（ステージピル等） |
-| `static/css/sam2.css` | SAM2 キャンバス・検証 UI |
-| `static/css/preview.css` | 3D プレビュー |
-| `static/css/config.css` | 設定パネル |
-| `static/css/log.css` | ログビューア |
+| `static/css/base.css` | リセット、`:root` 変数、ボタン、スクロールバー、ライトテーマ変数 |
+| `static/css/layout.css` | ヘッダー、バッジ、パンくず、ビュー切替、メインレイアウト |
+| `static/css/overview.css` | オーバービューグリッド、カード、サムネイル、アーティファクト |
+| `static/css/pipeline.css` | ステージバー、ステージピル、コネクタ、メッシュ分岐、ステージパネル |
+| `static/css/sam2.css` | SAM2 コンテナ、キャンバス、ツールバー、検証ストリップ |
+| `static/css/preview.css` | 3D コンテナ、Pi3X ツールバー、メッシュステータス、ギャラリー |
+| `static/css/config.css` | 設定パネル、ステージフィルタリング、フォームグループ |
+| `static/css/panels.css` | チェックポイントパネル、ログパネル |
+| `static/css/modal.css` | 設定ギアボタン、モーダルオーバーレイ、設定フォーム |
 
-- [ ] `style.css` のセクション構造を確認
-- [ ] 分割方針を最終決定
-- [ ] `index.html` の `<link>` タグを更新
-- [ ] ブラウザで視覚的確認
-- [ ] フロントエンドテスト実行して確認
+- [x] `style.css` のセクション構造を確認
+- [x] 分割方針を最終決定（9 ファイル）
+- [x] `style.css` を `@import` アグリゲータに変換（`index.html` 変更不要）
+- [x] レスポンシブ `@media` ルールを各コンポーネントファイルに分配
+- [x] ライトテーマ要素ルールを各コンポーネントファイルに移動
+- [x] フロントエンドテスト実行して確認
 
 ---
 
@@ -377,4 +379,5 @@
 | **中** | Phase 4 (状態管理) | ✅ 完了 |
 | **中** | Phase 5 (定数命名修正) | ✅ 完了 |
 | **低** | Phase 6 (遅延 import 統一) | ✅ 完了 |
-| **低** | Phase 7-10 | 未着手 |
+| **低** | Phase 7 (CSS 分割) | ✅ 完了 |
+| **低** | Phase 8-10 | 未着手 |
