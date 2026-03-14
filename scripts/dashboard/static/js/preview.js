@@ -3,15 +3,17 @@
  *
  * Uses a single shared renderer that moves between stage containers.
  * Stage 2 has a dedicated scene for camera overlay support.
+ *
+ * 5-stage pipeline:
+ *   1. Extract Frames
+ *   2. COLMAP SfM (camera_poses.json + colmap_sparse_points.ply)
+ *   3. SAM2 Segmentation (masks only)
+ *   4. gs2mesh Reconstruction (object_mesh.ply)
+ *   5. Texture Bake (textured_mesh.obj)
  */
 
-import {
-  MESH_REPAIR_THRESHOLD_DEFAULT,
-} from './constants.js';
-
-import { FIRST_MESH_PREVIEW_FILES, SCENE_THEMES } from './preview/constants.js';
+import { SCENE_THEMES } from './preview/constants.js';
 import * as PoseUtils from './preview/pose-utils.js';
-import * as MeshRepairOverlay from './preview/mesh-repair-overlay.js';
 import * as SceneHelpers from './preview/scene-helpers.js';
 
 let THREE;
@@ -33,36 +35,10 @@ export class PreviewPanel {
     this._currentTheme = 'dark';
     this._sceneFlipX = null;
     this._previewAssetRevision = 0;
-    this.onMeshRepairSelectionChanged = null;
-    this._meshRepair = {
-      active: false,
-      confirmed: false,
-      group: null,
-      loopObjects: new Map(),
-      loopMeta: new Map(),
-      selected: new Set(),
-      threshold: MESH_REPAIR_THRESHOLD_DEFAULT,
-      clickHandler: (event) => this._handleMeshRepairClick(event),
-      clickBound: false,
-      raycaster: null,
-      pointer: null,
-      colors: {
-        candidate: 0xf4d03f,
-        selected: 0xe74c3c,
-        confirmed: 0x2ecc71,
-      },
-    };
-    this._cropBbox = {
-      helper: null,        // THREE.LineSegments (OBB wireframe)
-      obbData: null,       // { center, extent, rotation, adjustedCenter } from API
-    };
     this._groundPlane = {
       meshByStage: {},   // stageNum -> THREE.Mesh
       data: null,        // parsed ground_plane.json
       visible: true,
-    };
-    this._sectionLoop = {
-      group: null,       // THREE.Group added to stage 7 scene
     };
   }
 
@@ -90,16 +66,11 @@ export class PreviewPanel {
 
   reset() {
     this._sceneFlipX = null;
-    this._clearMeshRepairOverlay();
     this.clearFromStage(1);
   }
 
   clearFromStage(startStage = 1) {
-    const start = Math.max(1, Math.min(8, Number(startStage) || 1));
-
-    if (start <= 3) {
-      this._groundPlane.data = null;
-    }
+    const start = Math.max(1, Math.min(5, Number(startStage) || 1));
 
     if (start <= 1) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -113,11 +84,11 @@ export class PreviewPanel {
       this._clearStageScene(2);
       const empty = document.getElementById('stage-2-empty');
       if (empty) empty.classList.remove('hidden');
-      const toolbar = document.getElementById('pi3x-toolbar');
+      const toolbar = document.getElementById('colmap-toolbar');
       if (toolbar) toolbar.classList.add('hidden');
-      const pointCount = document.getElementById('pi3x-point-count');
+      const pointCount = document.getElementById('colmap-point-count');
       if (pointCount) pointCount.textContent = '';
-      const cameraCount = document.getElementById('pi3x-camera-count');
+      const cameraCount = document.getElementById('colmap-camera-count');
       if (cameraCount) cameraCount.textContent = '';
     }
 
@@ -130,24 +101,6 @@ export class PreviewPanel {
     if (start <= 5) {
       this._clearStageScene(5);
       const empty = document.getElementById('stage-5-empty');
-      if (empty) empty.classList.remove('hidden');
-    }
-
-    if (start <= 6) {
-      this._clearStageScene(6);
-      const empty = document.getElementById('stage-6-empty');
-      if (empty) empty.classList.remove('hidden');
-    }
-
-    if (start <= 7) {
-      this._clearStageScene(7);
-      const empty = document.getElementById('stage-7-empty');
-      if (empty) empty.classList.remove('hidden');
-    }
-
-    if (start <= 8) {
-      this._clearStageScene(8);
-      const empty = document.getElementById('stage-8-empty');
       if (empty) empty.classList.remove('hidden');
     }
   }
@@ -171,14 +124,7 @@ export class PreviewPanel {
       MTLLoader = addons[3].MTLLoader;
       // Initialize THREE in submodules
       PoseUtils.initThree(THREE);
-      MeshRepairOverlay.initThree(THREE);
       SceneHelpers.initThree(THREE);
-      if (!this._meshRepair.raycaster) {
-        this._meshRepair.raycaster = new THREE.Raycaster();
-      }
-      if (!this._meshRepair.pointer) {
-        this._meshRepair.pointer = new THREE.Vector2();
-      }
       this._threeLoaded = true;
     } catch (e) {
       console.error('Failed to load three.js:', e);
@@ -247,7 +193,7 @@ export class PreviewPanel {
     const grid = new THREE.GridHelper(4, 20, palette.gridPrimary, palette.gridSecondary);
     scene.add(grid);
 
-    // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-8 use inferred flip when available.
+    // Stage 2 starts with OpenCV->OpenGL flip. Stages 4-5 use inferred flip when available.
     const sceneRoot = new THREE.Group();
     sceneRoot.rotation.x = this._defaultSceneFlipX(stageNum) ? Math.PI : 0;
     scene.add(sceneRoot);
@@ -343,13 +289,6 @@ export class PreviewPanel {
     if (stageNum >= 4) {
       this._removeGroundPlane(stageNum);
     }
-    if (stageNum === 6) {
-      this.clearCropBbox();
-    }
-    if (stageNum === 7) {
-      this._clearMeshRepairOverlay();
-      this._clearSectionLoop();
-    }
     if (stage.currentObject) {
       this._disposeObject(stage.currentObject);
       stage.sceneRoot.remove(stage.currentObject);
@@ -427,16 +366,16 @@ export class PreviewPanel {
   }
 
   /**
-   * Load Pi3X results: point cloud + camera poses.
+   * Load COLMAP results: sparse point cloud + camera poses.
    * @param {CameraOverlay} cameraOverlay - camera overlay instance
-   * @param {string} [plyFile='object_full.ply'] - PLY filename to load
+   * @param {string} [plyFile='colmap_sparse_points.ply'] - PLY filename to load
    */
-  async loadPi3xResults(cameraOverlay, plyFile = 'object_full.ply') {
+  async loadColmapResults(cameraOverlay, plyFile = 'colmap_sparse_points.ply') {
     await this.initSceneForStage(2);
     this.activateStage(2);
 
     const empty = document.getElementById('stage-2-empty');
-    const toolbar = document.getElementById('pi3x-toolbar');
+    const toolbar = document.getElementById('colmap-toolbar');
     if (toolbar) toolbar.classList.add('hidden');
 
     const stage = this._stages[2];
@@ -448,16 +387,16 @@ export class PreviewPanel {
     // Load point cloud
     const loaded = await this._loadPLYIntoStage(2, plyFile, { cacheToken });
     if (!loaded) {
-      console.warn(`Pi3X point cloud not ready: ${plyFile}`);
+      console.warn(`COLMAP sparse points not ready: ${plyFile}`);
       if (empty) empty.classList.remove('hidden');
-      const pointCountEl = document.getElementById('pi3x-point-count');
+      const pointCountEl = document.getElementById('colmap-point-count');
       if (pointCountEl) pointCountEl.textContent = '';
     } else {
       if (empty) empty.classList.add('hidden');
       if (toolbar) toolbar.classList.remove('hidden');
       if (stage.currentObject?.geometry) {
         const count = stage.currentObject.geometry.attributes.position?.count || 0;
-        const el = document.getElementById('pi3x-point-count');
+        const el = document.getElementById('colmap-point-count');
         if (el) el.textContent = `${count.toLocaleString()} points`;
       }
     }
@@ -502,7 +441,7 @@ export class PreviewPanel {
           'frames:',
           normalized.used,
         );
-        console.info('Pi3X scene flip X(pi):', sceneFlipX);
+        console.info('COLMAP scene flip X(pi):', sceneFlipX);
         console.info('Camera overlay forwardSign:', forwardSign, forwardSignSource);
 
         cameraOverlay.create(THREE, stage.sceneRoot, poseArray, { forwardSign });
@@ -515,11 +454,11 @@ export class PreviewPanel {
         }
 
         // Display camera count
-        const countEl = document.getElementById('pi3x-camera-count');
+        const countEl = document.getElementById('colmap-camera-count');
         if (countEl) countEl.textContent = `${poseArray.length} cameras`;
 
         // Bind toggle
-        const toggle = document.getElementById('pi3x-cameras-toggle');
+        const toggle = document.getElementById('colmap-cameras-toggle');
         if (toggle) {
           toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
@@ -534,7 +473,7 @@ export class PreviewPanel {
     }
 
     if (!cameraLoaded) {
-      const countEl = document.getElementById('pi3x-camera-count');
+      const countEl = document.getElementById('colmap-camera-count');
       if (countEl) countEl.textContent = '';
     }
     if (!loaded && !cameraLoaded) {
@@ -559,38 +498,21 @@ export class PreviewPanel {
 
   // ── Stage result loading ──────────────────────────────────────────
 
-  async loadClassicalPhase(step, opts = {}) {
-    const descriptor = this._classicalPhaseDescriptor(step);
-    if (!descriptor) return false;
-    const isMeshPhase = descriptor.renderMode === 'mesh';
-    return this.loadStageResult(5, {
-      file: descriptor.file,
-      renderMode: descriptor.renderMode,
-      cacheToken: opts.cacheToken,
-      stripVertexColors: opts.stripVertexColors ?? isMeshPhase,
-      enableShadows: opts.enableShadows ?? isMeshPhase,
-    });
-  }
-
   /**
    * Auto-load the appropriate result file for a stage.
    */
   async loadStageResult(stageNum, opts = {}) {
     const fileMap = {
-      4: 'object_denoised.ply',
-      5: 'object_mesh.ply',
-      6: 'object_mesh_wrapped.ply',
-      7: 'object_mesh_repaired.ply',
-      8: 'textured_mesh.obj',
+      4: 'object_mesh.ply',
+      5: 'textured_mesh.obj',
     };
 
     const overrideFile = String(opts.file || '').trim();
     const defaultFile = fileMap[stageNum];
-    const preferPreview = !overrideFile && stageNum === 5 && opts.preferPreview === true;
-    const file = overrideFile || (preferPreview ? 'object_mesh_preview.ply' : defaultFile);
+    const file = overrideFile || defaultFile;
     if (!file) return false;
     const fileName = file.split('/').pop()?.toLowerCase() || '';
-    const isFirstMeshPreview = FIRST_MESH_PREVIEW_FILES.has(fileName);
+    const isMesh = fileName.endsWith('.ply') && stageNum >= 4;
 
     const cacheToken = opts.cacheToken ?? this._nextPreviewRevision();
     await this.initSceneForStage(stageNum);
@@ -601,29 +523,18 @@ export class PreviewPanel {
     const empty = document.getElementById(`stage-${stageNum}-empty`);
 
     const ext = file.split('.').pop().toLowerCase();
-    const renderMode = String(opts.renderMode || (isFirstMeshPreview ? 'mesh' : '')).toLowerCase();
-    const stripVertexColors = opts.stripVertexColors ?? (isFirstMeshPreview && stageNum !== 7);
-    const enableShadows = opts.enableShadows ?? isFirstMeshPreview;
-    let loaded = await this._loadPreviewAssetForStage(stageNum, file, {
+    const renderMode = String(opts.renderMode || (isMesh ? 'mesh' : '')).toLowerCase();
+    const stripVertexColors = opts.stripVertexColors ?? isMesh;
+    const enableShadows = opts.enableShadows ?? isMesh;
+    const loaded = await this._loadPreviewAssetForStage(stageNum, file, {
       ext,
       cacheToken,
       renderMode,
       stripVertexColors: stripVertexColors === true,
       enableShadows: enableShadows === true,
     });
-    if (!loaded && preferPreview && defaultFile && file !== defaultFile) {
-      loaded = await this._loadPreviewAssetForStage(stageNum, defaultFile, {
-        cacheToken,
-        renderMode,
-        stripVertexColors: stripVertexColors === true,
-        enableShadows: enableShadows === true,
-      });
-    }
     if (loaded && stageNum >= 4) {
       this.showGroundPlane(stageNum).catch(() => {});
-    }
-    if (loaded && stageNum === 7) {
-      this._showSectionLoop().catch(() => {});
     }
     if (empty) empty.classList.toggle('hidden', loaded);
     return loaded;
@@ -654,13 +565,6 @@ export class PreviewPanel {
     const stage = this._stages[stageNum];
     if (!stage) return false;
     const gen = ++stage._loadGeneration;
-    if (stageNum === 6) {
-      this.clearCropBbox();
-    }
-    if (stageNum === 7) {
-      this._clearMeshRepairOverlay();
-      this._clearSectionLoop();
-    }
 
     // Remove previous object
     this._cleanupCurrentObject(stage);
@@ -691,7 +595,7 @@ export class PreviewPanel {
       const mode = String(opts.renderMode || '').toLowerCase();
       const forcePoints = mode === 'points';
       const forceMesh = mode === 'mesh';
-      const renderAsMesh = forceMesh || (!forcePoints && (stageNum === 5 || (geometry.index && geometry.index.count > 0)));
+      const renderAsMesh = forceMesh || (!forcePoints && (stageNum >= 4 && geometry.index && geometry.index.count > 0));
       const stripVertexColors = renderAsMesh && opts.stripVertexColors === true;
       const enableShadows = renderAsMesh && opts.enableShadows === true;
       if (stripVertexColors && geometry.hasAttribute('color')) {
@@ -905,40 +809,15 @@ Object.assign(PreviewPanel.prototype, {
   _inferForwardSignFromTarget: PoseUtils._inferForwardSignFromTarget,
 });
 
-// ── Mixin: mesh repair overlay (from preview/mesh-repair-overlay.js)
-Object.assign(PreviewPanel.prototype, {
-  _setMeshRepairClickEnabled: MeshRepairOverlay._setMeshRepairClickEnabled,
-  _handleMeshRepairClick: MeshRepairOverlay._handleMeshRepairClick,
-  _isMeshRepairLoopVisible: MeshRepairOverlay._isMeshRepairLoopVisible,
-  _applyMeshRepairVisibility: MeshRepairOverlay._applyMeshRepairVisibility,
-  _updateMeshRepairColors: MeshRepairOverlay._updateMeshRepairColors,
-  _clearMeshRepairOverlay: MeshRepairOverlay._clearMeshRepairOverlay,
-  clearMeshRepairSelection: MeshRepairOverlay.clearMeshRepairSelection,
-  setMeshRepairConfirmed: MeshRepairOverlay.setMeshRepairConfirmed,
-  getMeshRepairSelectedLoopIds: MeshRepairOverlay.getMeshRepairSelectedLoopIds,
-  getMeshRepairVisibleLoopCount: MeshRepairOverlay.getMeshRepairVisibleLoopCount,
-  getMeshRepairTotalLoopCount: MeshRepairOverlay.getMeshRepairTotalLoopCount,
-  getMeshRepairThreshold: MeshRepairOverlay.getMeshRepairThreshold,
-  setMeshRepairThreshold: MeshRepairOverlay.setMeshRepairThreshold,
-  beginMeshRepairSelection: MeshRepairOverlay.beginMeshRepairSelection,
-});
-
 // ── Mixin: scene helpers (from preview/scene-helpers.js) ──────────
 Object.assign(PreviewPanel.prototype, {
   _disposeObject: SceneHelpers._disposeObject,
   _cleanupCurrentObject: SceneHelpers._cleanupCurrentObject,
   _fitCamera: SceneHelpers._fitCamera,
   _setMeshShadowProfile: SceneHelpers._setMeshShadowProfile,
-  _classicalPhaseDescriptor: SceneHelpers._classicalPhaseDescriptor,
   _applyStageCenterOffset: SceneHelpers._applyStageCenterOffset,
-  showCropBbox: SceneHelpers.showCropBbox,
-  _createCropBboxHelper: SceneHelpers._createCropBboxHelper,
-  updateCropBbox: SceneHelpers.updateCropBbox,
-  clearCropBbox: SceneHelpers.clearCropBbox,
   showGroundPlane: SceneHelpers.showGroundPlane,
   _createGroundPlaneMesh: SceneHelpers._createGroundPlaneMesh,
   _removeGroundPlane: SceneHelpers._removeGroundPlane,
   toggleGroundPlane: SceneHelpers.toggleGroundPlane,
-  _clearSectionLoop: SceneHelpers._clearSectionLoop,
-  _showSectionLoop: SceneHelpers._showSectionLoop,
 });

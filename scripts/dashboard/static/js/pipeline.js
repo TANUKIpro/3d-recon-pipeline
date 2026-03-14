@@ -3,9 +3,7 @@
  */
 
 import { formatTime } from './utils.js';
-import { STAGE_COUNT, MESH_METHOD_SET } from './constants.js';
-
-const MESH_METHODS = MESH_METHOD_SET;
+import { STAGE_COUNT } from './constants.js';
 
 function _isDone(info = {}) {
   const status = String(info.status || 'pending');
@@ -19,7 +17,6 @@ export class PipelineUI {
     this._mainConnectors = [];
     this._timers = {}; // stage → interval id
     this._stageMeta = {};
-    this._meshMethod = 'poisson';
 
     for (let i = 1; i <= STAGE_COUNT; i++) {
       this._pills[i] = document.querySelector(`.stage-pill[data-stage="${i}"]`);
@@ -31,23 +28,7 @@ export class PipelineUI {
       };
     }
 
-    this._meshPills = {
-      diffcd: document.getElementById('mesh-pill-diffcd'),
-      poisson: document.getElementById('mesh-pill-poisson'),
-    };
-    this._meshBranchSlot = document.getElementById('mesh-branch-slot');
-
     this._mainConnectors = Array.from(document.querySelectorAll('.stage-connector-main'));
-    this._poissonConnectors = {
-      left: document.getElementById('mesh-connector-poisson-left'),
-      right: document.getElementById('mesh-connector-poisson-right'),
-    };
-    this._diffcdConnectors = {
-      left: document.getElementById('mesh-connector-diffcd-left'),
-      right: document.getElementById('mesh-connector-diffcd-right'),
-    };
-
-    this.setMeshMethod(this._meshMethod);
   }
 
   /** Update all stages from a status dict. */
@@ -65,53 +46,6 @@ export class PipelineUI {
       this._setStageState(i, info.status, info.elapsed, info.progress, info.detail);
     }
     this._refreshConnectors();
-  }
-
-  setMeshMethod(method) {
-    const next = MESH_METHODS.has(String(method)) ? String(method) : 'poisson';
-    this._meshMethod = next;
-    for (const [key, pill] of Object.entries(this._meshPills)) {
-      if (!pill) continue;
-      pill.classList.toggle('active', key === next);
-    }
-    if (this._meshBranchSlot) {
-      this._meshBranchSlot.classList.toggle('poisson-inactive', next !== 'poisson');
-    }
-
-    // If Stage 5 tab is currently selected, move selected outline to active method.
-    const stage5Focused = Object.values(this._meshPills).some((pill) => pill?.classList.contains('selected'));
-    if (stage5Focused) {
-      for (const [key, pill] of Object.entries(this._meshPills)) {
-        if (!pill) continue;
-        pill.classList.toggle('selected', key === next);
-      }
-    }
-
-    this._setStageState(
-      5,
-      this._stageMeta[5]?.status,
-      this._stageMeta[5]?.elapsed,
-      this._stageMeta[5]?.progress,
-      this._stageMeta[5]?.detail,
-    );
-    this._refreshConnectors();
-  }
-
-  getMeshMethod() {
-    return this._meshMethod;
-  }
-
-  setMeshMethodEnabled(enabled) {
-    const disabled = !enabled;
-    for (const pill of Object.values(this._meshPills)) {
-      if (!pill) continue;
-      pill.classList.toggle('method-disabled', disabled);
-    }
-    const poissonPill = this._meshPills.poisson;
-    if (poissonPill) {
-      poissonPill.setAttribute('tabindex', disabled ? '-1' : '0');
-      poissonPill.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-    }
   }
 
   stageStart(stage) {
@@ -214,34 +148,10 @@ export class PipelineUI {
     return this._stageMeta[stage]?.status || 'pending';
   }
 
-  _pillForStage(stage) {
-    if (stage === 5) {
-      return this._meshMethod === 'diffcd'
-        ? this._meshPills.diffcd
-        : this._meshPills.poisson;
-    }
-    return this._pills[stage];
-  }
-
-  _inactiveMeshPill() {
-    return this._meshMethod === 'diffcd'
-      ? this._meshPills.poisson
-      : this._meshPills.diffcd;
-  }
-
   _setStageState(stage, status, elapsed, progress, detail) {
-    const pill = this._pillForStage(stage);
+    const pill = this._pills[stage];
     if (!pill) return;
-
     this._applyPillState(pill, status, elapsed, progress, detail);
-
-    // Stage 5 has dual mesh method pills. Keep inactive path visually pending.
-    if (stage === 5) {
-      const inactivePill = this._inactiveMeshPill();
-      if (inactivePill) {
-        this._applyPillState(inactivePill, 'pending', null, 0, null);
-      }
-    }
   }
 
   _applyPillState(pill, status, elapsed, progress, detail) {
@@ -269,63 +179,19 @@ export class PipelineUI {
   }
 
   _refreshConnectors() {
-    // Linear connectors for stages 1→4.
-    for (let i = 0; i < 3; i++) {
+    // Linear connectors between stages
+    for (let i = 0; i < this._mainConnectors.length; i++) {
       const stage = i + 2;
       const conn = this._mainConnectors[i];
       if (!conn) continue;
       const done = _isDone(this._stageMeta[stage]);
-      conn.classList.toggle('active', false);
       conn.classList.toggle('done', done);
     }
-
-    const stage5Done = _isDone(this._stageMeta[5]);
-    const stage6Done = _isDone(this._stageMeta[6]);
-    const stage7Done = _isDone(this._stageMeta[7]);
-    const stage8Done = _isDone(this._stageMeta[8]);
-    const poissonActive = this._meshMethod === 'poisson';
-
-    // Connectors around the mesh branch slot are shared trunk lines.
-    // Keep them active regardless of selected mesh method so branch lines connect visually.
-    const meshLeftTrunk = this._mainConnectors[3];
-    const meshRightTrunk = this._mainConnectors[4];
-    if (meshLeftTrunk) {
-      meshLeftTrunk.classList.toggle('active', true);
-      meshLeftTrunk.classList.toggle('done', stage5Done);
-    }
-    if (meshRightTrunk) {
-      meshRightTrunk.classList.toggle('active', true);
-      meshRightTrunk.classList.toggle('done', stage6Done);
-    }
-    const repairTrunk = this._mainConnectors[5];
-    if (repairTrunk) {
-      repairTrunk.classList.toggle('active', true);
-      repairTrunk.classList.toggle('done', stage7Done);
-    }
-    const textureTrunk = this._mainConnectors[6];
-    if (textureTrunk) {
-      textureTrunk.classList.toggle('active', true);
-      textureTrunk.classList.toggle('done', stage8Done);
-    }
-
-    this._setConnectorState(this._poissonConnectors.left, poissonActive, poissonActive && stage5Done);
-    this._setConnectorState(this._poissonConnectors.right, poissonActive, poissonActive && stage6Done);
-
-    // DiffCD path connectors
-    const diffcdActive = !poissonActive;
-    this._setConnectorState(this._diffcdConnectors.left, diffcdActive, diffcdActive && stage5Done);
-    this._setConnectorState(this._diffcdConnectors.right, diffcdActive, diffcdActive && stage6Done);
-  }
-
-  _setConnectorState(connector, active, done) {
-    if (!connector) return;
-    connector.classList.toggle('active', Boolean(active));
-    connector.classList.toggle('done', Boolean(done));
   }
 
   _startTimer(stage) {
     this._stopTimer(stage);
-    const pill = this._pillForStage(stage);
+    const pill = this._pills[stage];
     if (!pill) return;
     const timeEl = pill.querySelector('.stage-time');
     if (!timeEl) return;

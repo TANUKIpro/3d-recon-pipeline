@@ -83,14 +83,14 @@ class TestPipelineStageEnum(unittest.TestCase):
         for i in range(len(ordered) - 1):
             self.assertLess(ordered[i], ordered[i + 1])
 
-    def test_stage_labels_cover_stages_1_to_8(self) -> None:
-        for stage_id in range(1, 9):
+    def test_stage_labels_cover_stages_1_to_5(self) -> None:
+        for stage_id in range(1, 6):
             self.assertIn(stage_id, STAGE_LABELS, f"Stage {stage_id} missing from STAGE_LABELS")
 
-    def test_stage_output_files_cover_stages_2_to_8(self) -> None:
-        for stage_id in range(2, 9):
+    def test_stage_output_files_cover_relevant_stages(self) -> None:
+        # Stages 2, 4, 5 have output files; stage 3 uses masks dir check
+        for stage_id in (2, 4, 5):
             self.assertIn(stage_id, STAGE_OUTPUT_FILES, f"Stage {stage_id} missing from STAGE_OUTPUT_FILES")
-            self.assertGreater(len(STAGE_OUTPUT_FILES[stage_id]), 0)
 
 
 # -------------------------------------------------------------- dataclasses ---
@@ -138,8 +138,8 @@ class TestPipelineConfig(unittest.TestCase):
             video_path="/v.mp4",
             frame_interval=5,
             max_frames=30,
-            pixel_limit=100_000,
-            confidence_threshold=0.5,
+            colmap_matcher="exhaustive",
+            colmap_max_features=4096,
             auto_accept=True,
         )
         restored = PipelineConfig.from_dict(cfg.to_dict())
@@ -169,11 +169,11 @@ class TestStageInfo(unittest.TestCase):
 
 
 class TestPipelineSessionInit(unittest.TestCase):
-    """Post-init creates stages 1-8 and preserves preconditions."""
+    """Post-init creates stages 1-5 and preserves preconditions."""
 
-    def test_stages_1_to_8_initialised(self) -> None:
+    def test_stages_1_to_5_initialised(self) -> None:
         session = PipelineSession()
-        for s in range(1, 9):
+        for s in range(1, 6):
             self.assertIn(s, session.stages)
             self.assertEqual(session.stages[s].status, StageStatus.PENDING)
 
@@ -194,7 +194,7 @@ class TestPipelineSessionReset(unittest.TestCase):
     def setUp(self) -> None:
         self.session = PipelineSession()
         # Dirty every field that reset() should clear
-        self.session.current_stage = PipelineStage.DENOISE
+        self.session.current_stage = PipelineStage.GS2MESH_RECONSTRUCT
         self.session.running = True
         self.session.cancelled = True
         self.session.cancel_requested = True
@@ -207,15 +207,9 @@ class TestPipelineSessionReset(unittest.TestCase):
         self.session.next_stage_confirmation_from = 3
         self.session.next_stage_confirmation_to = 4
         self.session.next_stage_confirmation_message = "continue?"
-        self.session.mesh_repair_ready = True
-        self.session.mesh_repair_candidates = [{"loop_id": 1}]
-        self.session.mesh_repair_selected_loop_ids = [1]
-        self.session.mesh_repair_source_mesh_path = "/tmp/mesh.ply"
-        self.session.mesh_repair_analysis = {"k": "v"}
         self.session.frames_dir = "/tmp/frames"
         self.session.mask_dir = "/tmp/masks"
-        self.session.ply_path = "/tmp/object.ply"
-        self.session.denoised_ply = "/tmp/dn.ply"
+        self.session.colmap_sparse_path = "/tmp/colmap_sparse"
         self.session.mesh_ply = "/tmp/mesh.ply"
         self.session.obj_path = "/tmp/obj.obj"
         self.session.frame_count = 50
@@ -244,22 +238,13 @@ class TestPipelineSessionReset(unittest.TestCase):
         s = self.session
         self.assertIsNone(s.frames_dir)
         self.assertIsNone(s.mask_dir)
-        self.assertIsNone(s.ply_path)
-        self.assertIsNone(s.denoised_ply)
+        self.assertIsNone(s.colmap_sparse_path)
         self.assertIsNone(s.mesh_ply)
         self.assertIsNone(s.obj_path)
 
     def test_cancel_state_cleared(self) -> None:
         s = self.session
         self.assertFalse(s.cancel_event.is_set())
-
-    def test_mesh_repair_state_cleared(self) -> None:
-        s = self.session
-        self.assertFalse(s.mesh_repair_ready)
-        self.assertEqual(s.mesh_repair_candidates, [])
-        self.assertEqual(s.mesh_repair_selected_loop_ids, [])
-        self.assertIsNone(s.mesh_repair_source_mesh_path)
-        self.assertEqual(s.mesh_repair_analysis, {})
 
     def test_sam2_state_cleared(self) -> None:
         s = self.session
@@ -299,8 +284,8 @@ class TestPipelineSessionStageLifecycle(unittest.TestCase):
     @patch("scripts.dashboard.state.time")
     def test_stage_failed_records_error(self, mock_time: MagicMock) -> None:
         mock_time.time.side_effect = [1000.0, 1003.0]
-        self.session.stage_start(PipelineStage.PI3X_RECONSTRUCT)
-        self.session.stage_failed(PipelineStage.PI3X_RECONSTRUCT, "OOM")
+        self.session.stage_start(PipelineStage.COLMAP_SFM)
+        self.session.stage_failed(PipelineStage.COLMAP_SFM, "OOM")
         info = self.session.stages[2]
         self.assertEqual(info.status, StageStatus.FAILED)
         self.assertEqual(info.error, "OOM")
@@ -319,7 +304,7 @@ class TestPipelineSessionStageLifecycle(unittest.TestCase):
 
     def test_progress_checkpoint_update(self) -> None:
         self.session.stage_progress(
-            PipelineStage.DENOISE, progress=50.0, checkpoint_id="ckpt-42"
+            PipelineStage.GS2MESH_RECONSTRUCT, progress=50.0, checkpoint_id="ckpt-42"
         )
         info = self.session.stages[4]
         self.assertAlmostEqual(info.progress, 50.0)
@@ -347,7 +332,7 @@ class TestPipelineSessionConfirmation(unittest.TestCase):
 
     def test_require_next_stage_confirmation(self) -> None:
         self.session.require_next_stage_confirmation(
-            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "proceed?"
+            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         self.assertTrue(self.session.next_stage_confirmation_required)
         self.assertEqual(self.session.next_stage_confirmation_from, 4)
@@ -356,7 +341,7 @@ class TestPipelineSessionConfirmation(unittest.TestCase):
 
     def test_clear_next_stage_confirmation(self) -> None:
         self.session.require_next_stage_confirmation(
-            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "proceed?"
+            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         self.session.clear_next_stage_confirmation()
         self.assertFalse(self.session.next_stage_confirmation_required)
@@ -435,7 +420,7 @@ class TestPipelineSessionProcessManagement(unittest.TestCase):
 
 
 class TestPipelineSessionOverallProgress(unittest.TestCase):
-    """Average progress across 8 stages."""
+    """Average progress across 5 stages."""
 
     def setUp(self) -> None:
         self.session = PipelineSession()
@@ -444,15 +429,15 @@ class TestPipelineSessionOverallProgress(unittest.TestCase):
         self.assertAlmostEqual(self.session.overall_progress(), 0.0)
 
     def test_all_complete(self) -> None:
-        for s in range(1, 9):
+        for s in range(1, 6):
             self.session.stages[s].progress = 100.0
         self.assertAlmostEqual(self.session.overall_progress(), 100.0)
 
     def test_mixed_progress(self) -> None:
-        # Stages 1-4 at 100%, 5-8 at 0% => 400/8 = 50.0
-        for s in range(1, 5):
+        # Stages 1-2 at 100%, 3-5 at 0% => 200/5 = 40.0
+        for s in range(1, 3):
             self.session.stages[s].progress = 100.0
-        self.assertAlmostEqual(self.session.overall_progress(), 50.0)
+        self.assertAlmostEqual(self.session.overall_progress(), 40.0)
 
 
 # ---------------------------------------- PipelineSession status dict ---
@@ -474,7 +459,6 @@ class TestPipelineSessionStatusDict(unittest.TestCase):
             "cancel_force",
             "resume_from_stage",
             "object_name",
-            "mesh_method",
             "video_path",
             "output_dir",
             "current_checkpoint_id",
@@ -482,7 +466,6 @@ class TestPipelineSessionStatusDict(unittest.TestCase):
             "mask_count",
             "elapsed",
             "next_stage_confirmation",
-            "mesh_repair",
             "stages",
             "auto_accept",
             "overall_progress",
@@ -516,7 +499,7 @@ class TestDetectStageOutputs(unittest.TestCase):
     def test_empty_directory(self) -> None:
         with TemporaryDirectory() as tmp:
             stages, fc, mc = detect_stage_outputs(tmp)
-            for stage_id in range(1, 9):
+            for stage_id in range(1, 6):
                 self.assertFalse(stages[stage_id], f"Stage {stage_id} should be False")
             self.assertEqual(fc, 0)
             self.assertEqual(mc, 0)
@@ -532,13 +515,11 @@ class TestDetectStageOutputs(unittest.TestCase):
             self.assertEqual(fc, 2)
             self.assertEqual(mc, 0)
 
-    def test_stage3_requires_object_ply_and_masks(self) -> None:
+    def test_stage3_requires_masks(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            # object.ply alone is not enough
-            (out / "object.ply").write_text("ply\n", encoding="utf-8")
             stages, _, mc = detect_stage_outputs(out)
-            self.assertFalse(stages[3], "stage 3 needs masks too")
+            self.assertFalse(stages[3], "stage 3 needs masks")
             self.assertEqual(mc, 0)
 
             # add masks
@@ -548,30 +529,23 @@ class TestDetectStageOutputs(unittest.TestCase):
             self.assertTrue(stages[3])
             self.assertEqual(mc, 1)
 
-    def test_fixtures_all_stages_complete(self) -> None:
-        stages, fc, mc = detect_stage_outputs(FIXTURE_DIR)
-        for stage_id in range(1, 9):
-            self.assertTrue(stages[stage_id], f"Fixture stage {stage_id} not detected")
-        self.assertGreater(fc, 0)
-        self.assertGreater(mc, 0)
-
 
 # ---------------------------------------- hydrate_from_output_dir ---
 
 
 class TestHydrateFromOutputDir(unittest.TestCase):
-    """hydrate_from_output_dir() path setting, mesh priority, current_stage."""
+    """hydrate_from_output_dir() path setting, current_stage."""
 
     def _make_stage1_dir(self, base: Path) -> None:
         (base / "frames").mkdir(parents=True, exist_ok=True)
         (base / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
 
     def _make_stage2_files(self, base: Path) -> None:
+        (base / "colmap_sparse").mkdir(parents=True, exist_ok=True)
         for name in STAGE_OUTPUT_FILES[2]:
             (base / name).write_text("data", encoding="utf-8")
 
     def _make_stage3_files(self, base: Path) -> None:
-        (base / "object.ply").write_text("ply\n", encoding="utf-8")
         (base / "masks").mkdir(parents=True, exist_ok=True)
         (base / "masks" / "00000.png").write_bytes(b"\x89PNG")
 
@@ -591,26 +565,7 @@ class TestHydrateFromOutputDir(unittest.TestCase):
             self.assertIsNone(session.frames_dir)
             self.assertEqual(session.frame_count, 0)
 
-    def test_mesh_priority_repaired_over_wrapped(self) -> None:
-        session = PipelineSession()
-        with TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            (out / "object_mesh.ply").write_text("ply\n", encoding="utf-8")
-            (out / "object_mesh_wrapped.ply").write_text("ply\n", encoding="utf-8")
-            (out / "object_mesh_repaired.ply").write_text("ply\n", encoding="utf-8")
-            session.hydrate_from_output_dir(out)
-            self.assertEqual(session.mesh_ply, str(out / "object_mesh_repaired.ply"))
-
-    def test_mesh_priority_wrapped_over_base(self) -> None:
-        session = PipelineSession()
-        with TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            (out / "object_mesh.ply").write_text("ply\n", encoding="utf-8")
-            (out / "object_mesh_wrapped.ply").write_text("ply\n", encoding="utf-8")
-            session.hydrate_from_output_dir(out)
-            self.assertEqual(session.mesh_ply, str(out / "object_mesh_wrapped.ply"))
-
-    def test_mesh_priority_base_only(self) -> None:
+    def test_mesh_ply_set_when_exists(self) -> None:
         session = PipelineSession()
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -642,7 +597,7 @@ class TestHydrateFromOutputDir(unittest.TestCase):
 
 
 class TestPipelineSessionResetEvents(unittest.TestCase):
-    """1.4.9 — reset() replaces asyncio.Event instances."""
+    """reset() replaces asyncio.Event instances."""
 
     def test_reset_replaces_asyncio_events(self) -> None:
         session = PipelineSession()
@@ -650,7 +605,6 @@ class TestPipelineSessionResetEvents(unittest.TestCase):
         old_sam2_approve = session.sam2_approve_event
         old_sam2_ground_skip = session.sam2_ground_skip_event
         old_next_stage = session.next_stage_confirm_event
-        old_mesh_repair = session.mesh_repair_confirm_event
 
         session.reset()
 
@@ -658,16 +612,13 @@ class TestPipelineSessionResetEvents(unittest.TestCase):
         self.assertIsNot(session.sam2_approve_event, old_sam2_approve)
         self.assertIsNot(session.sam2_ground_skip_event, old_sam2_ground_skip)
         self.assertIsNot(session.next_stage_confirm_event, old_next_stage)
-        self.assertIsNot(session.mesh_repair_confirm_event, old_mesh_repair)
         # All new events should not be set
         self.assertFalse(session.sam2_confirm_event.is_set())
         self.assertFalse(session.sam2_approve_event.is_set())
         self.assertFalse(session.sam2_ground_skip_event.is_set())
         self.assertFalse(session.next_stage_confirm_event.is_set())
-        self.assertFalse(session.mesh_repair_confirm_event.is_set())
 
     def test_reset_clears_active_processes(self) -> None:
-        """1.4.10 — reset() clears _active_processes."""
         session = PipelineSession()
         proc = _FakeProcess()
         session.register_active_process(proc)
@@ -682,13 +633,12 @@ class TestPipelineSessionResetEvents(unittest.TestCase):
 
 
 class TestPipelineSessionClearConfirmation(unittest.TestCase):
-    """1.6.3 / 1.10.8 / 1.10.9 — Confirmation fields and status dict coverage."""
+    """Confirmation fields and status dict coverage."""
 
     def test_clear_resets_confirmation_fields(self) -> None:
-        """1.6.3 — clear_next_stage_confirmation() clears all fields."""
         session = PipelineSession()
         session.require_next_stage_confirmation(
-            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "msg"
+            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "msg"
         )
         self.assertTrue(session.next_stage_confirmation_required)
         self.assertEqual(session.next_stage_confirmation_from, 4)
@@ -703,7 +653,6 @@ class TestPipelineSessionClearConfirmation(unittest.TestCase):
         self.assertIsNone(session.next_stage_confirmation_message)
 
     def test_status_dict_has_next_stage_confirmation(self) -> None:
-        """1.10.8 — to_status_dict() contains next_stage_confirmation sub-dict."""
         session = PipelineSession()
         d = session.to_status_dict()
 
@@ -716,7 +665,7 @@ class TestPipelineSessionClearConfirmation(unittest.TestCase):
 
         # Verify values after setting confirmation
         session.require_next_stage_confirmation(
-            PipelineStage.DENOISE, PipelineStage.DIFFCD_MESH, "proceed?"
+            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         d2 = session.to_status_dict()
         nsc2 = d2["next_stage_confirmation"]
@@ -724,28 +673,6 @@ class TestPipelineSessionClearConfirmation(unittest.TestCase):
         self.assertEqual(nsc2["from_stage"], 4)
         self.assertEqual(nsc2["to_stage"], 5)
         self.assertEqual(nsc2["message"], "proceed?")
-
-    def test_status_dict_has_mesh_repair(self) -> None:
-        """1.10.9 — to_status_dict() contains mesh_repair sub-dict."""
-        session = PipelineSession()
-        d = session.to_status_dict()
-
-        self.assertIn("mesh_repair", d)
-        mr = d["mesh_repair"]
-        self.assertIn("ready", mr)
-        self.assertIsInstance(mr["ready"], bool)
-        self.assertFalse(mr["ready"])
-
-        # After setting candidates
-        session.set_mesh_repair_candidates(
-            "/tmp/mesh.ply",
-            [{"loop_id": 0}, {"loop_id": 1}],
-            {"total_loops": 2},
-        )
-        d2 = session.to_status_dict()
-        mr2 = d2["mesh_repair"]
-        self.assertTrue(mr2["ready"])
-        self.assertEqual(mr2["candidate_count"], 2)
 
 
 if __name__ == "__main__":

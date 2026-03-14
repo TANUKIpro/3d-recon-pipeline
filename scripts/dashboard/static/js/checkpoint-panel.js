@@ -5,7 +5,6 @@
  * to one running checkpoint.
  */
 
-import { normalizeMeshMethod } from './utils.js';
 import { STAGE_COUNT } from './constants.js';
 
 const STAGE_MIN = 1;
@@ -13,13 +12,10 @@ const STAGE_MAX = STAGE_COUNT;
 
 const STAGE_LABELS = {
   1: 'Extract Frames',
-  2: 'Pi3X',
+  2: 'COLMAP SfM',
   3: 'SAM2',
-  4: 'Denoise',
-  5: 'Mesh Reconstruction',
-  6: 'Mesh Wrap',
-  7: 'Mesh Repair',
-  8: 'Texture Bake',
+  4: 'gs2mesh',
+  5: 'Texture Bake',
 };
 
 const CHECKPOINT_TEMPLATES = {
@@ -29,50 +25,24 @@ const CHECKPOINT_TEMPLATES = {
     'Finalize frame set',
   ],
   2: [
-    'Load Pi3X model',
-    'Run Pi3X inference',
-    'Apply confidence/edge filters',
-    'Save point cloud and camera poses',
-    'Save Pi3X cache',
+    'Extract features (COLMAP)',
+    'Match features',
+    'Sparse reconstruction',
+    'Export camera poses',
   ],
   3: [
     'Initialize SAM2 model',
     'Wait for interactive clicks',
     'Propagate masks',
     'Wait for mask verification',
-    'Apply SAM2 masks to point cloud',
   ],
   4: [
-    'Load point cloud',
-    'Run denoise algorithm',
-    'Save denoised point cloud',
+    'Train 3D Gaussian Splatting',
+    'Stereo depth estimation',
+    'TSDF fusion + mesh extraction',
+    'Save output mesh',
   ],
-  5: {
-    poisson: [
-      'Preprocess point cloud',
-      'Reconstruct mesh (Poisson)',
-      'Postprocess mesh',
-      'Simplify mesh',
-    ],
-    diffcd: [
-      'Prepare point cloud for DiffCD',
-      'Run DiffCD fitting',
-      'Collect DiffCD outputs',
-      'Apply mesh smoothing',
-    ],
-  },
-  6: [
-    'Load mesh',
-    'Iterative mesh wrapping',
-    'Adjust face count',
-    'Save wrapped mesh',
-  ],
-  7: [
-    'Load wrapped mesh',
-    'Analyze and repair bottom surface',
-    'Save repaired mesh',
-  ],
-  8: [
+  5: [
     'Load mesh',
     'Estimate camera intrinsics',
     'Generate UV atlas / texel mapping',
@@ -83,63 +53,11 @@ const CHECKPOINT_TEMPLATES = {
 };
 
 const CHECKPOINT_IDS = {
-  1: [
-    's1.inspect',
-    's1.extract',
-    's1.finalize',
-  ],
-  2: [
-    's2.load_model',
-    's2.infer',
-    's2.filter',
-    's2.save_outputs',
-    's2.save_cache',
-  ],
-  3: [
-    's3.initialize',
-    's3.interact',
-    's3.propagate',
-    's3.verify',
-    's3.apply',
-  ],
-  4: [
-    's4.load',
-    's4.denoise',
-    's4.save',
-  ],
-  5: {
-    poisson: [
-      's5.poisson.preprocess',
-      's5.poisson.reconstruct',
-      's5.poisson.postprocess',
-      's5.poisson.downsample',
-    ],
-    diffcd: [
-      's5.diffcd.prepare',
-      's5.diffcd.fit',
-      's5.diffcd.collect',
-      's5.diffcd.smooth',
-    ],
-  },
-  6: [
-    's6.load',
-    's6.wrap',
-    's6.adjust',
-    's6.save',
-  ],
-  7: [
-    's7.load',
-    's7.find_loops',
-    's7.save',
-  ],
-  8: [
-    's8.load',
-    's8.intrinsics',
-    's8.uv',
-    's8.score',
-    's8.fill',
-    's8.export',
-  ],
+  1: ['s1.inspect', 's1.extract', 's1.finalize'],
+  2: ['s2.features', 's2.match', 's2.reconstruct', 's2.export'],
+  3: ['s3.initialize', 's3.interact', 's3.propagate', 's3.verify'],
+  4: ['s4.train_gs', 's4.stereo', 's4.tsdf', 's4.save'],
+  5: ['s5.load', 's5.intrinsics', 's5.uv', 's5.score', 's5.fill', 's5.export'],
 };
 
 const DETAIL_MATCHERS = {
@@ -149,48 +67,24 @@ const DETAIL_MATCHERS = {
     { re: /extracted\s+\d+\s+frames|finalize|complete/i, idx: 2 },
   ],
   2: [
-    { re: /loading pi3x model/i, idx: 0 },
-    { re: /running pi3x fitting|pi3x chunk inference|running pi3x fitting/i, idx: 1 },
-    { re: /confidence|edge filters/i, idx: 2 },
-    { re: /saving point cloud|saving camera poses/i, idx: 3 },
-    { re: /saving pi3x cache|collecting pi3x outputs|pi3x complete/i, idx: 4 },
+    { re: /feature extraction|feature_extractor/i, idx: 0 },
+    { re: /matcher|matching/i, idx: 1 },
+    { re: /sparse reconstruction|mapper/i, idx: 2 },
+    { re: /exporting camera poses|colmap sfm complete/i, idx: 3 },
   ],
   3: [
     { re: /initializing sam2 model|sam2 ready/i, idx: 0 },
     { re: /waiting for interactive clicks|redoing sam2 interaction/i, idx: 1 },
     { re: /propagating masks/i, idx: 2 },
     { re: /waiting for mask verification|verification/i, idx: 3 },
-    { re: /loading sam2 masks|applying sam2 mask filter|applying sam2 masks/i, idx: 4 },
   ],
   4: [
-    { re: /loading point cloud|loaded\s+\d+/i, idx: 0 },
-    { re: /running dbscan|running statistical outlier removal|running radius outlier removal|dbscan complete|sor complete|radius outlier complete/i, idx: 1 },
-    { re: /saving denoised point cloud|denoise complete/i, idx: 2 },
+    { re: /training 3d gaussian|3dgs training|iteration/i, idx: 0 },
+    { re: /stereo depth|dlnr|running gs2mesh/i, idx: 1 },
+    { re: /tsdf|fusion|mesh extraction|collecting output/i, idx: 2 },
+    { re: /gs2mesh reconstruction complete|gs2mesh complete/i, idx: 3 },
   ],
-  '5:poisson': [
-    { re: /classical\/preprocess/i, idx: 0 },
-    { re: /classical\/main|poisson reconstruction|raw poisson mesh saved/i, idx: 1 },
-    { re: /classical\/postprocess/i, idx: 2 },
-    { re: /classical\/downsample|classical mesh stage complete/i, idx: 3 },
-  ],
-  '5:diffcd': [
-    { re: /preparing point cloud for diffcd|point cloud prepared/i, idx: 0 },
-    { re: /running diffcd fitting|diffcd attempt|diffcd training/i, idx: 1 },
-    { re: /collecting diffcd outputs|diffcd complete/i, idx: 2 },
-    { re: /applying mesh smoothing|diffcd stage complete/i, idx: 3 },
-  ],
-  6: [
-    { re: /mesh wrap: loading mesh/i, idx: 0 },
-    { re: /mesh wrap: sampling surface points|mesh wrap: estimating normals|mesh wrap: running poisson reconstruction|mesh wrap: iteration/i, idx: 1 },
-    { re: /mesh wrap: adjusting final face count/i, idx: 2 },
-    { re: /mesh wrap: saving wrapped mesh|mesh wrap: complete/i, idx: 3 },
-  ],
-  7: [
-    { re: /contact hole repair: loading mesh/i, idx: 0 },
-    { re: /contact hole repair: extracting boundary loops|contact hole repair: extracting selectable loops|contact hole repair: analyzing boundary loop|contact hole repair: evaluating boundary loop|contact hole repair: scanning clip heights|contact hole repair: clipping at ground plane|contact hole repair: capping ground boundary|contact hole repair: smoothing junction|waiting for repair-loop selection/i, idx: 1 },
-    { re: /contact hole repair: writing repaired mesh|saved repaired mesh|contact hole repair: complete|contact hole repair: skipped/i, idx: 2 },
-  ],
-  8: [
+  5: [
     { re: /loading mesh/i, idx: 0 },
     { re: /estimating camera intrinsics|intrinsics optimization complete|camera intrinsics estimated/i, idx: 1 },
     { re: /generating uv atlas|building texel mapping/i, idx: 2 },
@@ -213,8 +107,6 @@ function normalizeStatus(status) {
   }
   return 'pending';
 }
-
-// normalizeMeshMethod imported from utils.js
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -251,7 +143,6 @@ export class CheckpointPanel {
     this._stageLabel = document.getElementById('checkpoint-stage-label');
     this._list = document.getElementById('checkpoint-list');
     this._activeStage = STAGE_MIN;
-    this._meshMethod = 'poisson';
     this._stageInfo = {};
     this._lastRunningIndex = {};
 
@@ -262,13 +153,6 @@ export class CheckpointPanel {
     const next = clampStage(stage);
     if (this._activeStage === next) return;
     this._activeStage = next;
-    this._render();
-  }
-
-  setMeshMethod(method) {
-    const next = normalizeMeshMethod(method);
-    if (this._meshMethod === next) return;
-    this._meshMethod = next;
     this._render();
   }
 
@@ -286,7 +170,6 @@ export class CheckpointPanel {
   }
 
   applyStatusSnapshot(statusMsg) {
-    this._meshMethod = normalizeMeshMethod(statusMsg?.mesh_method || this._meshMethod);
     const stages = statusMsg?.stages || {};
     for (let stage = STAGE_MIN; stage <= STAGE_MAX; stage++) {
       const info = stages[String(stage)] || {};
@@ -301,7 +184,7 @@ export class CheckpointPanel {
 
   onStageStart(stage) {
     const s = clampStage(stage);
-    const ids = this._idTemplateFor(s);
+    const ids = CHECKPOINT_IDS[s] || [];
     this._stageInfo[s] = {
       status: 'running',
       detail: 'Starting',
@@ -365,31 +248,10 @@ export class CheckpointPanel {
     this._render();
   }
 
-  _templateFor(stage) {
-    if (stage === 5) {
-      return CHECKPOINT_TEMPLATES[5][this._meshMethod] || CHECKPOINT_TEMPLATES[5].poisson;
-    }
-    return CHECKPOINT_TEMPLATES[stage] || [];
-  }
-
-  _idTemplateFor(stage) {
-    if (stage === 5) {
-      return CHECKPOINT_IDS[5][this._meshMethod] || CHECKPOINT_IDS[5].poisson;
-    }
-    return CHECKPOINT_IDS[stage] || [];
-  }
-
-  _matchersFor(stage) {
-    if (stage === 5) {
-      return DETAIL_MATCHERS[`5:${this._meshMethod}`] || [];
-    }
-    return DETAIL_MATCHERS[stage] || [];
-  }
-
   _resolveCurrentIndex(stage, detail, checkpointCount, checkpointId = null) {
     const text = String(detail || '').trim();
     const maxIndex = Math.max(0, checkpointCount - 1);
-    const ids = this._idTemplateFor(stage);
+    const ids = CHECKPOINT_IDS[stage] || [];
 
     if (typeof checkpointId === 'string' && checkpointId) {
       const idx = ids.indexOf(checkpointId);
@@ -399,7 +261,8 @@ export class CheckpointPanel {
     }
 
     if (text) {
-      for (const matcher of this._matchersFor(stage)) {
+      const matchers = DETAIL_MATCHERS[stage] || [];
+      for (const matcher of matchers) {
         if (matcher.re.test(text)) {
           return Math.max(0, Math.min(maxIndex, Number(matcher.idx) || 0));
         }
@@ -454,7 +317,6 @@ export class CheckpointPanel {
     if (status === 'failed') {
       states[current] = 'failed';
     } else {
-      // Treat interactive checkpoints as running from the stage-task perspective.
       states[current] = 'running';
     }
 
@@ -469,7 +331,7 @@ export class CheckpointPanel {
     const stageLabel = STAGE_LABELS[stage] || `Stage ${stage}`;
     this._stageLabel.textContent = `Stage ${stage} | ${stageLabel}`;
 
-    const checkpoints = this._templateFor(stage);
+    const checkpoints = CHECKPOINT_TEMPLATES[stage] || [];
     const info = this._stageInfo[stage] || { status: 'pending', detail: null };
     const states = this._resolveCheckpointStates(stage, info, checkpoints.length);
 

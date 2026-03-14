@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from scripts.dashboard.configuration import (
-    DENOISE_PRESET_DEFAULTS,
     build_pipeline_config,
     env_bool,
     env_float,
@@ -18,11 +17,8 @@ from scripts.dashboard.configuration import (
     parse_int,
 )
 from scripts.config_defaults import (
-    CLASSICAL_PRESET_DEFAULTS,
-    DENOISE_DEFAULT_PRESET,
     EXTRACT_MAX_FRAMES,
-    MESH_DEFAULT_METHOD,
-    MESH_METHODS,
+    COLMAP_MATCHER,
 )
 
 # ---------------------------------------------------------------------------
@@ -92,7 +88,7 @@ class TestParseFloat(unittest.TestCase):
         self.assertAlmostEqual(parse_float("3.14", 0.0), 3.14)
 
     def test_int_to_float(self) -> None:
-        # float(7) → 7.0
+        # float(7) -> 7.0
         self.assertEqual(parse_float(7, 0.0), 7.0)
 
     def test_none_returns_fallback(self) -> None:
@@ -122,7 +118,7 @@ class TestParseChoice(unittest.TestCase):
         self.assertEqual(parse_choice("delta", self._choices, "alpha"), "alpha")
 
     def test_none_returns_fallback(self) -> None:
-        # str(None or "") → "" which is not in choices
+        # str(None or "") -> "" which is not in choices
         self.assertEqual(parse_choice(None, self._choices, "gamma"), "gamma")
 
     def test_empty_string_returns_fallback(self) -> None:
@@ -222,77 +218,7 @@ class TestEnvBool(unittest.TestCase):
 
 
 class TestBuildPipelineConfigExtended(unittest.TestCase):
-    """12 tests for build_pipeline_config."""
-
-    # -- Denoise preset handling ---
-
-    def test_denoise_preset_custom_preserved(self) -> None:
-        cfg = _build({"denoise_preset": "custom"})
-        self.assertEqual(cfg.denoise_preset, "custom")
-
-    def test_denoise_preset_valid_applied(self) -> None:
-        cfg = _build({"denoise_preset": "aggressive_cleanup"})
-        self.assertEqual(cfg.denoise_preset, "aggressive_cleanup")
-        # The algorithm should be taken from the preset's default
-        expected_algo = str(
-            DENOISE_PRESET_DEFAULTS["aggressive_cleanup"]["denoise_algorithm"]
-        )
-        self.assertEqual(cfg.denoise_algorithm, expected_algo)
-
-    def test_denoise_preset_unknown_falls_back(self) -> None:
-        cfg = _build({"denoise_preset": "nonexistent"})
-        self.assertEqual(cfg.denoise_preset, DENOISE_DEFAULT_PRESET)
-
-    # -- Classical preset handling ---
-
-    def test_classical_preset_custom_preserved(self) -> None:
-        cfg = _build({"classical_preset": "custom"})
-        self.assertEqual(cfg.classical_preset, "custom")
-
-    def test_classical_preset_valid_applied(self) -> None:
-        cfg = _build({"classical_preset": "trust_point_cloud"})
-        self.assertEqual(cfg.classical_preset, "trust_point_cloud")
-        expected_depth = int(
-            CLASSICAL_PRESET_DEFAULTS["trust_point_cloud"]["classical_poisson_depth"]
-        )
-        self.assertEqual(cfg.classical_poisson_depth, expected_depth)
-
-    # -- Pi3X frame target clamped to max_frames ---
-
-    def test_pi3x_frame_target_clamped_to_max_frames(self) -> None:
-        cfg = _build({"max_frames": 10, "pi3x_frame_target": 999})
-        self.assertEqual(cfg.max_frames, 10)
-        self.assertEqual(cfg.pi3x_frame_target, 10)
-
-    # -- Meshwrap lower-bound clamps ---
-
-    def test_meshwrap_poisson_depth_min_6(self) -> None:
-        cfg = _build({"meshwrap_poisson_depth": 2})
-        self.assertEqual(cfg.meshwrap_poisson_depth, 6)
-
-    def test_meshwrap_poisson_scale_min_1(self) -> None:
-        cfg = _build({"meshwrap_poisson_scale": 0.5})
-        self.assertEqual(cfg.meshwrap_poisson_scale, 1.0)
-
-    # -- Mesh repair clamps ---
-
-    def test_mesh_repair_clamps(self) -> None:
-        cfg = _build(
-            {
-                "mesh_repair_max_diameter_ratio": 0.001,  # below 0.005
-                "mesh_repair_y_band_ratio": 99.0,  # above 0.50
-                "mesh_repair_smooth_iters": -5,  # below 0
-            }
-        )
-        self.assertEqual(cfg.mesh_repair_max_diameter_ratio, 0.005)
-        self.assertEqual(cfg.mesh_repair_y_band_ratio, 0.50)
-        self.assertEqual(cfg.mesh_repair_smooth_iters, 0)
-
-    # -- Env override: MESH_METHOD ---
-
-    def test_env_override_mesh_method(self) -> None:
-        cfg = _build({}, env={"MESH_METHOD": "diffcd"})
-        self.assertEqual(cfg.mesh_method, "diffcd")
+    """Tests for build_pipeline_config."""
 
     # -- auto_accept ---
 
@@ -306,20 +232,19 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         cfg_default = _build({})
         self.assertFalse(cfg_default.auto_accept)
 
-    # -- mesh_method ---
+    # -- colmap_matcher ---
 
-    def test_mesh_method_parse_choice(self) -> None:
-        cfg_poisson = _build({"mesh_method": "poisson"})
-        self.assertEqual(cfg_poisson.mesh_method, "poisson")
+    def test_colmap_matcher_parse_choice(self) -> None:
+        cfg_seq = _build({"colmap_matcher": "sequential"})
+        self.assertEqual(cfg_seq.colmap_matcher, "sequential")
 
-        cfg_diffcd = _build({"mesh_method": "diffcd"})
-        self.assertEqual(cfg_diffcd.mesh_method, "diffcd")
+        cfg_exh = _build({"colmap_matcher": "exhaustive"})
+        self.assertEqual(cfg_exh.colmap_matcher, "exhaustive")
 
-        cfg_invalid = _build({"mesh_method": "invalid_method"})
-        self.assertEqual(cfg_invalid.mesh_method, MESH_DEFAULT_METHOD)
+        cfg_invalid = _build({"colmap_matcher": "invalid_matcher"})
+        self.assertEqual(cfg_invalid.colmap_matcher, COLMAP_MATCHER)
 
     def test_ground_plane_enabled_parse_and_env(self) -> None:
-        """2.2.23 — ground_plane_enabled parsing + env var."""
         cfg_yes = _build({"ground_plane_enabled": "yes"})
         self.assertTrue(cfg_yes.ground_plane_enabled)
 
@@ -331,19 +256,16 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         from scripts.config_defaults import GROUND_PLANE_ENABLED
         self.assertEqual(cfg_default.ground_plane_enabled, GROUND_PLANE_ENABLED)
 
-    def test_frame_interval_max_frames_pixel_limit_env(self) -> None:
-        """2.2.24 — frame_interval / max_frames / pixel_limit env overrides."""
+    def test_frame_interval_max_frames_env(self) -> None:
         cfg_env = _build(
             {},
             env={
                 "FRAME_INTERVAL": "7",
                 "MAX_FRAMES": "30",
-                "PIXEL_LIMIT": "256000",
             },
         )
         self.assertEqual(cfg_env.frame_interval, 7)
         self.assertEqual(cfg_env.max_frames, 30)
-        self.assertEqual(cfg_env.pixel_limit, 256000)
 
         # Raw overrides env
         cfg_raw = _build(
@@ -353,46 +275,52 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         self.assertEqual(cfg_raw.frame_interval, 3)
 
     def test_empty_raw_produces_valid_config(self) -> None:
-        """2.2.25 — Empty raw {} produces valid config."""
         cfg = _build({})
         self.assertGreater(cfg.frame_interval, 0)
         self.assertGreaterEqual(cfg.max_frames, 2)
         self.assertEqual(cfg.video_path, "input.mp4")
 
+    # -- gs2mesh fields ---
 
-# ===================================================================
-# TestDenoisePresetDefaults
-# ===================================================================
+    def test_gs2mesh_iterations_clamped(self) -> None:
+        cfg = _build({"gs2mesh_gs_iterations": 500})
+        self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
 
+    def test_gs2mesh_tsdf_voxel_size_clamped(self) -> None:
+        cfg = _build({"gs2mesh_tsdf_voxel_size": 0.0001})
+        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
 
-class TestDenoisePresetDefaults(unittest.TestCase):
-    """2 tests for DENOISE_PRESET_DEFAULTS structure."""
+    def test_gs2mesh_tsdf_depth_trunc_clamped(self) -> None:
+        cfg = _build({"gs2mesh_tsdf_depth_trunc": 0.001})
+        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
 
-    _EXPECTED_KEYS: set[str] = {
-        "denoise_algorithm",
-        "denoise_dbscan_eps",
-        "denoise_dbscan_eps_ratio",
-        "denoise_dbscan_min_samples",
-        "denoise_dbscan_max_points",
-        "denoise_sor_neighbors",
-        "denoise_sor_std_ratio",
-        "denoise_radius_neighbors",
-        "denoise_radius_radius_ratio",
-    }
+    def test_gs2mesh_use_masks_parsed(self) -> None:
+        cfg = _build({"gs2mesh_use_masks": False})
+        self.assertFalse(cfg.gs2mesh_use_masks)
 
-    def test_all_presets_have_full_keys(self) -> None:
-        for name, vals in DENOISE_PRESET_DEFAULTS.items():
-            with self.subTest(preset=name):
-                self.assertEqual(set(vals.keys()), self._EXPECTED_KEYS)
+    # -- colmap fields ---
 
-    def test_all_keys_have_denoise_prefix(self) -> None:
-        for name, vals in DENOISE_PRESET_DEFAULTS.items():
-            for key in vals:
-                with self.subTest(preset=name, key=key):
-                    self.assertTrue(
-                        key.startswith("denoise_"),
-                        f"Key {key!r} in preset {name!r} missing 'denoise_' prefix",
-                    )
+    def test_colmap_max_features_clamped(self) -> None:
+        cfg = _build({"colmap_max_features": 500})
+        self.assertEqual(cfg.colmap_max_features, 1000)
+
+    def test_colmap_image_size_clamped(self) -> None:
+        cfg = _build({"colmap_image_size": 100})
+        self.assertEqual(cfg.colmap_image_size, 256)
+
+    # -- texture fields ---
+
+    def test_texture_size_zero_is_preserved_for_auto_mode(self) -> None:
+        cfg = _build({"texture_size": 0})
+        self.assertEqual(cfg.texture_size, 0)
+
+    def test_texture_view_assign_mode_defaults_to_region_gc(self) -> None:
+        cfg = _build({})
+        self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
+
+    def test_texture_quality_boost_defaults_to_true(self) -> None:
+        cfg = _build({})
+        self.assertTrue(cfg.texture_quality_boost)
 
 
 if __name__ == "__main__":

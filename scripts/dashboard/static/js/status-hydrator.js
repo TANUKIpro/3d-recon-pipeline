@@ -2,8 +2,7 @@
  * Status snapshot hydration — applies pipeline status updates to all UI modules.
  */
 
-import { STAGE_COUNT, CLASSICAL_PREVIEW_TITLE } from './constants.js';
-import { normalizeMeshMethod } from './utils.js';
+import { STAGE_COUNT } from './constants.js';
 import {
   getStageInfo,
   isStageDone,
@@ -32,10 +31,8 @@ export class StatusHydrator {
   resetHydratedKey() { this._hydratedStatusKey = ''; }
 
   async hydrateOutputs(statusMsg, opts = {}) {
-    const { preview, cameraOverlay, sam2, sam2Verify, config, stageCtrl, setMeshPhaseStatus, getMeshMethod } = this._deps;
+    const { preview, cameraOverlay, sam2, sam2Verify, config, stageCtrl } = this._deps;
     if (!statusMsg?.object_name) return;
-    const statusMeshMethod = normalizeMeshMethod(statusMsg?.mesh_method || getMeshMethod());
-    const isPoissonMesh = statusMeshMethod === 'poisson';
 
     const key = buildStatusKey(statusMsg);
     if (!opts.force && key === this._hydratedStatusKey) {
@@ -55,27 +52,11 @@ export class StatusHydrator {
     }
 
     if (isStageAvailable(statusMsg, 2)) {
-      const pi3xFile = isStageDone(statusMsg, 3) ? 'object.ply' : 'object_full.ply';
-      await preview.loadPi3xResults(cameraOverlay, pi3xFile);
+      await preview.loadColmapResults(cameraOverlay);
     }
 
     if (isStageDone(statusMsg, 4)) await preview.loadStageResult(4);
-    if (isStageDone(statusMsg, 5)) {
-      await preview.loadStageResult(5, { preferPreview: isPoissonMesh });
-      if (isPoissonMesh) {
-        setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
-      } else {
-        setMeshPhaseStatus('', '');
-      }
-    } else if (statusMsg.running && Number(statusMsg.current_stage) === 5 && isPoissonMesh) {
-      setMeshPhaseStatus('Running: Classical Mesh', 'live');
-    }
-    if (isStageDone(statusMsg, 5) && !isStageDone(statusMsg, 6)) {
-      await preview.showCropBbox(config.getCropScale(), { preferPreview: isPoissonMesh });
-    }
-    if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
-    if (isStageDone(statusMsg, 7)) await preview.loadStageResult(7);
-    if (isStageDone(statusMsg, 8)) await preview.loadStageResult(8);
+    if (isStageDone(statusMsg, 5)) await preview.loadStageResult(5);
 
     if (opts.activate !== false) {
       stageCtrl.activateStage(resolvePreferredStage(statusMsg));
@@ -85,18 +66,12 @@ export class StatusHydrator {
   async applySnapshot(statusMsg, opts = {}) {
     const {
       checkpoints, pipelineUI, stageCtrl, config,
-      taskConfirm, meshPost, meshRepair,
-      applyMeshMethod, getMeshMethod,
-      setMeshPhaseStatus, setStatus, setOverallProgress,
+      taskConfirm,
+      setStatus, setOverallProgress,
     } = this._deps;
 
     this._latestStatusSnapshot = statusMsg;
     checkpoints.applyStatusSnapshot(statusMsg);
-    applyMeshMethod(statusMsg?.mesh_method || getMeshMethod(), { announce: false });
-    if (normalizeMeshMethod(statusMsg?.mesh_method || getMeshMethod()) !== 'poisson') {
-      setMeshPhaseStatus('', '');
-    }
-    pipelineUI.setMeshMethodEnabled(statusMsg?.running !== true);
     pipelineUI.updateAll(statusMsg);
 
     for (let i = 1; i <= STAGE_COUNT; i++) {
@@ -105,8 +80,6 @@ export class StatusHydrator {
     }
 
     taskConfirm.syncFromStatus(statusMsg);
-    meshPost.syncFromStatus(statusMsg);
-    meshRepair.syncFromStatus(statusMsg);
     setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
 
     if (statusMsg.object_name) {
@@ -118,8 +91,6 @@ export class StatusHydrator {
       setStatus('running', 'Running');
       const waiting = statusMsg?.next_stage_confirmation?.required === true;
       const waitingFromStage = Number(statusMsg?.next_stage_confirmation?.from_stage);
-      const meshRepairInteractive = statusMsg?.mesh_repair?.ready === true
-        && getStageInfo(statusMsg, 7)?.status === 'interactive';
       if (waiting) {
         await this.hydrateOutputs(statusMsg, {
           force: opts.forceHydrate === true,
@@ -130,18 +101,6 @@ export class StatusHydrator {
         } else {
           stageCtrl.activateStage(resolvePreferredStage(statusMsg));
         }
-      } else if (meshRepairInteractive) {
-        await this.hydrateOutputs(statusMsg, {
-          force: opts.forceHydrate === true,
-          activate: false,
-        });
-        try {
-          await meshRepair.activateFromApi();
-        } catch (e) {
-          meshRepair.setToolbarVisible(false);
-          meshRepair.setStatus(`Mesh Repair UI failed: ${e.message}`, 'error');
-        }
-        stageCtrl.activateStage(7);
       } else {
         stageCtrl.activateStage(resolvePreferredStage(statusMsg));
       }
@@ -150,11 +109,8 @@ export class StatusHydrator {
 
     config.setRunning(false);
     config.setActiveStage(null);
-    meshRepair.resetState({ resetThreshold: true });
-    meshRepair.setToolbarVisible(false);
-    meshRepair.setStatus('');
 
-    const allDone = [1, 2, 3, 4, 5, 6, 7, 8].every((stage) => isStageDone(statusMsg, stage));
+    const allDone = [1, 2, 3, 4, 5].every((stage) => isStageDone(statusMsg, stage));
     if (allDone) setStatus('complete', 'Done');
     else setStatus('idle', 'Idle');
 

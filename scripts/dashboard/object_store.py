@@ -25,48 +25,23 @@ PREVIEW_FILE_EXTENSIONS = {".ply", ".obj", ".mtl", ".png", ".jpg", ".json"}
 
 STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     1: {"dirs": ("frames",), "files": ()},
-    2: {"dirs": (), "files": ("object_full.ply", "pi3x_cache.npz", "camera_poses.json")},
-    3: {"dirs": ("masks", "masks_ground"), "files": ("object.ply", "ground_plane.json", "ground.ply")},
-    4: {"dirs": (), "files": ("object_denoised.ply",)},
-    5: {
-        "dirs": ("diffcd", "classical_mesh"),
-        "files": (
-            "object_mesh.ply",
-            "object_mesh_preview.ply",
-            "object_mesh_raw.ply",
-            "object_mesh_postprocessed.ply",
-            "object_mesh_input.ply",
-            "object_points.npy",
-            "object_points_with_normals.ply",
-        ),
-    },
-    6: {
-        "dirs": ("mesh_wrap",),
-        "files": ("object_mesh_wrapped.ply",),
-    },
-    7: {"dirs": ("contact_hole_repair",), "files": ("object_mesh_repaired.ply",)},
-    8: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    2: {"dirs": ("colmap_sparse", "colmap_workspace"), "files": ("camera_poses.json", "colmap_sparse_points.ply")},
+    3: {"dirs": ("masks", "masks_ground"), "files": ("ground_plane.json",)},
+    4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
+    5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
 }
 
 RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
     2: {"dirs": ("frames",), "files": ()},
-    3: {"dirs": ("frames",), "files": ("object_full.ply", "camera_poses.json", "pi3x_cache.npz")},
-    4: {"dirs": (), "files": ("object.ply",)},
-    5: {"dirs": (), "files": ("object_denoised.ply",)},
-    6: {"dirs": (), "files": ("object_mesh.ply",)},
-    7: {"dirs": (), "files": ("object_mesh_wrapped.ply",)},
-    8: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "object_mesh_repaired.ply")},
+    3: {"dirs": ("frames",), "files": ("camera_poses.json",)},
+    4: {"dirs": ("frames",), "files": ("camera_poses.json",)},
+    5: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "object_mesh.ply")},
 }
 
 PRIMARY_ARTIFACT_PATHS = (
-    "object_full.ply",
     "camera_poses.json",
-    "object.ply",
-    "object_denoised.ply",
+    "colmap_sparse_points.ply",
     "object_mesh.ply",
-    "object_mesh_preview.ply",
-    "object_mesh_wrapped.ply",
-    "object_mesh_repaired.ply",
     "textured_mesh.obj",
     "texture.png",
     "intrinsics.json",

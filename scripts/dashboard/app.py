@@ -169,7 +169,6 @@ from scripts.dashboard.routes.pipeline import (  # noqa: E402, F401
     pipeline_load_object,
     pipeline_object_info,
     pipeline_objects,
-    pipeline_pi3x_plan,
     pipeline_start,
     pipeline_status,
     pipeline_video_info,
@@ -197,11 +196,6 @@ from scripts.dashboard.routes.preview import (  # noqa: E402, F401
     preview_file,
     preview_object_file,
     preview_outputs,
-)
-from scripts.dashboard.routes.mesh import (  # noqa: E402, F401
-    mesh_postprocess,
-    mesh_repair_candidates,
-    mesh_repair_confirm,
 )
 from scripts.dashboard.routes.health import (  # noqa: E402, F401
     vram_info,

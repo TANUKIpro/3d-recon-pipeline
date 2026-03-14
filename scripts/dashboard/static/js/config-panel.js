@@ -1,20 +1,15 @@
 /**
  * Configuration panel: video/object selection and parameter inputs.
+ *
+ * 5-stage gs2mesh pipeline:
+ *   1. Extract Frames
+ *   2. COLMAP SfM
+ *   3. SAM2 Segmentation
+ *   4. gs2mesh Reconstruction
+ *   5. Texture Bake
  */
 
-import {
-  CLASSICAL_DEFAULTS,
-  CLASSICAL_PRESETS,
-  DENOISE_ALGO_LABELS,
-  DENOISE_ALGO_STEPS,
-  DENOISE_CUSTOM_PRESET,
-  DENOISE_PRESETS,
-  MESHWRAP_DEFAULTS,
-  MESH_REPAIR_DEFAULTS,
-  NEW_OBJECT_VALUE,
-  STAGE_LABELS,
-} from './config/presets.js';
-import * as FrameBudget from './config/frame-budget.js';
+import { NEW_OBJECT_VALUE, STAGE_LABELS } from './config/presets.js';
 import * as FormHelpers from './config/form-helpers.js';
 
 export class ConfigPanel {
@@ -31,87 +26,40 @@ export class ConfigPanel {
     this._objectArtifacts = document.getElementById('object-artifacts');
     this._objectArtifactsEmpty = document.getElementById('object-artifacts-empty');
     this._resumeStageInfo = document.getElementById('cfg-resume-stage-info');
-    this._pi3xFrameTargetValue = document.getElementById('cfg-pi3x-frame-target-value');
-    this._pi3xFrameTargetNote = document.getElementById('cfg-pi3x-frame-target-note');
-    this._pi3xPlanNote = document.getElementById('cfg-pi3x-plan-note');
-    this._pi3xFrameTargetMarker = document.getElementById('cfg-pi3x-frame-target-marker');
     this._refreshObjectsBtn = document.getElementById('btn-refresh-objects');
     this._startBtn = document.getElementById('btn-start');
     this._cancelBtn = document.getElementById('btn-cancel');
 
     this._inputs = {
+      // Stage 1: Extract Frames
       frame_interval: document.getElementById('cfg-frame-interval'),
       max_frames: document.getElementById('cfg-max-frames'),
-      pixel_limit: document.getElementById('cfg-pixel-limit'),
-      pi3x_frame_target: document.getElementById('cfg-pi3x-frame-target'),
-      confidence_threshold: document.getElementById('cfg-conf-threshold'),
-      edge_rtol: document.getElementById('cfg-edge-rtol'),
+
+      // Stage 2: COLMAP SfM
+      colmap_matcher: document.getElementById('cfg-colmap-matcher'),
+      colmap_max_features: document.getElementById('cfg-colmap-max-features'),
+      colmap_image_size: document.getElementById('cfg-colmap-image-size'),
+
+      // Stage 3: SAM2 Segmentation
       sam2_model: document.getElementById('cfg-sam2-model'),
       ground_plane_enabled: document.getElementById('cfg-ground-plane-enabled'),
-      denoise_preset: document.getElementById('cfg-denoise-preset'),
-      denoise_algorithm: document.getElementById('cfg-denoise-algorithm'),
-      denoise_dbscan_eps: document.getElementById('cfg-denoise-dbscan-eps'),
-      denoise_dbscan_eps_ratio: document.getElementById('cfg-denoise-dbscan-eps-ratio'),
-      denoise_dbscan_min_samples: document.getElementById('cfg-denoise-dbscan-min-samples'),
-      denoise_dbscan_max_points: document.getElementById('cfg-denoise-dbscan-max-points'),
-      denoise_sor_neighbors: document.getElementById('cfg-denoise-sor-neighbors'),
-      denoise_sor_std_ratio: document.getElementById('cfg-denoise-sor-std'),
-      denoise_radius_neighbors: document.getElementById('cfg-denoise-radius-neighbors'),
-      denoise_radius_radius_ratio: document.getElementById('cfg-denoise-radius-ratio'),
-      mesh_method: document.getElementById('cfg-mesh-method'),
-      diffcd_batch_size: document.getElementById('cfg-diffcd-batch'),
-      diffcd_n_batches: document.getElementById('cfg-diffcd-nbatches'),
-      diffcd_resolution: document.getElementById('cfg-diffcd-res'),
+
+      // Stage 4: gs2mesh Reconstruction
+      gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
+      gs2mesh_stereo_model: document.getElementById('cfg-gs2mesh-stereo-model'),
+      gs2mesh_tsdf_voxel_size: document.getElementById('cfg-gs2mesh-tsdf-voxel-size'),
+      gs2mesh_tsdf_depth_trunc: document.getElementById('cfg-gs2mesh-tsdf-depth-trunc'),
+      gs2mesh_use_masks: document.getElementById('cfg-gs2mesh-use-masks'),
+
+      // Stage 5: Texture Bake
       texture_size: document.getElementById('cfg-texture-size'),
       texture_view_assign_mode: document.getElementById('cfg-texture-view-assign-mode'),
       texture_quality_boost: document.getElementById('cfg-texture-quality-boost'),
-      meshwrap_poisson_depth: document.getElementById('cfg-meshwrap-poisson-depth'),
-      meshwrap_poisson_scale: document.getElementById('cfg-meshwrap-poisson-scale'),
-      meshwrap_density_trim_q: document.getElementById('cfg-meshwrap-density-trim-q'),
-      meshwrap_target_face_ratio: document.getElementById('cfg-meshwrap-face-ratio'),
-      meshwrap_iterations: document.getElementById('cfg-meshwrap-iterations'),
-      meshwrap_crop_scale: document.getElementById('cfg-meshwrap-crop-scale'),
-      meshwrap_sample_points: document.getElementById('cfg-meshwrap-sample-points'),
-      meshwrap_normal_radius_ratio: document.getElementById('cfg-meshwrap-normal-radius'),
-      meshwrap_smooth_iterations: document.getElementById('cfg-meshwrap-smooth-iterations'),
-      meshwrap_quality_threshold: document.getElementById('cfg-meshwrap-quality-threshold'),
-      meshwrap_method: document.getElementById('cfg-meshwrap-method'),
-      meshwrap_alpha_ratio: document.getElementById('cfg-meshwrap-alpha-ratio'),
-      meshwrap_offset_ratio: document.getElementById('cfg-meshwrap-offset-ratio'),
-      classical_preset: document.getElementById('cfg-classical-preset'),
-      classical_preprocess_enabled: document.getElementById('cfg-classical-preprocess'),
-      classical_poisson_depth: document.getElementById('cfg-classical-poisson-depth'),
-      classical_density_trim_q: document.getElementById('cfg-classical-density-trim-q'),
-      classical_auto_smooth: document.getElementById('cfg-classical-auto-smooth'),
-      classical_smooth_iterations: document.getElementById('cfg-classical-smooth-iters'),
-      classical_downsample_enabled: document.getElementById('cfg-classical-downsample'),
-      classical_downsample_target_faces: document.getElementById('cfg-classical-target-faces'),
-      mesh_repair_enabled: document.getElementById('cfg-mesh-repair-enabled'),
-      mesh_repair_max_diameter_ratio: document.getElementById('cfg-mesh-repair-max-diameter-ratio'),
-      mesh_repair_y_band_ratio: document.getElementById('cfg-mesh-repair-y-band-ratio'),
-      mesh_repair_smooth_iters: document.getElementById('cfg-mesh-repair-smooth-iters'),
     };
-    this._meshwrapSummary = document.getElementById('cfg-meshwrap-summary');
-    this._meshwrapResetBtn = document.getElementById('btn-meshwrap-reset');
-    this._meshwrapPoissonGroup = document.getElementById('cfg-meshwrap-poisson-group');
-    this._meshwrapAlphaGroup = document.getElementById('cfg-meshwrap-alpha-group');
-    this._classicalSummary = document.getElementById('cfg-classical-summary');
-    this._classicalResetBtn = document.getElementById('btn-classical-reset');
-    this._classicalControls = document.getElementById('cfg-classical-controls');
-    this._denoiseSummary = document.getElementById('cfg-denoise-summary');
-    this._denoiseGroups = {
-      dbscan: document.getElementById('cfg-denoise-dbscan'),
-      sor: document.getElementById('cfg-denoise-sor'),
-      radius: document.getElementById('cfg-denoise-radius'),
-    };
-    this._meshMethodSummary = document.getElementById('cfg-mesh-method-summary');
-    this._poissonSummary = document.getElementById('cfg-poisson-summary');
-    this._diffcdControls = document.getElementById('cfg-diffcd-controls');
 
     this.onStart = null;  // callback(config)
     this.onCancel = null; // callback()
     this.onObjectSelected = null; // callback(objectName|null)
-    this.onCropScaleChanged = null; // callback(cropScale: number)
     this._videoMeta = null;
     this._maxFramesAuto = true;
     this._extractDefaults = { frame_interval: 10, max_frames: 50 };
@@ -121,23 +69,12 @@ export class ConfigPanel {
     this._running = false;
     this._selectedObjectSummary = null;
     this._startStage = 1;
-    this._updatingDenoisePreset = false;
-    this._updatingClassicalPreset = false;
-    this._pi3xFrameTargetAuto = true;
-    this._pi3xFrameTargetRecommended = null;
-    this._pi3xPlanRequestId = 0;
-    this._pi3xPlanDebounce = null;
 
-    this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
-    this._updateMeshWrapSummary();
-    this._updateClassicalSummary();
-    this.setMeshMethod(this._inputs.mesh_method?.value || 'poisson');
     this._updateTextureAutoOption(null);
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
     this._updateResumeHint();
-    this._updateFrameBudgetPreview();
   }
 
   setRunning(running) {
@@ -149,11 +86,8 @@ export class ConfigPanel {
     this._objectNameInput.disabled = running;
     this._refreshObjectsBtn.disabled = running;
     for (const inp of Object.values(this._inputs)) {
-      inp.disabled = running;
+      if (inp) inp.disabled = running;
     }
-    if (this._meshwrapResetBtn) this._meshwrapResetBtn.disabled = running;
-    if (this._inputs.meshwrap_method) this._inputs.meshwrap_method.disabled = running;
-    if (this._classicalResetBtn) this._classicalResetBtn.disabled = running;
   }
 
   setActiveStage(stage) {
@@ -162,7 +96,6 @@ export class ConfigPanel {
       this._sections.forEach(s => s.classList.remove('stage-visible'));
       this._title.innerHTML = 'Configuration';
       this._updateResumeHint();
-      this._updateFrameBudgetPreview();
       return;
     }
 
@@ -177,7 +110,6 @@ export class ConfigPanel {
     this._title.innerHTML = `Configuration <span class="config-stage-name">\u2014 ${STAGE_LABELS[stage] || 'Stage '+stage}</span>`;
     this._startStage = this._clampStage(stage);
     this._updateResumeHint();
-    this._updateFrameBudgetPreview();
   }
 
   setObjectName(name) {
@@ -198,42 +130,6 @@ export class ConfigPanel {
       this._renderArtifacts(null);
     }
     this._updateResumeHint();
-    this._updateFrameBudgetPreview();
-  }
-
-  setMeshMethod(method) {
-    const normalized = String(method || '').trim().toLowerCase();
-    const resolved = normalized === 'diffcd' ? 'diffcd' : 'poisson';
-    if (this._inputs.mesh_method) {
-      this._inputs.mesh_method.value = resolved;
-    }
-
-    const isDiffcd = resolved === 'diffcd';
-    if (this._meshMethodSummary) {
-      this._meshMethodSummary.textContent = isDiffcd
-        ? 'Learning Mesh (DiffCD) is active.'
-        : 'Classical Mesh pipeline is active.';
-    }
-    if (this._poissonSummary) {
-      this._poissonSummary.classList.toggle('hidden', isDiffcd);
-    }
-    if (this._diffcdControls) {
-      this._diffcdControls.classList.toggle('hidden', !isDiffcd);
-    }
-    if (this._classicalControls) {
-      this._classicalControls.classList.toggle('hidden', isDiffcd);
-    }
-  }
-
-  getMeshMethod() {
-    return this._inputs.mesh_method?.value || 'poisson';
-  }
-
-  getCropScale() {
-    return this._parsePositiveFloat(
-      this._inputs.meshwrap_crop_scale?.value,
-      MESHWRAP_DEFAULTS.meshwrap_crop_scale,
-    );
   }
 
   getConfig() {
@@ -242,107 +138,51 @@ export class ConfigPanel {
     this._objectNameInput.value = objectName;
     const resumeFromStage = this._resolveResumeStage();
     const maxFrames = this._resolveMaxFrames();
-    const pi3xFrameTarget = this._resolvePi3xFrameTarget(maxFrames);
 
     return {
       video_path: this._videoSelect.value,
       object_name: objectName,
       resume_from_stage: resumeFromStage,
+
+      // Stage 1: Extract Frames
       frame_interval: this._parsePositiveInt(
         this._inputs.frame_interval.value,
         this._extractDefaults.frame_interval,
       ),
       max_frames: maxFrames,
-      pixel_limit: parseInt(this._inputs.pixel_limit.value) || 255000,
-      pi3x_frame_target: pi3xFrameTarget,
-      confidence_threshold: parseFloat(this._inputs.confidence_threshold.value) || 0.2,
-      edge_rtol: parseFloat(this._inputs.edge_rtol.value) || 0.03,
+
+      // Stage 2: COLMAP SfM
+      colmap_matcher: this._inputs.colmap_matcher?.value || 'sequential',
+      colmap_max_features: this._parsePositiveInt(
+        this._inputs.colmap_max_features?.value,
+        8192,
+      ),
+      colmap_image_size: this._parsePositiveInt(
+        this._inputs.colmap_image_size?.value,
+        1024,
+      ),
+
+      // Stage 3: SAM2 Segmentation
       sam2_model: this._inputs.sam2_model.value,
       ground_plane_enabled: this._inputs.ground_plane_enabled?.checked ?? true,
-      denoise_preset: this._inputs.denoise_preset.value || 'balanced',
-      denoise_algorithm: this._inputs.denoise_algorithm.value || 'dbscan_sor',
-      denoise_dbscan_eps: this._parseNonNegativeFloat(this._inputs.denoise_dbscan_eps.value, 0.0),
-      denoise_dbscan_eps_ratio: this._parsePositiveFloat(this._inputs.denoise_dbscan_eps_ratio.value, 0.02),
-      denoise_dbscan_min_samples: this._parsePositiveInt(this._inputs.denoise_dbscan_min_samples.value, 10),
-      denoise_dbscan_max_points: this._parsePositiveInt(this._inputs.denoise_dbscan_max_points.value, 500000),
-      denoise_sor_neighbors: this._parsePositiveInt(this._inputs.denoise_sor_neighbors.value, 20),
-      denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
-      denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
-      denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
-      mesh_method: this.getMeshMethod(),
-      diffcd_batch_size: parseInt(this._inputs.diffcd_batch_size.value) || 5000,
-      diffcd_n_batches: parseInt(this._inputs.diffcd_n_batches.value) || 30000,
-      diffcd_resolution: parseInt(this._inputs.diffcd_resolution.value) || 512,
-      meshwrap_poisson_depth: this._parsePositiveInt(
-        this._inputs.meshwrap_poisson_depth?.value,
-        MESHWRAP_DEFAULTS.meshwrap_poisson_depth,
+
+      // Stage 4: gs2mesh Reconstruction
+      gs2mesh_gs_iterations: this._parsePositiveInt(
+        this._inputs.gs2mesh_gs_iterations?.value,
+        7000,
       ),
-      meshwrap_poisson_scale: this._parsePositiveFloat(
-        this._inputs.meshwrap_poisson_scale?.value,
-        MESHWRAP_DEFAULTS.meshwrap_poisson_scale,
+      gs2mesh_stereo_model: this._inputs.gs2mesh_stereo_model?.value || 'DLNR',
+      gs2mesh_tsdf_voxel_size: this._parsePositiveFloat(
+        this._inputs.gs2mesh_tsdf_voxel_size?.value,
+        0.004,
       ),
-      meshwrap_density_trim_q: this._parseNonNegativeFloat(
-        this._inputs.meshwrap_density_trim_q?.value,
-        MESHWRAP_DEFAULTS.meshwrap_density_trim_q,
+      gs2mesh_tsdf_depth_trunc: this._parsePositiveFloat(
+        this._inputs.gs2mesh_tsdf_depth_trunc?.value,
+        0.12,
       ),
-      meshwrap_target_face_ratio: this._parsePositiveFloat(
-        this._inputs.meshwrap_target_face_ratio?.value,
-        MESHWRAP_DEFAULTS.meshwrap_target_face_ratio,
-      ),
-      meshwrap_iterations: this._parsePositiveInt(
-        this._inputs.meshwrap_iterations?.value,
-        MESHWRAP_DEFAULTS.meshwrap_iterations,
-      ),
-      meshwrap_crop_scale: this._parsePositiveFloat(
-        this._inputs.meshwrap_crop_scale?.value,
-        MESHWRAP_DEFAULTS.meshwrap_crop_scale,
-      ),
-      meshwrap_sample_points: this._parsePositiveInt(
-        this._inputs.meshwrap_sample_points?.value,
-        MESHWRAP_DEFAULTS.meshwrap_sample_points,
-      ),
-      meshwrap_normal_radius_ratio: this._parsePositiveFloat(
-        this._inputs.meshwrap_normal_radius_ratio?.value,
-        MESHWRAP_DEFAULTS.meshwrap_normal_radius_ratio,
-      ),
-      meshwrap_smooth_iterations: this._parseNonNegativeInt(
-        this._inputs.meshwrap_smooth_iterations?.value,
-        MESHWRAP_DEFAULTS.meshwrap_smooth_iterations,
-      ),
-      meshwrap_quality_threshold: this._parseNonNegativeFloat(
-        this._inputs.meshwrap_quality_threshold?.value,
-        MESHWRAP_DEFAULTS.meshwrap_quality_threshold,
-      ),
-      meshwrap_method: this._inputs.meshwrap_method?.value || MESHWRAP_DEFAULTS.meshwrap_method,
-      meshwrap_alpha_ratio: this._parsePositiveFloat(
-        this._inputs.meshwrap_alpha_ratio?.value,
-        MESHWRAP_DEFAULTS.meshwrap_alpha_ratio,
-      ),
-      meshwrap_offset_ratio: this._parsePositiveFloat(
-        this._inputs.meshwrap_offset_ratio?.value,
-        MESHWRAP_DEFAULTS.meshwrap_offset_ratio,
-      ),
-      classical_preset: this._inputs.classical_preset?.value || 'trust_point_cloud',
-      classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
-      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 11),
-      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.001),
-      classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
-      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 0),
-      classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
-      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 500000),
-      mesh_repair_enabled: Boolean(this._inputs.mesh_repair_enabled?.checked),
-      mesh_repair_max_diameter_ratio: this._parsePositiveFloat(
-        this._inputs.mesh_repair_max_diameter_ratio?.value,
-        MESH_REPAIR_DEFAULTS.mesh_repair_max_diameter_ratio,
-      ),
-      mesh_repair_y_band_ratio: this._parsePositiveFloat(
-        this._inputs.mesh_repair_y_band_ratio?.value,
-        MESH_REPAIR_DEFAULTS.mesh_repair_y_band_ratio,
-      ),
-      mesh_repair_smooth_iters: this._parseNonNegativeInt(
-        this._inputs.mesh_repair_smooth_iters?.value,
-        MESH_REPAIR_DEFAULTS.mesh_repair_smooth_iters,
-      ),
+      gs2mesh_use_masks: this._inputs.gs2mesh_use_masks?.checked ?? true,
+
+      // Stage 5: Texture Bake
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
       texture_view_assign_mode: this._inputs.texture_view_assign_mode?.value || 'legacy',
       texture_quality_boost: Boolean(this._inputs.texture_quality_boost?.checked),
@@ -389,7 +229,6 @@ export class ConfigPanel {
         this._videoSelect.appendChild(opt);
         this._updateTextureAutoOption(null);
         this._applySuggestedObjectName();
-        this._updateFrameBudgetPreview();
         return;
       }
 
@@ -404,7 +243,6 @@ export class ConfigPanel {
     } catch (e) {
       this._videoSelect.innerHTML = '<option value="">Error loading videos</option>';
       this._updateTextureAutoOption(null);
-      this._updateFrameBudgetPreview();
     }
   }
 
@@ -427,114 +265,6 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
-    this._inputs.pixel_limit.addEventListener('input', () => this._updateFrameBudgetPreview());
-    this._inputs.pi3x_frame_target.addEventListener('input', () => this._onPi3xFrameTargetInput());
-    this._inputs.denoise_preset.addEventListener('change', () => {
-      const preset = this._inputs.denoise_preset.value;
-      if (preset === DENOISE_CUSTOM_PRESET) {
-        this._updateDenoiseControls();
-        this._updateDenoiseSummary();
-        return;
-      }
-      this._applyDenoisePreset(preset);
-    });
-    this._inputs.denoise_algorithm.addEventListener('change', () => {
-      this._updateDenoiseControls();
-      this._onDenoiseInputChanged();
-    });
-    for (const key of [
-      'denoise_dbscan_eps',
-      'denoise_dbscan_eps_ratio',
-      'denoise_dbscan_min_samples',
-      'denoise_dbscan_max_points',
-      'denoise_sor_neighbors',
-      'denoise_sor_std_ratio',
-      'denoise_radius_neighbors',
-      'denoise_radius_radius_ratio',
-    ]) {
-      this._inputs[key].addEventListener('input', () => this._onDenoiseInputChanged());
-    }
-
-    for (const key of [
-      'meshwrap_poisson_depth',
-      'meshwrap_poisson_scale',
-      'meshwrap_density_trim_q',
-      'meshwrap_target_face_ratio',
-      'meshwrap_iterations',
-      'meshwrap_crop_scale',
-      'meshwrap_sample_points',
-      'meshwrap_normal_radius_ratio',
-      'meshwrap_smooth_iterations',
-      'meshwrap_quality_threshold',
-      'meshwrap_alpha_ratio',
-      'meshwrap_offset_ratio',
-    ]) {
-      if (this._inputs[key]) {
-        this._inputs[key].addEventListener('input', () => this._onMeshWrapInputChanged());
-      }
-    }
-    if (this._inputs.meshwrap_method) {
-      this._inputs.meshwrap_method.addEventListener('change', () => {
-        this._updateMeshWrapMethodVisibility();
-        this._onMeshWrapInputChanged();
-      });
-    }
-    for (const key of [
-      'mesh_repair_max_diameter_ratio',
-      'mesh_repair_y_band_ratio',
-      'mesh_repair_smooth_iters',
-    ]) {
-      if (this._inputs[key]) {
-        this._inputs[key].addEventListener('input', () => this._updateMeshWrapSummary());
-      }
-    }
-    if (this._inputs.mesh_repair_enabled) {
-      this._inputs.mesh_repair_enabled.addEventListener('change', () => this._updateMeshWrapSummary());
-    }
-    if (this._meshwrapResetBtn) {
-      this._meshwrapResetBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this._resetMeshWrapParams();
-      });
-    }
-
-    if (this._inputs.classical_preset) {
-      this._inputs.classical_preset.addEventListener('change', () => {
-        const preset = this._inputs.classical_preset.value;
-        if (preset === 'custom') {
-          this._updateClassicalSummary();
-          return;
-        }
-        this._applyClassicalPreset(preset);
-      });
-    }
-    for (const key of [
-      'classical_poisson_depth',
-      'classical_density_trim_q',
-      'classical_smooth_iterations',
-      'classical_downsample_target_faces',
-    ]) {
-      if (this._inputs[key]) {
-        this._inputs[key].addEventListener('input', () => this._onClassicalInputChanged());
-      }
-    }
-    for (const key of [
-      'classical_preprocess_enabled',
-      'classical_auto_smooth',
-      'classical_downsample_enabled',
-    ]) {
-      if (this._inputs[key]) {
-        this._inputs[key].addEventListener('change', () => this._onClassicalInputChanged());
-      }
-    }
-    if (this._classicalResetBtn) {
-      this._classicalResetBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this._applyClassicalPreset('trust_point_cloud');
-      });
-    }
 
     this._objectSelect.addEventListener('change', () => {
       this._selectObject(this._objectSelect.value);
@@ -556,7 +286,6 @@ export class ConfigPanel {
         this._renderArtifacts(null);
       }
       this._updateResumeHint();
-      this._updateFrameBudgetPreview();
     });
 
     this._objectNameInput.addEventListener('change', () => {
@@ -574,7 +303,6 @@ export class ConfigPanel {
         this._renderObjectSummary(null, normalized);
       }
       this._updateResumeHint();
-      this._updateFrameBudgetPreview();
     });
 
     this._refreshObjectsBtn.addEventListener('click', () => {
@@ -592,7 +320,7 @@ export class ConfigPanel {
     for (const o of objects) {
       const opt = document.createElement('option');
       opt.value = o.name;
-      opt.textContent = `${o.name} (${o.complete_stages || 0}/8)`;
+      opt.textContent = `${o.name} (${o.complete_stages || 0}/5)`;
       this._objectSelect.appendChild(opt);
     }
   }
@@ -609,7 +337,6 @@ export class ConfigPanel {
       this._renderArtifacts(summary);
       this._refreshObjectInfo(name);
       this._updateResumeHint();
-      this._updateFrameBudgetPreview();
       if (notify && !this._running && this.onObjectSelected) {
         this.onObjectSelected(name);
       }
@@ -631,7 +358,6 @@ export class ConfigPanel {
     }
     this._renderArtifacts(null);
     this._updateResumeHint();
-    this._updateFrameBudgetPreview();
     if (notify && !this._running && this.onObjectSelected) {
       this.onObjectSelected(null);
     }
@@ -657,7 +383,6 @@ export class ConfigPanel {
       this._renderObjectSummary(object, object.name);
       this._renderArtifacts(object);
       this._updateResumeHint();
-      this._updateFrameBudgetPreview();
     } catch (e) {
       // Keep previously rendered summary.
     }
@@ -666,7 +391,7 @@ export class ConfigPanel {
   _renderObjectSummary(object, fallbackName = '') {
     if (object) {
       const details = [
-        `${object.complete_stages || 0}/8 stages`,
+        `${object.complete_stages || 0}/5 stages`,
         `${object.file_count || 0} files`,
         `${this._formatSize(object.size_mb)}`,
       ];
@@ -735,7 +460,6 @@ export class ConfigPanel {
       this._videoMeta = null;
       this._updateTextureAutoOption(null);
       this._applySuggestedObjectName();
-      this._updateFrameBudgetPreview();
       return;
     }
     this._videoInfo.textContent = 'Loading...';
@@ -745,7 +469,6 @@ export class ConfigPanel {
         this._videoInfo.textContent = 'Failed to load video info';
         this._videoMeta = null;
         this._updateTextureAutoOption(null);
-        this._updateFrameBudgetPreview();
         return;
       }
       const data = await res.json();
@@ -753,7 +476,6 @@ export class ConfigPanel {
         this._videoInfo.textContent = data.error;
         this._videoMeta = null;
         this._updateTextureAutoOption(null);
-        this._updateFrameBudgetPreview();
         return;
       }
       this._videoMeta = data;
@@ -775,8 +497,6 @@ export class ConfigPanel {
       this._inputs.frame_interval.value = String(suggestedInterval);
       this._inputs.max_frames.value = String(clampedSuggestedMaxFrames);
       this._maxFramesAuto = true;
-      this._pi3xFrameTargetAuto = true;
-      this._pi3xFrameTargetRecommended = null;
 
       const mins = Math.floor(data.duration / 60);
       const secs = (data.duration % 60).toFixed(1);
@@ -784,37 +504,58 @@ export class ConfigPanel {
       this._videoInfo.textContent =
         `${data.width}x${data.height} | ${data.fps} fps | ${data.total_frames} frames | ${dur}`;
       this._applySuggestedObjectName();
-      this._updateFrameBudgetPreview();
     } catch {
       this._videoInfo.textContent = 'Failed to load video info';
       this._videoMeta = null;
       this._updateTextureAutoOption(null);
-      this._updateFrameBudgetPreview();
     }
   }
 
   _applyConfig(rawCfg) {
     const cfg = rawCfg || {};
-    for (const key of [
-      'frame_interval',
-      'max_frames',
-      'pixel_limit',
-      'pi3x_frame_target',
-      'confidence_threshold',
-      'edge_rtol',
-      'diffcd_batch_size',
-      'diffcd_n_batches',
-      'diffcd_resolution',
-      'texture_size',
-    ]) {
+
+    // Stage 1: Extract Frames
+    for (const key of ['frame_interval', 'max_frames']) {
       if (cfg[key] == null || !this._inputs[key]) continue;
       this._inputs[key].value = String(cfg[key]);
     }
+
+    // Stage 2: COLMAP SfM
+    if (cfg.colmap_matcher != null) {
+      this._setSelectValue(this._inputs.colmap_matcher, String(cfg.colmap_matcher));
+    }
+    for (const key of ['colmap_max_features', 'colmap_image_size']) {
+      if (cfg[key] == null || !this._inputs[key]) continue;
+      this._inputs[key].value = String(cfg[key]);
+    }
+
+    // Stage 3: SAM2 Segmentation
     if (cfg.sam2_model != null) {
       this._setSelectValue(this._inputs.sam2_model, String(cfg.sam2_model));
     }
     if (cfg.ground_plane_enabled != null && this._inputs.ground_plane_enabled) {
       this._inputs.ground_plane_enabled.checked = cfg.ground_plane_enabled !== false;
+    }
+
+    // Stage 4: gs2mesh Reconstruction
+    for (const key of [
+      'gs2mesh_gs_iterations',
+      'gs2mesh_tsdf_voxel_size',
+      'gs2mesh_tsdf_depth_trunc',
+    ]) {
+      if (cfg[key] == null || !this._inputs[key]) continue;
+      this._inputs[key].value = String(cfg[key]);
+    }
+    if (cfg.gs2mesh_stereo_model != null) {
+      this._setSelectValue(this._inputs.gs2mesh_stereo_model, String(cfg.gs2mesh_stereo_model));
+    }
+    if (cfg.gs2mesh_use_masks != null && this._inputs.gs2mesh_use_masks) {
+      this._inputs.gs2mesh_use_masks.checked = cfg.gs2mesh_use_masks !== false;
+    }
+
+    // Stage 5: Texture Bake
+    if (cfg.texture_size != null && this._inputs.texture_size) {
+      this._inputs.texture_size.value = String(cfg.texture_size);
     }
     if (cfg.texture_view_assign_mode != null) {
       this._setSelectValue(this._inputs.texture_view_assign_mode, String(cfg.texture_view_assign_mode));
@@ -822,337 +563,57 @@ export class ConfigPanel {
     if (cfg.texture_quality_boost != null && this._inputs.texture_quality_boost) {
       this._inputs.texture_quality_boost.checked = Boolean(cfg.texture_quality_boost);
     }
-    this.setMeshMethod(String(cfg.mesh_method || this.getMeshMethod() || 'poisson'));
-
-    const preset = String(cfg.denoise_preset || '');
-    if (preset && preset !== DENOISE_CUSTOM_PRESET && DENOISE_PRESETS[preset]) {
-      this._applyDenoisePreset(preset);
-    } else {
-      this._inputs.denoise_preset.value = DENOISE_CUSTOM_PRESET;
-    }
-
-    if (cfg.denoise_algorithm != null) {
-      this._setSelectValue(this._inputs.denoise_algorithm, String(cfg.denoise_algorithm));
-    }
-    for (const key of [
-      'denoise_dbscan_eps',
-      'denoise_dbscan_eps_ratio',
-      'denoise_dbscan_min_samples',
-      'denoise_dbscan_max_points',
-      'denoise_sor_neighbors',
-      'denoise_sor_std_ratio',
-      'denoise_radius_neighbors',
-      'denoise_radius_radius_ratio',
-    ]) {
-      if (cfg[key] == null || !this._inputs[key]) continue;
-      this._inputs[key].value = String(cfg[key]);
-    }
-
-    for (const key of [
-      'meshwrap_poisson_depth',
-      'meshwrap_poisson_scale',
-      'meshwrap_density_trim_q',
-      'meshwrap_target_face_ratio',
-      'meshwrap_iterations',
-      'meshwrap_crop_scale',
-      'meshwrap_sample_points',
-      'meshwrap_normal_radius_ratio',
-      'meshwrap_smooth_iterations',
-      'meshwrap_quality_threshold',
-      'meshwrap_alpha_ratio',
-      'meshwrap_offset_ratio',
-    ]) {
-      if (cfg[key] != null && this._inputs[key]) {
-        this._inputs[key].value = String(cfg[key]);
-      }
-    }
-    if (cfg.meshwrap_method != null && this._inputs.meshwrap_method) {
-      this._inputs.meshwrap_method.value = cfg.meshwrap_method;
-    }
-    this._updateMeshWrapMethodVisibility();
-    for (const key of [
-      'mesh_repair_max_diameter_ratio',
-      'mesh_repair_y_band_ratio',
-      'mesh_repair_smooth_iters',
-    ]) {
-      if (cfg[key] != null && this._inputs[key]) {
-        this._inputs[key].value = String(cfg[key]);
-      }
-    }
-    if (cfg.mesh_repair_enabled != null && this._inputs.mesh_repair_enabled) {
-      this._inputs.mesh_repair_enabled.checked = Boolean(cfg.mesh_repair_enabled);
-    }
-
-    // Classical mesh parameters
-    const classicalPreset = String(cfg.classical_preset || '');
-    if (classicalPreset && classicalPreset !== 'custom' && CLASSICAL_PRESETS[classicalPreset]) {
-      this._applyClassicalPreset(classicalPreset);
-    } else {
-      if (cfg.classical_preprocess_enabled != null && this._inputs.classical_preprocess_enabled) {
-        this._inputs.classical_preprocess_enabled.checked = Boolean(cfg.classical_preprocess_enabled);
-      }
-      for (const key of [
-        'classical_poisson_depth',
-        'classical_density_trim_q',
-        'classical_smooth_iterations',
-        'classical_downsample_target_faces',
-      ]) {
-        if (cfg[key] != null && this._inputs[key]) {
-          this._inputs[key].value = String(cfg[key]);
-        }
-      }
-      if (cfg.classical_auto_smooth != null && this._inputs.classical_auto_smooth) {
-        this._inputs.classical_auto_smooth.checked = Boolean(cfg.classical_auto_smooth);
-      }
-      if (cfg.classical_downsample_enabled != null && this._inputs.classical_downsample_enabled) {
-        this._inputs.classical_downsample_enabled.checked = Boolean(cfg.classical_downsample_enabled);
-      }
-      if (this._inputs.classical_preset) {
-        this._inputs.classical_preset.value = 'custom';
-      }
-      this._onClassicalInputChanged();
-    }
 
     this._maxFramesAuto = false;
-    this._pi3xFrameTargetAuto = cfg.pi3x_frame_target == null;
-    this._pi3xFrameTargetRecommended = null;
-    this._updateDenoiseControls();
-    this._onDenoiseInputChanged();
-    this._updateMeshWrapSummary();
-    this._updateFrameBudgetPreview();
   }
 
-  _applyDenoisePreset(presetName) {
-    const preset = DENOISE_PRESETS[presetName] || DENOISE_PRESETS.balanced;
-    const resolvedName = DENOISE_PRESETS[presetName] ? presetName : 'balanced';
-    this._updatingDenoisePreset = true;
-    try {
-      this._inputs.denoise_preset.value = resolvedName;
-      for (const [key, value] of Object.entries(preset)) {
-        if (!this._inputs[key]) continue;
-        this._inputs[key].value = String(value);
+  // ── Frame extraction helpers ─────────────────────────────────────
+
+  _onFrameIntervalInput() {
+    if (this._videoMeta) {
+      const interval = this._parsePositiveInt(
+        this._inputs.frame_interval.value,
+        this._extractDefaults.frame_interval,
+      );
+      this._extractDefaults.frame_interval = interval;
+      if (this._maxFramesAuto) {
+        const maxFrames = this._estimateMaxFrames(this._videoMeta.total_frames, interval);
+        this._extractDefaults.max_frames = maxFrames;
+        this._inputs.max_frames.value = String(maxFrames);
       }
-    } finally {
-      this._updatingDenoisePreset = false;
-    }
-    this._updateDenoiseControls();
-    this._updateDenoiseSummary();
-  }
-
-  _onDenoiseInputChanged() {
-    this._updateDenoiseControls();
-    if (!this._updatingDenoisePreset) {
-      const matched = this._findMatchingDenoisePreset();
-      this._inputs.denoise_preset.value = matched || DENOISE_CUSTOM_PRESET;
-    }
-    this._updateDenoiseSummary();
-  }
-
-  _findMatchingDenoisePreset() {
-    const current = this._readDenoiseConfig();
-    for (const [name, preset] of Object.entries(DENOISE_PRESETS)) {
-      if (preset.denoise_algorithm !== current.denoise_algorithm) continue;
-      let same = true;
-      for (const key of [
-        'denoise_dbscan_eps',
-        'denoise_dbscan_eps_ratio',
-        'denoise_dbscan_min_samples',
-        'denoise_dbscan_max_points',
-        'denoise_sor_neighbors',
-        'denoise_sor_std_ratio',
-        'denoise_radius_neighbors',
-        'denoise_radius_radius_ratio',
-      ]) {
-        if (!this._valuesAlmostEqual(current[key], preset[key])) {
-          same = false;
-          break;
-        }
-      }
-      if (same) return name;
-    }
-    return null;
-  }
-
-  _readDenoiseConfig() {
-    return {
-      denoise_algorithm: this._inputs.denoise_algorithm.value || 'dbscan_sor',
-      denoise_dbscan_eps: this._parseNonNegativeFloat(this._inputs.denoise_dbscan_eps.value, 0.0),
-      denoise_dbscan_eps_ratio: this._parsePositiveFloat(this._inputs.denoise_dbscan_eps_ratio.value, 0.02),
-      denoise_dbscan_min_samples: this._parsePositiveInt(this._inputs.denoise_dbscan_min_samples.value, 10),
-      denoise_dbscan_max_points: this._parsePositiveInt(this._inputs.denoise_dbscan_max_points.value, 500000),
-      denoise_sor_neighbors: this._parsePositiveInt(this._inputs.denoise_sor_neighbors.value, 20),
-      denoise_sor_std_ratio: this._parsePositiveFloat(this._inputs.denoise_sor_std_ratio.value, 2.0),
-      denoise_radius_neighbors: this._parsePositiveInt(this._inputs.denoise_radius_neighbors.value, 8),
-      denoise_radius_radius_ratio: this._parsePositiveFloat(this._inputs.denoise_radius_radius_ratio.value, 0.015),
-    };
-  }
-
-  _updateDenoiseControls() {
-    const algo = this._inputs.denoise_algorithm.value || 'dbscan_sor';
-    const flags = DENOISE_ALGO_STEPS[algo] || DENOISE_ALGO_STEPS.dbscan_sor;
-    this._denoiseGroups.dbscan.hidden = !flags.dbscan;
-    this._denoiseGroups.sor.hidden = !flags.sor;
-    this._denoiseGroups.radius.hidden = !flags.radius;
-  }
-
-  _updateDenoiseSummary() {
-    if (!this._denoiseSummary) return;
-    const cfg = this._readDenoiseConfig();
-    const algo = DENOISE_ALGO_LABELS[cfg.denoise_algorithm] || cfg.denoise_algorithm;
-    const flags = DENOISE_ALGO_STEPS[cfg.denoise_algorithm] || DENOISE_ALGO_STEPS.dbscan_sor;
-
-    const details = [];
-    if (flags.dbscan) {
-      const epsText = cfg.denoise_dbscan_eps > 0
-        ? `eps=${cfg.denoise_dbscan_eps.toFixed(4)}`
-        : `eps=auto(${cfg.denoise_dbscan_eps_ratio.toFixed(3)}*bbox)`;
-      details.push(`DBSCAN ${epsText}, min_samples=${cfg.denoise_dbscan_min_samples}`);
-    }
-    if (flags.sor) {
-      details.push(`SOR k=${cfg.denoise_sor_neighbors}, std=${cfg.denoise_sor_std_ratio.toFixed(2)}`);
-    }
-    if (flags.radius) {
-      details.push(`Radius k=${cfg.denoise_radius_neighbors}, ratio=${cfg.denoise_radius_radius_ratio.toFixed(3)}`);
-    }
-
-    this._denoiseSummary.textContent = `Pipeline: ${algo}${details.length ? ` | ${details.join(' | ')}` : ''}`;
-  }
-
-  _onMeshWrapInputChanged() {
-    this._updateMeshWrapSummary();
-    if (this.onCropScaleChanged) {
-      this.onCropScaleChanged(this.getCropScale());
     }
   }
 
-  _resetMeshWrapParams() {
-    for (const [key, val] of Object.entries(MESHWRAP_DEFAULTS)) {
-      if (this._inputs[key]) this._inputs[key].value = String(val);
+  _onMaxFramesInput() {
+    const raw = (this._inputs.max_frames.value || '').trim();
+    if (!raw) {
+      this._maxFramesAuto = true;
+      this._onFrameIntervalInput();
+      return;
     }
-    this._updateMeshWrapMethodVisibility();
-    this._updateMeshWrapSummary();
-    if (this.onCropScaleChanged) {
-      this.onCropScaleChanged(this.getCropScale());
-    }
-  }
-
-  _updateMeshWrapMethodVisibility() {
-    const method = this._inputs.meshwrap_method?.value || 'poisson_iterative';
-    const isAlpha = method === 'alpha_wrap';
-    if (this._meshwrapPoissonGroup) {
-      this._meshwrapPoissonGroup.classList.toggle('hidden', isAlpha);
-    }
-    if (this._meshwrapAlphaGroup) {
-      this._meshwrapAlphaGroup.classList.toggle('hidden', !isAlpha);
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      this._maxFramesAuto = false;
     }
   }
 
-  _applyClassicalPreset(name) {
-    const preset = CLASSICAL_PRESETS[name] || CLASSICAL_PRESETS.trust_point_cloud;
-    const resolvedName = CLASSICAL_PRESETS[name] ? name : 'trust_point_cloud';
-    this._updatingClassicalPreset = true;
-    try {
-      if (this._inputs.classical_preset) this._inputs.classical_preset.value = resolvedName;
-      if (this._inputs.classical_preprocess_enabled) this._inputs.classical_preprocess_enabled.checked = preset.classical_preprocess_enabled;
-      if (this._inputs.classical_poisson_depth) this._inputs.classical_poisson_depth.value = String(preset.classical_poisson_depth);
-      if (this._inputs.classical_density_trim_q) this._inputs.classical_density_trim_q.value = String(preset.classical_density_trim_q);
-      if (this._inputs.classical_auto_smooth) this._inputs.classical_auto_smooth.checked = preset.classical_auto_smooth;
-      if (this._inputs.classical_smooth_iterations) this._inputs.classical_smooth_iterations.value = String(preset.classical_smooth_iterations);
-      if (this._inputs.classical_downsample_enabled) this._inputs.classical_downsample_enabled.checked = preset.classical_downsample_enabled;
-      if (this._inputs.classical_downsample_target_faces) this._inputs.classical_downsample_target_faces.value = String(preset.classical_downsample_target_faces);
-    } finally {
-      this._updatingClassicalPreset = false;
-    }
-    this._updateClassicalSummary();
+  _estimateMaxFrames(totalFrames, frameInterval) {
+    const total = this._parsePositiveInt(totalFrames, 0);
+    const interval = this._parsePositiveInt(frameInterval, 1);
+    if (total <= 0) return this._extractDefaults.max_frames;
+    return Math.max(2, Math.ceil(total / interval));
   }
 
-  _onClassicalInputChanged() {
-    if (this._updatingClassicalPreset) return;
-    const matched = this._findMatchingClassicalPreset();
-    if (this._inputs.classical_preset) {
-      this._inputs.classical_preset.value = matched || 'custom';
-    }
-    this._updateClassicalSummary();
+  _resolveMaxFrames() {
+    return Math.max(
+      2,
+      this._parsePositiveInt(
+        this._inputs.max_frames.value,
+        this._extractDefaults.max_frames,
+      ),
+    );
   }
-
-  _readClassicalConfig() {
-    return {
-      classical_preprocess_enabled: Boolean(this._inputs.classical_preprocess_enabled?.checked),
-      classical_poisson_depth: this._parsePositiveInt(this._inputs.classical_poisson_depth?.value, 11),
-      classical_density_trim_q: this._parseNonNegativeFloat(this._inputs.classical_density_trim_q?.value, 0.001),
-      classical_auto_smooth: Boolean(this._inputs.classical_auto_smooth?.checked),
-      classical_smooth_iterations: this._parseNonNegativeInt(this._inputs.classical_smooth_iterations?.value, 0),
-      classical_downsample_enabled: Boolean(this._inputs.classical_downsample_enabled?.checked),
-      classical_downsample_target_faces: this._parsePositiveInt(this._inputs.classical_downsample_target_faces?.value, 500000),
-    };
-  }
-
-  _updateClassicalSummary() {
-    if (!this._classicalSummary) return;
-    const cfg = this._readClassicalConfig();
-    const parts = [];
-    parts.push(cfg.classical_preprocess_enabled ? 'preprocess=on' : 'preprocess=off');
-    parts.push(`depth=${cfg.classical_poisson_depth}`);
-    parts.push(`trim_q=${cfg.classical_density_trim_q}`);
-    if (cfg.classical_downsample_enabled) {
-      parts.push(`downsample=${(cfg.classical_downsample_target_faces / 1000).toFixed(0)}k`);
-    } else {
-      parts.push('downsample=off');
-    }
-    this._classicalSummary.textContent = parts.join(', ');
-  }
-
-  _findMatchingClassicalPreset() {
-    const current = this._readClassicalConfig();
-    for (const [name, preset] of Object.entries(CLASSICAL_PRESETS)) {
-      let same = true;
-      for (const key of Object.keys(preset)) {
-        if (typeof preset[key] === 'boolean') {
-          if (current[key] !== preset[key]) { same = false; break; }
-        } else if (!this._valuesAlmostEqual(current[key], preset[key])) {
-          same = false; break;
-        }
-      }
-      if (same) return name;
-    }
-    return null;
-  }
-
-  _updateMeshWrapSummary() {
-    if (!this._meshwrapSummary) return;
-    const method = this._inputs.meshwrap_method?.value || MESHWRAP_DEFAULTS.meshwrap_method;
-    if (method === 'alpha_wrap') {
-      const alpha = this._inputs.meshwrap_alpha_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_alpha_ratio);
-      const offset = this._inputs.meshwrap_offset_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_offset_ratio);
-      this._meshwrapSummary.textContent = `method=alpha_wrap, alpha=${alpha}, offset=${offset}`;
-    } else {
-      const depth = this._inputs.meshwrap_poisson_depth?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_depth);
-      const scale = this._inputs.meshwrap_poisson_scale?.value || String(MESHWRAP_DEFAULTS.meshwrap_poisson_scale);
-      const iters = this._inputs.meshwrap_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_iterations);
-      const ratio = this._inputs.meshwrap_target_face_ratio?.value || String(MESHWRAP_DEFAULTS.meshwrap_target_face_ratio);
-      const smooth = this._inputs.meshwrap_smooth_iterations?.value || String(MESHWRAP_DEFAULTS.meshwrap_smooth_iterations);
-      this._meshwrapSummary.textContent =
-        `depth=${depth}, scale=${scale}, iters=${iters}, face_ratio=${ratio}, smooth=${smooth}`;
-    }
-  }
-
 }
-
-// ── Mixin: frame budget (from config/frame-budget.js) ─────────────
-Object.assign(ConfigPanel.prototype, {
-  _onFrameIntervalInput: FrameBudget._onFrameIntervalInput,
-  _onMaxFramesInput: FrameBudget._onMaxFramesInput,
-  _onPi3xFrameTargetInput: FrameBudget._onPi3xFrameTargetInput,
-  _estimateMaxFrames: FrameBudget._estimateMaxFrames,
-  _resolveMaxFrames: FrameBudget._resolveMaxFrames,
-  _clampPi3xFrameTarget: FrameBudget._clampPi3xFrameTarget,
-  _resolvePi3xFrameTarget: FrameBudget._resolvePi3xFrameTarget,
-  _syncPi3xFrameTargetInput: FrameBudget._syncPi3xFrameTargetInput,
-  _updatePi3xFrameTargetMarker: FrameBudget._updatePi3xFrameTargetMarker,
-  _resolveRequestedPi3xFrames: FrameBudget._resolveRequestedPi3xFrames,
-  _updateFrameBudgetPreview: FrameBudget._updateFrameBudgetPreview,
-  _updatePi3xPlanPreview: FrameBudget._updatePi3xPlanPreview,
-});
 
 // ── Mixin: form helpers (from config/form-helpers.js) ─────────────
 Object.assign(ConfigPanel.prototype, {

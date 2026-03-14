@@ -1,6 +1,7 @@
 """Integration tests for pipeline_runner: run_pipeline, _run_stage, callbacks.
 
-Covers P2 test IDs 6.8.1–6.8.11, 6.9.1–6.9.4, 6.10.1–6.10.2.
+Covers the 5-stage pipeline: ExtractFrames, COLMAP SfM, SAM2 Segment,
+gs2mesh Reconstruct, Texture Bake.
 """
 
 from __future__ import annotations
@@ -79,31 +80,23 @@ def _populate_frames(d: str, count: int = 5) -> None:
         (p / f"frame_{i:04d}.jpg").write_bytes(b"\xff\xd8")
 
 
-def _populate_pi3x(d: str) -> None:
+def _populate_colmap(d: str) -> None:
     p = Path(d)
-    (p / "object_full.ply").write_bytes(b"ply")
     (p / "camera_poses.json").write_text("{}", encoding="utf-8")
-    (p / "pi3x_cache.npz").write_bytes(b"npz")
+    colmap_dir = p / "colmap_sparse"
+    colmap_dir.mkdir(parents=True, exist_ok=True)
+    (colmap_dir / "cameras.bin").write_bytes(b"cam")
 
 
-def _populate_object_ply(d: str) -> None:
-    (Path(d) / "object.ply").write_bytes(b"ply")
-
-
-def _populate_denoised(d: str) -> None:
-    (Path(d) / "object_denoised.ply").write_bytes(b"ply")
+def _populate_masks(d: str) -> None:
+    masks_dir = Path(d) / "masks"
+    masks_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(3):
+        (masks_dir / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
 
 
 def _populate_mesh(d: str) -> None:
     (Path(d) / "object_mesh.ply").write_bytes(b"ply")
-
-
-def _populate_wrapped(d: str) -> None:
-    (Path(d) / "object_mesh_wrapped.ply").write_bytes(b"ply")
-
-
-def _populate_repaired(d: str) -> None:
-    (Path(d) / "object_mesh_repaired.ply").write_bytes(b"ply")
 
 
 # ── Common base ────────────────────────────────────────────────────────────
@@ -114,7 +107,6 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
 
     auto_accept: bool = True
     ground_plane_enabled: bool = False
-    mesh_repair_enabled: bool = False
     with_ground_masks: bool = False
 
     def setUp(self) -> None:
@@ -123,9 +115,7 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
         self.session.config.output_dir = self.tmpdir
         self.session.config.video_path = str(Path(self.tmpdir) / "input.mp4")
         self.session.config.auto_accept = self.auto_accept
-        self.session.config.mesh_method = "poisson"
         self.session.config.ground_plane_enabled = self.ground_plane_enabled
-        self.session.config.mesh_repair_enabled = self.mesh_repair_enabled
         Path(self.session.config.video_path).write_bytes(b"MP4")
         self.sam2 = _FakeSAM2Service(
             self.tmpdir, with_ground=self.with_ground_masks,
@@ -140,14 +130,8 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
         d = self.tmpdir
         return {
             "extract_frames": lambda *a, **kw: _populate_frames(d),
-            "pi3x_inference": lambda *a, **kw: _populate_pi3x(d),
-            "apply_masks": lambda *a, **kw: _populate_object_ply(d),
-            "denoise": lambda *a, **kw: _populate_denoised(d),
-            "classical_mesh": lambda *a, **kw: _populate_mesh(d),
-            "diffcd": lambda *a, **kw: _populate_mesh(d),
-            "mesh_wrap": lambda *a, **kw: _populate_wrapped(d),
-            "mesh_repair": lambda *a, **kw: _populate_repaired(d),
-            "mesh_repair_selected": lambda *a, **kw: _populate_repaired(d),
+            "colmap_sfm": lambda *a, **kw: _populate_colmap(d),
+            "gs2mesh_reconstruct": lambda *a, **kw: _populate_mesh(d),
             "texture_bake": lambda *a, **kw: (
                 Path(d) / "textured_mesh.obj"
             ).write_bytes(b"obj"),
@@ -190,16 +174,8 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             (f"{_MODULE}.broadcast", AsyncMock()),
             (f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)),
             (f"{_MODULE}._stage_extract_frames", MagicMock(side_effect=effects["extract_frames"])),
-            (f"{_MODULE}._stage_pi3x_inference", MagicMock(side_effect=effects["pi3x_inference"])),
-            (f"{_MODULE}._stage_apply_masks", MagicMock(side_effect=effects["apply_masks"])),
-            (f"{_MODULE}._stage_extract_ground_plane", MagicMock(return_value=None)),
-            (f"{_MODULE}._stage_denoise", MagicMock(side_effect=effects["denoise"])),
-            (f"{_MODULE}._stage_classical_mesh", MagicMock(side_effect=effects["classical_mesh"])),
-            (f"{_MODULE}._stage_diffcd", MagicMock(side_effect=effects["diffcd"])),
-            (f"{_MODULE}._stage_mesh_wrap", MagicMock(side_effect=effects["mesh_wrap"])),
-            (f"{_MODULE}._stage_mesh_repair", MagicMock(side_effect=effects["mesh_repair"])),
-            (f"{_MODULE}._stage_mesh_repair_analyze", MagicMock(return_value={"loops": []})),
-            (f"{_MODULE}._stage_mesh_repair_selected", MagicMock(side_effect=effects["mesh_repair_selected"])),
+            (f"{_MODULE}._stage_colmap_sfm", MagicMock(side_effect=effects["colmap_sfm"])),
+            (f"{_MODULE}._stage_gs2mesh_reconstruct", MagicMock(side_effect=effects["gs2mesh_reconstruct"])),
             (f"{_MODULE}._stage_texture_bake", MagicMock(side_effect=effects["texture_bake"])),
             (f"{_MODULE}._vram_gate", MagicMock()),
         ]
@@ -217,7 +193,7 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6.9  _run_stage tests
+# _run_stage tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -226,9 +202,8 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         self.session = PipelineSession()
-        self.session.config.mesh_method = "poisson"
 
-    # 6.9.1 — lifecycle broadcast order
+    # lifecycle broadcast order
     async def test_lifecycle_order(self) -> None:
         mock_fn = MagicMock()
 
@@ -250,7 +225,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bc.call_args_list[1].args[1]["progress"], 0.0)
         self.assertEqual(types[-1], "stage_complete")
 
-    # 6.9.2 — exception marks stage FAILED
+    # exception marks stage FAILED
     async def test_fn_exception_marks_failed(self) -> None:
         mock_fn = MagicMock(side_effect=ValueError("boom"))
 
@@ -270,13 +245,13 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(last["type"], "stage_complete")
         self.assertEqual(last["error"], "boom")
 
-    # 6.9.3 — callbacks passed to fn
+    # callbacks passed to fn
     async def test_callbacks_passed_to_fn(self) -> None:
         mock_fn = MagicMock()
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
              patch(f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)):
-            await _run_stage(self.session, PipelineStage.DENOISE, mock_fn)
+            await _run_stage(self.session, PipelineStage.GS2MESH_RECONSTRUCT, mock_fn)
 
         mock_fn.assert_called_once()
         kw = mock_fn.call_args.kwargs
@@ -284,31 +259,29 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
             self.assertIn(key, kw, f"Missing keyword arg: {key}")
             self.assertTrue(callable(kw[key]), f"{key} should be callable")
 
-    # 6.9.4 — stage_log_scope wrapping
+    # stage_log_scope wrapping
     async def test_stage_log_scope_wrapping(self) -> None:
         mock_fn = MagicMock()
         mock_scope = MagicMock(side_effect=_noop_scope)
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
              patch(f"{_MODULE}.stage_log_scope", mock_scope):
-            await _run_stage(self.session, PipelineStage.DENOISE, mock_fn)
+            await _run_stage(self.session, PipelineStage.GS2MESH_RECONSTRUCT, mock_fn)
 
-        mock_scope.assert_called_once_with(int(PipelineStage.DENOISE))
+        mock_scope.assert_called_once_with(int(PipelineStage.GS2MESH_RECONSTRUCT))
         mock_fn.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6.10  _make_progress_cb / _make_cancel_cb tests
+# _make_progress_cb / _make_cancel_cb tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestMakeProgressCb(unittest.TestCase):
     """_make_progress_cb uses loop.call_soon_threadsafe."""
 
-    # 6.10.1
     def test_uses_call_soon_threadsafe(self) -> None:
         session = PipelineSession()
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
         mock_loop = MagicMock()
 
@@ -321,28 +294,27 @@ class TestMakeProgressCb(unittest.TestCase):
 class TestMakeCancelCb(unittest.TestCase):
     """_make_cancel_cb raises on cancellation."""
 
-    # 6.10.2
     def test_cancel_cb_raises(self) -> None:
         session = PipelineSession()
 
         cb = _make_cancel_cb(session)
 
-        # Not cancelled → no error
+        # Not cancelled -> no error
         cb()
 
-        # Cancelled → _CancelledError
+        # Cancelled -> _CancelledError
         session.cancelled = True
         with self.assertRaises(_CancelledError):
             cb()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6.8  run_pipeline integration tests
+# run_pipeline integration tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestRunPipelineFullFlow(_PipelineIntegrationBase):
-    """6.8.1 — Full 8-stage pipeline with auto_accept=True."""
+    """Full 5-stage pipeline with auto_accept=True."""
 
     auto_accept = True
 
@@ -358,23 +330,18 @@ class TestRunPipelineFullFlow(_PipelineIntegrationBase):
 
         # All stage functions called once
         mocks["_stage_extract_frames"].assert_called_once()
-        mocks["_stage_pi3x_inference"].assert_called_once()
-        mocks["_stage_apply_masks"].assert_called_once()
-        mocks["_stage_denoise"].assert_called_once()
-        # Either classical or diffcd depending on method
-        mocks["_stage_classical_mesh"].assert_called_once()
-        mocks["_stage_mesh_wrap"].assert_called_once()
-        mocks["_stage_mesh_repair"].assert_called_once()
+        mocks["_stage_colmap_sfm"].assert_called_once()
+        mocks["_stage_gs2mesh_reconstruct"].assert_called_once()
         mocks["_stage_texture_bake"].assert_called_once()
 
-        # Broadcast checks: 8 stage_starts (non-SAM2 via _run_stage, SAM2 inline)
+        # Broadcast checks: 5 stage_starts (non-SAM2 via _run_stage, SAM2 inline)
         bc = mocks["broadcast"]
         starts = self._broadcasts_of_type(bc, "stage_start")
-        # Stages 1,2,4,5,6,7,8 via _run_stage (7) + stage 3 inline (1) = 8
-        self.assertEqual(len(starts), 8)
+        # Stages 1,2,4,5 via _run_stage (4) + stage 3 inline (1) = 5
+        self.assertEqual(len(starts), 5)
 
         completes = self._broadcasts_of_type(bc, "stage_complete")
-        self.assertEqual(len(completes), 8)
+        self.assertEqual(len(completes), 5)
 
         pipeline_complete = self._broadcasts_of_type(bc, "pipeline_complete")
         self.assertEqual(len(pipeline_complete), 1)
@@ -384,58 +351,48 @@ class TestRunPipelineFullFlow(_PipelineIntegrationBase):
 
 
 class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
-    """6.8.2 — Resume from DENOISE (stage 4)."""
+    """Resume from GS2MESH_RECONSTRUCT (stage 4)."""
 
     auto_accept = True
 
     async def test_resume_from_stage(self) -> None:
-        # Pre-create outputs for stages 1–3
+        # Pre-create outputs for stages 1-3
         _populate_frames(self.tmpdir)
-        _populate_pi3x(self.tmpdir)
-        _populate_object_ply(self.tmpdir)
-        # Create masks dir (as if SAM2 ran)
-        masks_dir = Path(self.tmpdir) / "masks"
-        masks_dir.mkdir(exist_ok=True)
-        for i in range(3):
-            (masks_dir / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
+        _populate_colmap(self.tmpdir)
+        _populate_masks(self.tmpdir)
 
         # Set session paths that stages 1-3 would have set
-        self.session.resume_from_stage = PipelineStage.DENOISE
+        self.session.resume_from_stage = PipelineStage.GS2MESH_RECONSTRUCT
         self.session.frames_dir = str(Path(self.tmpdir) / "frames")
-        self.session.pi3x_cache_path = str(Path(self.tmpdir) / "pi3x_cache.npz")
-        self.session.ply_path = str(Path(self.tmpdir) / "object.ply")
+        self.session.colmap_sparse_path = str(Path(self.tmpdir) / "colmap_sparse")
         self.session.poses_path = str(Path(self.tmpdir) / "camera_poses.json")
-        self.session.mask_dir = str(masks_dir)
+        self.session.mask_dir = str(Path(self.tmpdir) / "masks")
 
         with ExitStack() as stack:
             mocks = self._enter_all_patches(stack)
             # No SAM2 signaler needed since we skip stage 3
             await run_pipeline(self.session, self.sam2)
 
-        # Stages 1–3 NOT called
+        # Stages 1-3 NOT called
         mocks["_stage_extract_frames"].assert_not_called()
-        mocks["_stage_pi3x_inference"].assert_not_called()
-        mocks["_stage_apply_masks"].assert_not_called()
+        mocks["_stage_colmap_sfm"].assert_not_called()
 
-        # Stages 4–8 called
-        mocks["_stage_denoise"].assert_called_once()
-        mocks["_stage_classical_mesh"].assert_called_once()
-        mocks["_stage_mesh_wrap"].assert_called_once()
-        mocks["_stage_mesh_repair"].assert_called_once()
+        # Stages 4-5 called
+        mocks["_stage_gs2mesh_reconstruct"].assert_called_once()
         mocks["_stage_texture_bake"].assert_called_once()
 
         # Broadcast stage_starts are only for stage 4+
         bc = mocks["broadcast"]
         starts = self._broadcasts_of_type(bc, "stage_start")
         start_stages = {s["stage"] for s in starts}
-        self.assertTrue(start_stages.issubset({4, 5, 6, 7, 8}))
+        self.assertTrue(start_stages.issubset({4, 5}))
         self.assertNotIn(1, start_stages)
         self.assertNotIn(2, start_stages)
         self.assertNotIn(3, start_stages)
 
 
 class TestRunPipelineCancelBroadcastsError(_PipelineIntegrationBase):
-    """6.8.3 — Cancel during stage 1 broadcasts pipeline_error."""
+    """Cancel during stage 1 broadcasts pipeline_error."""
 
     auto_accept = True
 
@@ -465,7 +422,7 @@ class TestRunPipelineCancelBroadcastsError(_PipelineIntegrationBase):
 
 
 class TestRunPipelineCancelHydrates(_PipelineIntegrationBase):
-    """6.8.4 — Cancel triggers hydrate_from_output_dir."""
+    """Cancel triggers hydrate_from_output_dir."""
 
     auto_accept = True
 
@@ -493,7 +450,7 @@ class TestRunPipelineCancelHydrates(_PipelineIntegrationBase):
 
 
 class TestRunPipelineExceptionBroadcastsError(_PipelineIntegrationBase):
-    """6.8.5 — Stage 1 exception broadcasts pipeline_error."""
+    """Stage 1 exception broadcasts pipeline_error."""
 
     auto_accept = True
 
@@ -526,7 +483,7 @@ class TestRunPipelineExceptionBroadcastsError(_PipelineIntegrationBase):
 
 
 class TestRunPipelineFinallyReleasesSAM2(_PipelineIntegrationBase):
-    """6.8.6 — SAM2 service released in finally block."""
+    """SAM2 service released in finally block."""
 
     auto_accept = True
 
@@ -560,7 +517,7 @@ class TestRunPipelineFinallyReleasesSAM2(_PipelineIntegrationBase):
 
 
 class TestRunPipelineSAM2Redo(_PipelineIntegrationBase):
-    """6.8.7 — SAM2 redo loop re-initializes and re-propagates."""
+    """SAM2 redo loop re-initializes and re-propagates."""
 
     auto_accept = True
 
@@ -594,90 +551,14 @@ class TestRunPipelineSAM2Redo(_PipelineIntegrationBase):
         self.assertEqual(self.sam2.propagate_calls, 2)
 
 
-class TestRunPipelineMeshRepairInteractive(_PipelineIntegrationBase):
-    """6.8.8 — Interactive mesh repair with manual loop selection."""
-
-    auto_accept = False
-    mesh_repair_enabled = True
-
-    async def test_mesh_repair_interactive(self) -> None:
-        analysis = {
-            "loops": [{"loop_id": 0}, {"loop_id": 1}],
-            "loop_count": 2,
-            "mesh_path": "test.ply",
-            "vertex_count": 100,
-            "face_count": 50,
-        }
-
-        async def _signal_events(delay=0.02):
-            # SAM2 events
-            await asyncio.sleep(delay)
-            self.session.sam2_confirm_event.set()
-            await asyncio.sleep(delay)
-            self.session.sam2_approved = True
-            self.session.sam2_approve_event.set()
-            # Wait for mesh repair ready
-            while not self.session.mesh_repair_ready:
-                await asyncio.sleep(0.005)
-            await asyncio.sleep(delay)
-            self.session.mesh_repair_selected_loop_ids = [0]
-            self.session.mesh_repair_confirm_event.set()
-
-        async def _auto_confirm_noop(session, from_stage, to_stage, message):
-            """Instant replacement for _wait_for_next_stage_confirmation."""
-            pass
-
-        with ExitStack() as stack:
-            mocks = self._enter_all_patches(
-                stack,
-                extra_overrides={
-                    "_stage_mesh_repair_analyze": MagicMock(return_value=analysis),
-                },
-            )
-            stack.enter_context(
-                patch(f"{_MODULE}._wait_for_next_stage_confirmation", _auto_confirm_noop),
-            )
-            task = asyncio.create_task(_signal_events())
-            try:
-                await run_pipeline(self.session, self.sam2)
-            finally:
-                if not task.done():
-                    task.cancel()
-
-        bc = mocks["broadcast"]
-        repair_ready = self._broadcasts_of_type(bc, "mesh_repair_ready")
-        self.assertTrue(len(repair_ready) >= 1)
-        self.assertEqual(repair_ready[0]["candidate_count"], 2)
-
-        # _stage_mesh_repair_selected called with selected_loop_ids=[0]
-        mocks["_stage_mesh_repair_selected"].assert_called_once()
-        call_args = mocks["_stage_mesh_repair_selected"].call_args
-        # selected_loop_ids is the 3rd positional arg
-        self.assertEqual(call_args.args[2], [0])
-
-
 class TestRunPipelineAutoAcceptPassesAll(_PipelineIntegrationBase):
-    """6.8.9 — auto_accept=True auto-passes confirmations and mesh repair."""
+    """auto_accept=True auto-passes confirmations."""
 
     auto_accept = True
-    mesh_repair_enabled = True
 
     async def test_auto_accept_passes_all(self) -> None:
-        analysis = {
-            "loops": [{"loop_id": 0}, {"loop_id": 1}],
-            "loop_count": 2,
-            "mesh_path": "test.ply",
-            "vertex_count": 100,
-            "face_count": 50,
-        }
-
         with ExitStack() as stack:
-            mocks = self._enter_all_patches(
-                stack,
-                extra_overrides={
-                    "_stage_mesh_repair_analyze": MagicMock(return_value=analysis),
-                },
-            )
+            mocks = self._enter_all_patches(stack)
             signaler = self._start_sam2_signaler()
             try:
                 await run_pipeline(self.session, self.sam2)
@@ -691,18 +572,13 @@ class TestRunPipelineAutoAcceptPassesAll(_PipelineIntegrationBase):
         for c in confirms:
             self.assertTrue(c["auto_accepted"], f"Confirmation not auto-accepted: {c}")
 
-        # Mesh repair auto-accepted: should broadcast mesh_repair_ready with auto_accepted=True
-        repair_ready = self._broadcasts_of_type(bc, "mesh_repair_ready")
-        self.assertTrue(len(repair_ready) >= 1)
-        self.assertTrue(repair_ready[0]["auto_accepted"])
-
         # Pipeline completed successfully
         pipeline_complete = self._broadcasts_of_type(bc, "pipeline_complete")
         self.assertEqual(len(pipeline_complete), 1)
 
 
 class TestRunPipelineGroundPlaneFlow(_PipelineIntegrationBase):
-    """6.8.10 — Ground plane segmentation with confirm."""
+    """Ground plane segmentation with confirm."""
 
     auto_accept = False
     ground_plane_enabled = True
@@ -742,7 +618,7 @@ class TestRunPipelineGroundPlaneFlow(_PipelineIntegrationBase):
         ground_phase = self._broadcasts_of_type(bc, "sam2_ground_phase")
         self.assertTrue(len(ground_phase) >= 1)
 
-        # SAM2 service mode sequence: ground → object
+        # SAM2 service mode sequence: ground -> object
         self.assertIn("ground", self.sam2.modes)
         self.assertIn("object", self.sam2.modes)
         ground_idx = self.sam2.modes.index("ground")
@@ -751,7 +627,7 @@ class TestRunPipelineGroundPlaneFlow(_PipelineIntegrationBase):
 
 
 class TestRunPipelineGroundSkip(_PipelineIntegrationBase):
-    """6.8.11 — Ground plane segmentation skipped."""
+    """Ground plane segmentation skipped."""
 
     auto_accept = False
     ground_plane_enabled = True
@@ -791,7 +667,7 @@ class TestRunPipelineGroundSkip(_PipelineIntegrationBase):
 
 
 class TestRunPipelineGroundPlaneAutoAccept(_PipelineIntegrationBase):
-    """6.8.12 — Ground plane phase runs even with auto_accept=True."""
+    """Ground plane phase runs even with auto_accept=True."""
 
     auto_accept = True
     ground_plane_enabled = True
@@ -831,7 +707,7 @@ class TestRunPipelineGroundPlaneAutoAccept(_PipelineIntegrationBase):
         ground_phase = self._broadcasts_of_type(bc, "sam2_ground_phase")
         self.assertTrue(len(ground_phase) >= 1)
 
-        # SAM2 service mode sequence: ground → object
+        # SAM2 service mode sequence: ground -> object
         self.assertIn("ground", self.sam2.modes)
         self.assertIn("object", self.sam2.modes)
         ground_idx = self.sam2.modes.index("ground")

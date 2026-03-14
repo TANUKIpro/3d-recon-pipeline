@@ -4,7 +4,7 @@ Covers lazy import verification, argument forwarding, VRAM cleanup,
 process registration passthrough, and unused callback deletion.
 
 The wrapper functions use deferred bare imports (e.g.
-``from stage_extract_frames import extract_frames``) that resolve via
+``from scripts.stage_extract_frames import extract_frames``) that resolve via
 PYTHONPATH inside Docker.  On the host those modules don't exist, so we
 inject lightweight stubs into ``sys.modules`` via ``patch.dict`` and then
 replace the target function with a ``MagicMock``.
@@ -17,9 +17,10 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from scripts.dashboard.stage_wrappers import (
-    _stage_diffcd,
+    _stage_colmap_sfm,
     _stage_extract_frames,
-    _stage_pi3x_inference,
+    _stage_gs2mesh_reconstruct,
+    _stage_texture_bake,
 )
 
 # ---------------------------------------------------------------------------
@@ -27,15 +28,17 @@ from scripts.dashboard.stage_wrappers import (
 # ---------------------------------------------------------------------------
 
 _stub_extract = types.ModuleType("scripts.stage_extract_frames")
-_stub_pi3x = types.ModuleType("scripts.stage_pi3x_reconstruct")
+_stub_colmap = types.ModuleType("scripts.stage_colmap_sfm")
+_stub_gs2mesh = types.ModuleType("scripts.stage_gs2mesh_reconstruct")
+_stub_texture = types.ModuleType("scripts.stage_texture_bake")
 _stub_vram = types.ModuleType("scripts.vram_utils")
-_stub_diffcd = types.ModuleType("scripts.stage_diffcd_mesh")
 
 _STUBS = {
     "scripts.stage_extract_frames": _stub_extract,
-    "scripts.stage_pi3x_reconstruct": _stub_pi3x,
+    "scripts.stage_colmap_sfm": _stub_colmap,
+    "scripts.stage_gs2mesh_reconstruct": _stub_gs2mesh,
+    "scripts.stage_texture_bake": _stub_texture,
     "scripts.vram_utils": _stub_vram,
-    "scripts.stage_diffcd_mesh": _stub_diffcd,
 }
 
 
@@ -51,21 +54,27 @@ class _WrapperTestBase(unittest.TestCase):
         self.mock_extract = MagicMock(name="extract_frames")
         _stub_extract.extract_frames = self.mock_extract  # type: ignore[attr-defined]
 
-        self.mock_run_pi3x = MagicMock(name="run_pi3x_inference")
-        _stub_pi3x.run_pi3x_inference = self.mock_run_pi3x  # type: ignore[attr-defined]
+        self.mock_colmap = MagicMock(name="run_colmap_sfm")
+        _stub_colmap.run_colmap_sfm = self.mock_colmap  # type: ignore[attr-defined]
+
+        self.mock_gs2mesh = MagicMock(name="run_gs2mesh")
+        _stub_gs2mesh.run_gs2mesh = self.mock_gs2mesh  # type: ignore[attr-defined]
+
+        self.mock_bake = MagicMock(name="bake_texture")
+        _stub_texture.bake_texture = self.mock_bake  # type: ignore[attr-defined]
 
         self.mock_cleanup = MagicMock(name="cleanup_pytorch_vram")
         _stub_vram.cleanup_pytorch_vram = self.mock_cleanup  # type: ignore[attr-defined]
 
-        self.mock_diffcd = MagicMock(name="run_diffcd")
-        _stub_diffcd.run_diffcd = self.mock_diffcd  # type: ignore[attr-defined]
+        self.mock_ensure_vram = MagicMock(name="ensure_vram_available")
+        _stub_vram.ensure_vram_available = self.mock_ensure_vram  # type: ignore[attr-defined]
 
     def tearDown(self) -> None:
         self._modules_patch.stop()
 
 
 class TestStageExtractFramesArgs(_WrapperTestBase):
-    """9.2 -- _stage_extract_frames forwards correct args."""
+    """_stage_extract_frames forwards correct args."""
 
     def test_forwards_args_to_extract_frames(self) -> None:
         cb = MagicMock()
@@ -87,38 +96,67 @@ class TestStageExtractFramesArgs(_WrapperTestBase):
         )
 
 
-class TestStagePi3xVRAMCleanup(_WrapperTestBase):
-    """9.3 -- _stage_pi3x_inference calls cleanup_pytorch_vram after inference."""
+class TestStageColmapSfmArgs(_WrapperTestBase):
+    """_stage_colmap_sfm forwards correct args."""
 
-    def test_cleanup_called_after_inference(self) -> None:
-        _stage_pi3x_inference(
-            "/data/output/frames", "/data/output",
-            pixel_limit=255000, pi3x_frame_target=50,
-            conf_threshold=0.2, edge_rtol=0.03,
-        )
-        self.mock_run_pi3x.assert_called_once()
-        self.mock_cleanup.assert_called_once()
-
-
-class TestStageDiffcdProcessRegistration(_WrapperTestBase):
-    """9.4 -- _stage_diffcd passes through register/unregister process."""
-
-    def test_process_registration_passed_through(self) -> None:
+    def test_forwards_args_to_colmap_sfm(self) -> None:
         reg = MagicMock(name="register")
         unreg = MagicMock(name="unregister")
-        _stage_diffcd(
-            "/data/output/object_denoised.ply",
+        _stage_colmap_sfm(
+            "/data/output/frames",
             "/data/output",
+            matcher="sequential",
+            max_features=8192,
+            image_size=1024,
             register_process=reg,
             unregister_process=unreg,
         )
-        call_kwargs = self.mock_diffcd.call_args
-        self.assertEqual(call_kwargs.kwargs.get("register_process"), reg)
-        self.assertEqual(call_kwargs.kwargs.get("unregister_process"), unreg)
+        self.mock_colmap.assert_called_once()
+        call_kwargs = self.mock_colmap.call_args.kwargs
+        self.assertEqual(call_kwargs.get("register_process"), reg)
+        self.assertEqual(call_kwargs.get("unregister_process"), unreg)
+
+
+class TestStageGs2meshVRAMCleanup(_WrapperTestBase):
+    """_stage_gs2mesh_reconstruct calls cleanup_pytorch_vram after inference."""
+
+    def test_cleanup_called_after_inference(self) -> None:
+        _stage_gs2mesh_reconstruct(
+            "/data/output/frames",
+            "/data/output/colmap_sparse",
+            "/data/output/masks",
+            "/data/output",
+            gs_iterations=30000,
+            stereo_model="DLNR",
+            tsdf_voxel_size=0.005,
+            tsdf_depth_trunc=0.04,
+            use_masks=True,
+        )
+        self.mock_gs2mesh.assert_called_once()
+        self.mock_cleanup.assert_called_once()
+
+
+class TestStageTextureBakeArgs(_WrapperTestBase):
+    """_stage_texture_bake forwards correct args."""
+
+    def test_forwards_args_to_bake_texture(self) -> None:
+        cb = MagicMock()
+        _stage_texture_bake(
+            "/data/output/object_mesh.ply",
+            "/data/output/camera_poses.json",
+            "/data/output/frames",
+            "/data/output/masks",
+            "/data/output",
+            texture_size=2048,
+            texture_view_assign_mode="region_gc",
+            texture_quality_boost=True,
+            progress_cb=cb,
+        )
+        self.mock_bake.assert_called_once()
 
 
 class TestUnusedCallbacksDeleted(_WrapperTestBase):
-    """9.5 -- Wrappers that delete callbacks run without error."""
+    """Wrappers that delete callbacks run without error."""
 
     def test_extract_frames_ignores_process_callbacks(self) -> None:
         """Calling with register_process/unregister_process doesn't error."""
@@ -136,7 +174,7 @@ class TestUnusedCallbacksDeleted(_WrapperTestBase):
 
 
 class TestLazyImportVerification(_WrapperTestBase):
-    """9.1 -- Wrapper functions call the underlying stage function."""
+    """Wrapper functions call the underlying stage function."""
 
     def test_extract_frames_calls_underlying(self) -> None:
         _stage_extract_frames(
@@ -144,17 +182,25 @@ class TestLazyImportVerification(_WrapperTestBase):
         )
         self.assertTrue(self.mock_extract.called)
 
-    def test_pi3x_calls_underlying(self) -> None:
-        _stage_pi3x_inference(
+    def test_colmap_sfm_calls_underlying(self) -> None:
+        _stage_colmap_sfm(
             "/frames", "/out",
-            pixel_limit=255000, pi3x_frame_target=50,
-            conf_threshold=0.2, edge_rtol=0.03,
+            matcher="sequential", max_features=8192, image_size=1024,
         )
-        self.assertTrue(self.mock_run_pi3x.called)
+        self.assertTrue(self.mock_colmap.called)
 
-    def test_diffcd_calls_underlying(self) -> None:
-        _stage_diffcd("/dn.ply", "/out")
-        self.assertTrue(self.mock_diffcd.called)
+    def test_gs2mesh_calls_underlying(self) -> None:
+        _stage_gs2mesh_reconstruct(
+            "/frames", "/colmap_sparse", "/masks", "/out",
+        )
+        self.assertTrue(self.mock_gs2mesh.called)
+
+    def test_texture_bake_calls_underlying(self) -> None:
+        _stage_texture_bake(
+            "/mesh.ply", "/poses.json", "/frames", "/masks", "/out",
+            texture_size=2048,
+        )
+        self.assertTrue(self.mock_bake.called)
 
 
 if __name__ == "__main__":

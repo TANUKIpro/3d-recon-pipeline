@@ -7,10 +7,9 @@
 
 export class StageController {
   constructor() {
-    this._stageCount = 8;
+    this._stageCount = 5;
     this._panels = {};
     this._pills = {};
-    this._meshStagePills = Array.from(document.querySelectorAll('.mesh-stage-pill'));
     this._activeStage = 1; // Default to Extract Frames panel
     this._stageStates = {};
 
@@ -37,16 +36,10 @@ export class StageController {
       this._panels[i]?.classList.remove('active');
       this._pills[i]?.classList.remove('selected');
     }
-    this._meshStagePills.forEach((pill) => pill.classList.remove('selected'));
 
     // Show target panel, select pill
     this._panels[n]?.classList.add('active');
-    if (n === 5) {
-      const activeMethodPill = document.querySelector('.mesh-method-pill.active');
-      activeMethodPill?.classList.add('selected');
-    } else {
-      this._pills[n]?.classList.add('selected');
-    }
+    this._pills[n]?.classList.add('selected');
     this._activeStage = n;
 
     // Dispatch custom event for lazy 3D init
@@ -67,17 +60,6 @@ export class StageController {
       if (pill) {
         pill.addEventListener('click', () => this.activateStage(i));
       }
-    }
-
-    for (const pill of this._meshStagePills) {
-      if (pill.dataset.stage === '5') continue;
-      pill.addEventListener('click', () => this.activateStage(5));
-      pill.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          this.activateStage(5);
-        }
-      });
     }
   }
 }

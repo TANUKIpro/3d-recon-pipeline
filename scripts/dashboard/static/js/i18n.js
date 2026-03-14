@@ -15,13 +15,9 @@ const TRANSLATIONS = {
 
   // Stage labels
   'stage.extract_frames': { en: 'Extract Frames', ja: 'フレーム抽出' },
-  'stage.pi3x': { en: 'Pi3X', ja: 'Pi3X' },
+  'stage.colmap': { en: 'COLMAP', ja: 'COLMAP' },
   'stage.sam2': { en: 'SAM2', ja: 'SAM2' },
-  'stage.denoise': { en: 'Denoise', ja: 'ノイズ除去' },
-  'stage.learning_mesh': { en: 'Learning Mesh', ja: 'Learning Mesh' },
-  'stage.classical_mesh': { en: 'Classical Mesh', ja: 'Classical Mesh' },
-  'stage.wrap': { en: 'Wrap', ja: 'ラップ' },
-  'stage.repair': { en: 'Repair', ja: '修復' },
+  'stage.gs2mesh': { en: 'gs2mesh', ja: 'gs2mesh' },
   'stage.texture': { en: 'Texture', ja: 'テクスチャ' },
 
   // Section titles

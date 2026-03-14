@@ -6,7 +6,6 @@ Runs each stage via asyncio.to_thread, broadcasting progress over WebSocket.
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -14,22 +13,13 @@ from typing import TYPE_CHECKING
 from scripts.dashboard.checkpoints import (
     cleanup_checkpoint_outputs,
     first_checkpoint_id,
-    mesh_method_key,
     resolve_checkpoint_id,
 )
 from scripts.dashboard.log_capture import broadcast_to_clients, stage_log_scope
 from scripts.dashboard.stage_wrappers import (
-    _stage_apply_masks,
-    _stage_classical_mesh,
-    _stage_denoise,
-    _stage_diffcd,
+    _stage_colmap_sfm,
     _stage_extract_frames,
-    _stage_extract_ground_plane,
-    _stage_mesh_repair,
-    _stage_mesh_repair_analyze,
-    _stage_mesh_repair_selected,
-    _stage_mesh_wrap,
-    _stage_pi3x_inference,
+    _stage_gs2mesh_reconstruct,
     _stage_texture_bake,
     _vram_gate,
 )
@@ -66,12 +56,6 @@ async def _broadcast_stage_progress(
     await broadcast(session, payload)
 
 
-def _mesh_method_label(method: str) -> str:
-    if method == "diffcd":
-        return "Learning Mesh (DiffCD)"
-    return "Classical Mesh"
-
-
 def _build_stage_progress_payload(
     session: PipelineSession,
     stage: PipelineStage,
@@ -80,14 +64,12 @@ def _build_stage_progress_payload(
     checkpoint_id: str | None = None,
 ) -> dict:
     stage_num = int(stage)
-    mesh_method = mesh_method_key(session.config.mesh_method)
     current = None
     if int(session.current_stage) == stage_num:
         current = session.current_checkpoint_id
     resolved_checkpoint = checkpoint_id or resolve_checkpoint_id(
         stage_num,
         detail,
-        mesh_method,
         current_checkpoint_id=current,
     )
     session.stage_progress(
@@ -130,12 +112,11 @@ def _cleanup_cancelled_outputs(
         output_dir,
         int(stage),
         session.current_checkpoint_id,
-        mesh_method_key(session.config.mesh_method),
     )
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
-    """Execute the full 8-stage pipeline asynchronously."""
+    """Execute the full 5-stage pipeline asynchronously."""
     cfg = session.config
     output_dir = cfg.output_dir
     start_stage = int(session.resume_from_stage)
@@ -170,51 +151,42 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.EXTRACT_FRAMES,
-                PipelineStage.PI3X_RECONSTRUCT,
-                "Extract Frames complete. Continue to Pi3X 3D Reconstruction?",
+                PipelineStage.COLMAP_SFM,
+                "Extract Frames complete. Continue to COLMAP SfM?",
             )
 
-        if start_stage <= int(PipelineStage.PI3X_RECONSTRUCT):
+        if start_stage <= int(PipelineStage.COLMAP_SFM):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
-            # VRAM gate: ensure sufficient free VRAM before Pi3X
-            with stage_log_scope(int(PipelineStage.PI3X_RECONSTRUCT)):
-                await asyncio.to_thread(_vram_gate)
 
-            # ── Stage 2: Pi3X 3D Reconstruction ───────────────────
+            # ── Stage 2: COLMAP SfM ──────────────────────────────
             await _run_stage(
                 session,
-                PipelineStage.PI3X_RECONSTRUCT,
-                _stage_pi3x_inference,
+                PipelineStage.COLMAP_SFM,
+                _stage_colmap_sfm,
                 session.frames_dir,
                 output_dir,
-                cfg.pixel_limit,
-                cfg.pi3x_frame_target,
-                cfg.confidence_threshold,
-                cfg.edge_rtol,
+                cfg.colmap_matcher,
+                cfg.colmap_max_features,
+                cfg.colmap_image_size,
             )
-            session.ply_full_path = str(Path(output_dir) / "object_full.ply")
             session.poses_path = str(Path(output_dir) / "camera_poses.json")
-            session.pi3x_cache_path = str(Path(output_dir) / "pi3x_cache.npz")
+            session.colmap_sparse_path = str(Path(output_dir) / "colmap_sparse")
 
-            # Pause for user to review the 3D preview before moving to Stage 3.
-            await broadcast(session, {"type": "pi3x_preview_ready"})
+            # Pause for user to review COLMAP results
+            await broadcast(session, {"type": "colmap_preview_ready"})
             await _wait_for_next_stage_confirmation(
                 session,
-                PipelineStage.PI3X_RECONSTRUCT,
+                PipelineStage.COLMAP_SFM,
                 PipelineStage.SAM2_SEGMENT,
-                "Pi3X 3D Reconstruction complete. Continue to SAM2 Segmentation?",
+                "COLMAP SfM complete. Continue to SAM2 Segmentation?",
             )
 
         if start_stage <= int(PipelineStage.SAM2_SEGMENT):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
-            _require_file(session.pi3x_cache_path, "Pi3X cache file")
 
             # ── Stage 3: SAM2 Interactive Segmentation ────────────
             session.stage_start(PipelineStage.SAM2_SEGMENT)
-            sam2_checkpoint = first_checkpoint_id(
-                int(PipelineStage.SAM2_SEGMENT),
-                mesh_method_key(cfg.mesh_method),
-            )
+            sam2_checkpoint = first_checkpoint_id(int(PipelineStage.SAM2_SEGMENT))
             if sam2_checkpoint:
                 session.stage_progress(PipelineStage.SAM2_SEGMENT, checkpoint_id=sam2_checkpoint)
             await broadcast(session, {
@@ -390,56 +362,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                         detail="Redoing SAM2 interaction",
                     )
 
-                # Apply SAM2 masks to Pi3X cache
-                loop = asyncio.get_event_loop()
-
-                def _mask_progress_cb(progress: float, detail: str | None = None) -> None:
-                    _check_cancelled(session)
-                    mapped_progress = 72.0 + (max(0.0, min(100.0, progress)) * 0.28)
-
-                    def _push() -> None:
-                        payload = _build_stage_progress_payload(
-                            session,
-                            PipelineStage.SAM2_SEGMENT,
-                            progress=mapped_progress,
-                            detail=detail,
-                        )
-                        asyncio.create_task(
-                            broadcast(session, payload)
-                        )
-
-                    loop.call_soon_threadsafe(_push)
-
-                await asyncio.to_thread(
-                    _stage_apply_masks,
-                    session.pi3x_cache_path,
-                    session.mask_dir,
-                    output_dir,
-                    progress_cb=_mask_progress_cb,
-                )
-            session.ply_path = str(Path(output_dir) / "object.ply")
-
-            # Extract ground plane if ground masks exist
-            if session.ground_mask_dir and session.pi3x_cache_path:
-                await _broadcast_stage_progress(
-                    session,
-                    PipelineStage.SAM2_SEGMENT,
-                    progress=96.0,
-                    detail="Extracting ground plane from masks",
-                )
-                ground_plane = await asyncio.to_thread(
-                    _stage_extract_ground_plane,
-                    session.pi3x_cache_path,
-                    session.ground_mask_dir,
-                    output_dir,
-                    object_mask_dir=session.mask_dir,
-                )
-                if ground_plane is not None:
-                    session.ground_plane_path = str(Path(output_dir) / "ground_plane.json")
-                    print(f"Ground plane extracted: {ground_plane}")
-                else:
-                    print("Ground plane extraction returned None (too few points)")
-
             session.stage_complete(PipelineStage.SAM2_SEGMENT)
             await broadcast(session, {
                 "type": "stage_complete",
@@ -451,154 +373,49 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.SAM2_SEGMENT,
-                PipelineStage.DENOISE,
-                "SAM2 Segmentation complete. Continue to Point Cloud Denoise?",
+                PipelineStage.GS2MESH_RECONSTRUCT,
+                "SAM2 Segmentation complete. Continue to gs2mesh Reconstruction?",
             )
 
-        if start_stage <= int(PipelineStage.DENOISE):
-            _require_file(session.ply_path, "Masked point cloud")
-            # ── Stage 4: Denoising ────────────────────────────────
+        if start_stage <= int(PipelineStage.GS2MESH_RECONSTRUCT):
+            _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
+            _require_file(session.poses_path, "Camera poses file")
+
+            # VRAM gate: ensure sufficient free VRAM before gs2mesh
+            with stage_log_scope(int(PipelineStage.GS2MESH_RECONSTRUCT)):
+                await asyncio.to_thread(_vram_gate)
+
+            # ── Stage 4: gs2mesh Reconstruction ──────────────────
             await _run_stage(
                 session,
-                PipelineStage.DENOISE,
-                _stage_denoise,
-                session.ply_path,
+                PipelineStage.GS2MESH_RECONSTRUCT,
+                _stage_gs2mesh_reconstruct,
+                session.frames_dir,
+                session.colmap_sparse_path or str(Path(output_dir) / "colmap_sparse"),
+                session.mask_dir,
                 output_dir,
-                cfg.denoise_preset,
-                cfg.denoise_algorithm,
-                cfg.denoise_dbscan_eps,
-                cfg.denoise_dbscan_eps_ratio,
-                cfg.denoise_dbscan_min_samples,
-                cfg.denoise_dbscan_max_points,
-                cfg.denoise_sor_neighbors,
-                cfg.denoise_sor_std_ratio,
-                cfg.denoise_radius_neighbors,
-                cfg.denoise_radius_radius_ratio,
+                cfg.gs2mesh_gs_iterations,
+                cfg.gs2mesh_stereo_model,
+                cfg.gs2mesh_tsdf_voxel_size,
+                cfg.gs2mesh_tsdf_depth_trunc,
+                cfg.gs2mesh_use_masks,
             )
-            session.denoised_ply = str(Path(output_dir) / "object_denoised.ply")
-            _check_cancelled(session)
-            mesh_method = mesh_method_key(cfg.mesh_method)
-            mesh_label = _mesh_method_label(mesh_method)
-            await _wait_for_next_stage_confirmation(
-                session,
-                PipelineStage.DENOISE,
-                PipelineStage.DIFFCD_MESH,
-                f"Point Cloud Denoise complete. Continue to {mesh_label}?",
-            )
-
-        if start_stage <= int(PipelineStage.DIFFCD_MESH):
-            _require_file(session.denoised_ply, "Denoised point cloud")
-            # ── Stage 5: Mesh Reconstruction ──────────────────────
-            mesh_method = mesh_method_key(cfg.mesh_method)
-            mesh_label = _mesh_method_label(mesh_method)
-            if mesh_method == "diffcd":
-                await _run_stage(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    _stage_diffcd,
-                    session.denoised_ply,
-                    output_dir,
-                    label=mesh_label,
-                )
-            else:
-                await _run_stage(
-                    session,
-                    PipelineStage.DIFFCD_MESH,
-                    _stage_classical_mesh,
-                    session.denoised_ply,
-                    output_dir,
-                    cfg.classical_preprocess_enabled,
-                    cfg.classical_poisson_depth,
-                    cfg.classical_density_trim_q,
-                    cfg.classical_auto_smooth,
-                    cfg.classical_smooth_iterations,
-                    cfg.classical_downsample_enabled,
-                    cfg.classical_downsample_target_faces,
-                    label=mesh_label,
-                )
-
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
                 session,
-                PipelineStage.DIFFCD_MESH,
-                PipelineStage.MESH_WRAP,
-                f"{mesh_label} complete. Continue to Mesh Wrap?",
-            )
-
-        if start_stage <= int(PipelineStage.MESH_WRAP):
-            _require_file(session.mesh_ply, "Mesh point cloud")
-            # ── Stage 6: Mesh Wrap ────────────────────────────────
-            await _run_stage(
-                session,
-                PipelineStage.MESH_WRAP,
-                _stage_mesh_wrap,
-                session.mesh_ply,
-                output_dir,
-                cfg.meshwrap_poisson_depth,
-                cfg.meshwrap_poisson_scale,
-                cfg.meshwrap_density_trim_q,
-                cfg.meshwrap_target_face_ratio,
-                cfg.meshwrap_iterations,
-                cfg.meshwrap_crop_scale,
-                cfg.meshwrap_sample_points,
-                cfg.meshwrap_normal_radius_ratio,
-                cfg.meshwrap_smooth_iterations,
-                cfg.meshwrap_quality_threshold,
-                cfg.meshwrap_method,
-                cfg.meshwrap_alpha_ratio,
-                cfg.meshwrap_offset_ratio,
-            )
-            wrapped_mesh = Path(output_dir) / "object_mesh_wrapped.ply"
-            if wrapped_mesh.is_file():
-                session.mesh_ply = str(wrapped_mesh)
-            _check_cancelled(session)
-            await _wait_for_next_stage_confirmation(
-                session,
-                PipelineStage.MESH_WRAP,
-                PipelineStage.MESH_REPAIR,
-                "Mesh Wrap complete. Continue to Mesh Repair?",
-            )
-
-        if start_stage <= int(PipelineStage.MESH_REPAIR):
-            _require_file(session.mesh_ply, "Wrapped mesh")
-            # Load ground plane if available
-            ground_plane: dict | None = None
-            gp_path = Path(output_dir) / "ground_plane.json"
-            if gp_path.is_file():
-                try:
-                    ground_plane = json.loads(gp_path.read_text(encoding="utf-8"))
-                except Exception:
-                    ground_plane = None
-            # ── Stage 7: Mesh Repair ──────────────────────────────
-            await _run_mesh_repair_interactive(
-                session,
-                session.mesh_ply,
-                output_dir,
-                cfg.mesh_repair_enabled,
-                cfg.mesh_repair_max_diameter_ratio,
-                cfg.mesh_repair_y_band_ratio,
-                cfg.mesh_repair_smooth_iters,
-                ground_plane=ground_plane,
-            )
-            session.mesh_ply = str(Path(output_dir) / "object_mesh_repaired.ply")
-            _check_cancelled(session)
-            await _wait_for_next_stage_confirmation(
-                session,
-                PipelineStage.MESH_REPAIR,
+                PipelineStage.GS2MESH_RECONSTRUCT,
                 PipelineStage.TEXTURE_BAKE,
-                "Mesh Repair complete. Continue to Texture Bake?",
+                "gs2mesh Reconstruction complete. Continue to Texture Bake?",
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
-            repaired_mesh = Path(output_dir) / "object_mesh_repaired.ply"
-            _require_file(str(repaired_mesh), "Repaired mesh")
-            session.mesh_ply = str(repaired_mesh)
+            _require_file(session.mesh_ply, "Reconstructed mesh")
             _require_file(session.poses_path, "Camera poses file")
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
             _require_dir(session.mask_dir, "SAM2 masks directory", must_have_suffix=".png")
 
-            # ── Stage 8: Texture Bake ─────────────────────────────
+            # ── Stage 5: Texture Bake ─────────────────────────────
             await _run_stage(
                 session,
                 PipelineStage.TEXTURE_BAKE,
@@ -692,7 +509,6 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await asyncio.to_thread(sam2_service.release)
         except Exception:
             pass
-        session.clear_mesh_repair_candidates()
         session.clear_next_stage_confirmation()
         session.running = False
         session._task = None
@@ -819,204 +635,6 @@ def _make_cancel_cb(session):
     return _cancel_cb
 
 
-async def _run_mesh_repair_interactive(
-    session: PipelineSession,
-    mesh_ply: str,
-    output_dir: str,
-    mesh_repair_enabled: bool,
-    mesh_repair_max_diameter_ratio: float,
-    mesh_repair_y_band_ratio: float,
-    mesh_repair_smooth_iters: int,
-    ground_plane: dict | None = None,
-) -> None:
-    stage = PipelineStage.MESH_REPAIR
-
-    # Ground-plane mode: skip interactive loop analysis entirely
-    if ground_plane is not None:
-        await _run_stage(
-            session,
-            stage,
-            _stage_mesh_repair,
-            mesh_ply,
-            output_dir,
-            mesh_repair_enabled,
-            mesh_repair_max_diameter_ratio,
-            mesh_repair_y_band_ratio,
-            mesh_repair_smooth_iters,
-            ground_plane,
-        )
-        return
-
-    if not mesh_repair_enabled:
-        await _run_stage(
-            session,
-            stage,
-            _stage_mesh_repair,
-            mesh_ply,
-            output_dir,
-            mesh_repair_enabled,
-            mesh_repair_max_diameter_ratio,
-            mesh_repair_y_band_ratio,
-            mesh_repair_smooth_iters,
-            ground_plane,
-        )
-        return
-
-    session.stage_start(stage)
-    checkpoint_id = first_checkpoint_id(int(stage), mesh_method_key(session.config.mesh_method))
-    if checkpoint_id:
-        session.stage_progress(stage, checkpoint_id=checkpoint_id)
-    await broadcast(
-        session,
-        {
-            "type": "stage_start",
-            "stage": int(stage),
-            "label": STAGE_LABELS[stage],
-            "checkpoint_id": checkpoint_id,
-        },
-    )
-    await _broadcast_stage_progress(session, stage, progress=0.0, detail="Starting")
-
-    loop = asyncio.get_running_loop()
-    _progress_cb = _make_progress_cb(session, stage, loop)
-    _cancel_cb = _make_cancel_cb(session)
-
-    try:
-        analysis = await asyncio.to_thread(
-            _stage_mesh_repair_analyze,
-            mesh_ply,
-            _progress_cb,
-            _cancel_cb,
-        )
-
-        candidates = analysis.get("loops") if isinstance(analysis, dict) else None
-        if not isinstance(candidates, list):
-            raise ValueError("Mesh repair analysis returned invalid candidate data")
-        if len(candidates) == 0:
-            # No closed surfaces — warn and skip repair
-            await _broadcast_stage_progress(
-                session,
-                stage,
-                progress=50.0,
-                detail="No boundary loops found — skipping repair",
-            )
-            await broadcast(
-                session,
-                {
-                    "type": "mesh_repair_ready",
-                    "stage": int(stage),
-                    "candidate_count": 0,
-                    "auto_accepted": session.config.auto_accept,
-                    "has_ground_plane": ground_plane is not None,
-                    "overall_progress": session.overall_progress(),
-                },
-            )
-            await asyncio.to_thread(
-                _stage_mesh_repair_selected,
-                mesh_ply,
-                output_dir,
-                [],
-                mesh_repair_enabled,
-                mesh_repair_max_diameter_ratio,
-                mesh_repair_y_band_ratio,
-                mesh_repair_smooth_iters,
-                _progress_cb,
-                _cancel_cb,
-                ground_plane,
-            )
-        else:
-            analysis_meta = {
-                "mesh_path": analysis.get("mesh_path"),
-                "vertex_count": analysis.get("vertex_count"),
-                "face_count": analysis.get("face_count"),
-                "bbox_min": analysis.get("bbox_min"),
-                "bbox_max": analysis.get("bbox_max"),
-                "bbox_center": analysis.get("bbox_center"),
-                "loop_count": analysis.get("loop_count"),
-                "stats": analysis.get("stats"),
-            }
-            session.set_mesh_repair_candidates(mesh_ply, candidates, analysis=analysis_meta)
-            session.stage_interactive(stage)
-            await _broadcast_stage_progress(
-                session,
-                stage,
-                progress=38.0,
-                detail="Waiting for repair-loop selection",
-            )
-            auto_accepted = session.config.auto_accept
-            await broadcast(
-                session,
-                {
-                    "type": "mesh_repair_ready",
-                    "stage": int(stage),
-                    "candidate_count": len(candidates),
-                    "auto_accepted": auto_accepted,
-                    "has_ground_plane": ground_plane is not None,
-                    "overall_progress": session.overall_progress(),
-                },
-            )
-
-            if auto_accepted:
-                session.mesh_repair_selected_loop_ids = [
-                    int(c["loop_id"]) for c in candidates if "loop_id" in c
-                ]
-                session.mesh_repair_confirm_event.set()
-            await session.mesh_repair_confirm_event.wait()
-            _check_cancelled(session)
-            selected_loop_ids = [int(v) for v in session.mesh_repair_selected_loop_ids]
-            if not selected_loop_ids:
-                await _broadcast_stage_progress(
-                    session,
-                    stage,
-                    progress=40.0,
-                    detail="No loops selected. Skipping repair",
-                )
-
-            await asyncio.to_thread(
-                _stage_mesh_repair_selected,
-                mesh_ply,
-                output_dir,
-                selected_loop_ids,
-                mesh_repair_enabled,
-                mesh_repair_max_diameter_ratio,
-                mesh_repair_y_band_ratio,
-                mesh_repair_smooth_iters,
-                _progress_cb,
-                _cancel_cb,
-                ground_plane,
-            )
-    except _CancelledError:
-        session.clear_mesh_repair_candidates()
-        raise
-    except Exception as e:
-        session.clear_mesh_repair_candidates()
-        session.stage_failed(stage, str(e))
-        await broadcast(
-            session,
-            {
-                "type": "stage_complete",
-                "stage": int(stage),
-                "elapsed": session.stages[int(stage)].elapsed,
-                "error": str(e),
-                "checkpoint_id": session.stages[int(stage)].checkpoint_id,
-                "overall_progress": session.overall_progress(),
-            },
-        )
-        raise
-
-    session.clear_mesh_repair_candidates()
-    session.stage_complete(stage)
-    await broadcast(
-        session,
-        {
-            "type": "stage_complete",
-            "stage": int(stage),
-            "elapsed": session.stages[int(stage)].elapsed,
-            "overall_progress": session.overall_progress(),
-        },
-    )
-
-
 async def _run_stage(
     session: PipelineSession,
     stage: PipelineStage,
@@ -1026,7 +644,7 @@ async def _run_stage(
 ) -> None:
     """Run a blocking stage function in a thread with lifecycle broadcasts."""
     session.stage_start(stage)
-    checkpoint_id = first_checkpoint_id(int(stage), mesh_method_key(session.config.mesh_method))
+    checkpoint_id = first_checkpoint_id(int(stage))
     if checkpoint_id:
         session.stage_progress(stage, checkpoint_id=checkpoint_id)
     await broadcast(session, {

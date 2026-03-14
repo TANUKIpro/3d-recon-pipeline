@@ -2,7 +2,7 @@
 
 Covers broadcast, _build_stage_progress_payload, _CancelledError,
 _safe_current_stage, _require_file, _require_dir, _check_cancelled,
-_mesh_method_label, and _wait_for_next_stage_confirmation.
+and _wait_for_next_stage_confirmation.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from scripts.dashboard.pipeline_runner import (
     _build_stage_progress_payload,
     _CancelledError,
     _check_cancelled,
-    _mesh_method_label,
     _require_dir,
     _require_file,
     _safe_current_stage,
@@ -89,7 +88,6 @@ class TestBuildStageProgressPayload(unittest.TestCase):
 
     def test_required_keys_present(self) -> None:
         session = PipelineSession()
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         result = _build_stage_progress_payload(
@@ -113,23 +111,21 @@ class TestBuildStageProgressPayload(unittest.TestCase):
 
     def test_session_updated(self) -> None:
         session = PipelineSession()
-        session.config.mesh_method = "poisson"
-        session.stage_start(PipelineStage.DENOISE)
+        session.stage_start(PipelineStage.GS2MESH_RECONSTRUCT)
 
         _build_stage_progress_payload(
             session,
-            PipelineStage.DENOISE,
+            PipelineStage.GS2MESH_RECONSTRUCT,
             progress=75.0,
-            detail="Running SOR",
+            detail="Running gs2mesh",
         )
 
-        info = session.stages[int(PipelineStage.DENOISE)]
+        info = session.stages[int(PipelineStage.GS2MESH_RECONSTRUCT)]
         self.assertEqual(info.progress, 75.0)
-        self.assertEqual(info.detail, "Running SOR")
+        self.assertEqual(info.detail, "Running gs2mesh")
 
     def test_checkpoint_resolved(self) -> None:
         session = PipelineSession()
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         result = _build_stage_progress_payload(
@@ -253,16 +249,6 @@ class TestCheckCancelled(unittest.TestCase):
         _check_cancelled(session)
 
 
-class TestMeshMethodLabel(unittest.TestCase):
-    """_mesh_method_label returns human-readable label."""
-
-    def test_diffcd(self) -> None:
-        self.assertEqual(_mesh_method_label("diffcd"), "Learning Mesh (DiffCD)")
-
-    def test_poisson(self) -> None:
-        self.assertEqual(_mesh_method_label("poisson"), "Classical Mesh")
-
-
 class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
     """_wait_for_next_stage_confirmation handles auto-accept and cancel."""
 
@@ -270,13 +256,12 @@ class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
     async def test_auto_accept_immediate(self, mock_broadcast: AsyncMock) -> None:
         session = PipelineSession()
         session.config.auto_accept = True
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         await _wait_for_next_stage_confirmation(
             session,
             PipelineStage.EXTRACT_FRAMES,
-            PipelineStage.PI3X_RECONSTRUCT,
+            PipelineStage.COLMAP_SFM,
             "Continue?",
         )
 
@@ -287,7 +272,6 @@ class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_during_wait(self, mock_broadcast: AsyncMock) -> None:
         session = PipelineSession()
         session.config.auto_accept = False
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         async def _set_cancel_then_confirm() -> None:
@@ -301,7 +285,7 @@ class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.EXTRACT_FRAMES,
-                PipelineStage.PI3X_RECONSTRUCT,
+                PipelineStage.COLMAP_SFM,
                 "Continue?",
             )
 
@@ -309,21 +293,20 @@ class TestWaitForNextStageConfirmation(unittest.IsolatedAsyncioTestCase):
 
 
 class TestWaitForNextStageConfirmationBroadcast(unittest.IsolatedAsyncioTestCase):
-    """6.6.3 / 6.6.4 — Broadcast message structure and session fields."""
+    """Broadcast message structure and session fields."""
 
     @patch("scripts.dashboard.pipeline_runner.broadcast", new_callable=AsyncMock)
     async def test_broadcast_required_and_cleared(self, mock_bc: AsyncMock) -> None:
-        """6.6.3 — auto_accept broadcasts required + cleared messages."""
+        """auto_accept broadcasts required + cleared messages."""
         session = PipelineSession()
         session.config.auto_accept = True
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         await _wait_for_next_stage_confirmation(
             session,
             PipelineStage.EXTRACT_FRAMES,
-            PipelineStage.PI3X_RECONSTRUCT,
-            "Continue to Pi3X?",
+            PipelineStage.COLMAP_SFM,
+            "Continue to COLMAP?",
         )
 
         # Find the required broadcast
@@ -349,10 +332,9 @@ class TestWaitForNextStageConfirmationBroadcast(unittest.IsolatedAsyncioTestCase
 
     @patch("scripts.dashboard.pipeline_runner.broadcast", new_callable=AsyncMock)
     async def test_session_fields_set_and_cleared(self, mock_bc: AsyncMock) -> None:
-        """6.6.4 — Session confirmation fields set during and cleared after."""
+        """Session confirmation fields set during and cleared after."""
         session = PipelineSession()
         session.config.auto_accept = True
-        session.config.mesh_method = "poisson"
         session.stage_start(PipelineStage.EXTRACT_FRAMES)
 
         # Capture the state during the required broadcast
@@ -362,15 +344,13 @@ class TestWaitForNextStageConfirmationBroadcast(unittest.IsolatedAsyncioTestCase
             nonlocal required_seen
             if isinstance(msg, dict) and msg.get("type") == "next_stage_confirmation_required":
                 required_seen = True
-                # During this call, session fields should be set
-                # (auto_accept skips immediately, but fields are set first)
 
         mock_bc.side_effect = _capture_required
 
         await _wait_for_next_stage_confirmation(
             session,
             PipelineStage.EXTRACT_FRAMES,
-            PipelineStage.PI3X_RECONSTRUCT,
+            PipelineStage.COLMAP_SFM,
             "Continue?",
         )
 

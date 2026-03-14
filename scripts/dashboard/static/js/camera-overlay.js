@@ -1,5 +1,5 @@
 /**
- * Camera frustum overlay for Pi3X 3D scene.
+ * Camera frustum overlay for COLMAP 3D scene.
  *
  * Renders wireframe frustum pyramids at camera positions,
  * colored by index (blue→red gradient via HSL).
@@ -35,7 +35,7 @@ export class CameraOverlay {
       const pose = poses[i];
       const mat4 = new THREE.Matrix4();
 
-      // Pi3X outputs camera-to-world (c2w) — use directly
+      // COLMAP outputs camera-to-world (c2w) — use directly
       mat4.fromArray(pose.matrix);
       const camToWorld = mat4;
 

@@ -1,5 +1,5 @@
 # clip2mesh: Docker-based 3D reconstruction pipeline
-# PyTorch (SAM2/Pi3X) + JAX (DiffCD) in a single container
+# COLMAP + 3D Gaussian Splatting + gs2mesh + SAM2
 
 FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
@@ -7,12 +7,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_HOME=/usr/local/cuda
 
-# --- Layer 1: System dependencies ---
+# --- Layer 1: System dependencies + COLMAP ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3.11-distutils \
     git wget curl ffmpeg \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1 \
-    libcgal-dev libeigen3-dev cmake \
+    colmap \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3 \
@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir \
     "torch>=2.5.0" torchvision \
     --index-url https://download.pytorch.org/whl/cu121
 
-# --- Layer 3: Python dependencies (includes JAX via optax/flax) ---
+# --- Layer 3: Python dependencies ---
 RUN pip install --no-cache-dir \
     "numpy>=1.24.0,<2.0" \
     einops timm \
@@ -41,59 +41,33 @@ RUN pip install --no-cache-dir \
     xatlas \
     "pillow>=10.0.0" \
     "tqdm>=4.65.0" \
-    tyro optax flax \
     hydra-core iopath \
     wandb \
     && pip install --no-cache-dir scikit-image
-
-# --- Layer 3c: CGAL Python bindings (seagullmesh for alpha wrapping) ---
-# Ubuntu 22.04 ships CGAL 5.4, but alpha_wrap_3 requires CGAL >= 5.5.
-# Remove old CGAL headers and install full CGAL 6.0 (header-only).
-RUN rm -rf /usr/include/CGAL \
-    && ln -sf /usr/include/eigen3/Eigen /usr/include/Eigen \
-    && wget -qO /tmp/cgal.tar.xz https://github.com/CGAL/cgal/releases/download/v6.0.1/CGAL-6.0.1.tar.xz \
-    && tar -xJf /tmp/cgal.tar.xz -C /tmp \
-    && cp -r /tmp/CGAL-6.0.1/include/CGAL /usr/include/CGAL \
-    && rm -rf /tmp/cgal.tar.xz /tmp/CGAL-6.0.1 \
-    && pip install --no-cache-dir pybind11 \
-    && pip install --no-cache-dir git+https://github.com/darikg/seagullmesh.git
 
 # --- Layer 4: SAM2 (editable install with CUDA extension for post-processing) ---
 RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
-# --- Layer 5: Pi3 (pinned for API compat with stage offloading) ---
-ARG PI3_COMMIT=08d7288aaf4b0c08c8498bea7bafedc4672bb006
-RUN git clone https://github.com/yyfz/Pi3.git /opt/pi3 \
-    && cd /opt/pi3 \
-    && git checkout ${PI3_COMMIT} \
+# --- Layer 5: gaussian-splatting + gs2mesh ---
+RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
+    && cd /opt/gaussian-splatting \
+    && pip install --no-cache-dir -e . 2>/dev/null || true
+
+RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
+    && cd /opt/gs2mesh \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
 
-# --- Layer 6: DiffCD (clone + patches) ---
-RUN git clone https://github.com/Linusnie/diffcd.git /opt/diffcd \
-    && cd /opt/diffcd \
-    && sed -i 's/alpha: float = 100$/alpha: float = 100.0/' diffcd/methods.py \
-    && find . -name "*.py" -exec sed -i 's/jax\.tree_map/jax.tree.map/g' {} + \
-    && pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
-
-# --- Layer 7: Fix JAX CUDA (must be AFTER all pip installs that touch torch/jax) ---
-# SAM2 pins nvidia-cudnn-cu12==9.1.0.70 (via torch), but jaxlib needs >=9.8.0.
-# Upgrade CuDNN + install matching JAX CUDA plugin. torch works fine with higher CuDNN.
-RUN JAX_V=$(python3 -c "import jax; print(jax.__version__)") \
-    && pip install --no-cache-dir --no-deps \
-    "jax-cuda12-plugin==${JAX_V}" "jax-cuda12-pjrt==${JAX_V}" \
-    "nvidia-cudnn-cu12>=9.8.0"
-
-# --- Layer 8: Application code ---
+# --- Layer 6: Application code ---
 COPY scripts/ /app/scripts/
 
-# --- Layer 9: Test dependencies & test files ---
+# --- Layer 7: Test dependencies & test files ---
 COPY tests/ /app/tests/
 RUN pip install --no-cache-dir pytest pytest-asyncio
 
 # Add repos to Python path
-ENV PYTHONPATH="/app:/opt/pi3:/opt/sam2:${PYTHONPATH}"
+ENV PYTHONPATH="/app:/opt/gs2mesh:/opt/gaussian-splatting:/opt/sam2:${PYTHONPATH}"
 
 EXPOSE 7860
 

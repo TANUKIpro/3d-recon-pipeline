@@ -98,7 +98,7 @@ export function _resolveResumeStage() {
 
 export function _clampStage(stage) {
   const n = Number(stage) || 1;
-  return Math.max(1, Math.min(8, Math.round(n)));
+  return Math.max(1, Math.min(5, Math.round(n)));
 }
 
 export function _updateResumeHint() {

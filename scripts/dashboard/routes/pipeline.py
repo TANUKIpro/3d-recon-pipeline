@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +32,6 @@ from scripts.dashboard.object_store import (
 )
 from scripts.dashboard.pipeline_runner import broadcast, run_pipeline
 from scripts.dashboard.state import PipelineStage
-from scripts.vram_utils import estimate_pi3x_frame_plan
 
 router = APIRouter()
 
@@ -169,15 +167,6 @@ async def pipeline_video_info(path: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.get("/api/pipeline/pi3x-plan")
-async def pipeline_pi3x_plan(requested_frames: int, pixel_limit: int):
-    """Estimate Pi3X frame auto-tuning result before pipeline start."""
-    req = max(2, int(requested_frames))
-    px = max(1, int(pixel_limit))
-    plan = await asyncio.to_thread(estimate_pi3x_frame_plan, req, px)
-    return JSONResponse(plan)
-
-
 @router.post("/api/pipeline/start")
 async def pipeline_start(body: dict | None = None):
     state = get_state()
@@ -257,15 +246,6 @@ async def pipeline_start(body: dict | None = None):
         config=cfg.to_dict(),
     )
 
-    # Set env vars that stages read directly
-    os.environ["DIFFCD_BATCH_SIZE"] = str(cfg.diffcd_batch_size)
-    os.environ["DIFFCD_N_BATCHES"] = str(cfg.diffcd_n_batches)
-    os.environ["DIFFCD_RESOLUTION"] = str(cfg.diffcd_resolution)
-    os.environ["MESH_REPAIR_ENABLED"] = "1" if cfg.mesh_repair_enabled else "0"
-    os.environ["MESH_REPAIR_MAX_DIAMETER_RATIO"] = str(cfg.mesh_repair_max_diameter_ratio)
-    os.environ["MESH_REPAIR_Y_BAND_RATIO"] = str(cfg.mesh_repair_y_band_ratio)
-    os.environ["MESH_REPAIR_SMOOTH_ITERS"] = str(cfg.mesh_repair_smooth_iters)
-
     # Launch pipeline as background task
     session._task = asyncio.create_task(run_pipeline(session, state.sam2_service))
 
@@ -308,12 +288,11 @@ async def pipeline_cancel():
             },
         )
 
-    # If waiting for SAM2 or Pi3X confirmation/approval, unblock it
+    # If waiting for SAM2 confirmation/approval, unblock it
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
     session.sam2_ground_skip_event.set()
     session.next_stage_confirm_event.set()
-    session.mesh_repair_confirm_event.set()
     return JSONResponse(
         {
             "status": "cancelling",

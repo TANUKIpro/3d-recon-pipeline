@@ -13,48 +13,21 @@ from pathlib import Path
 from typing import Any
 
 from scripts.config_defaults import (
-    CLASSICAL_AUTO_SMOOTH,
-    CLASSICAL_DEFAULT_PRESET,
-    CLASSICAL_DENSITY_TRIM_Q,
-    CLASSICAL_DOWNSAMPLE_ENABLED,
-    CLASSICAL_DOWNSAMPLE_TARGET_FACES,
-    CLASSICAL_POISSON_DEPTH,
-    CLASSICAL_PREPROCESS_ENABLED,
-    CLASSICAL_SMOOTH_ITERATIONS,
-    DENOISE_DEFAULT_ALGORITHM,
-    DENOISE_DEFAULT_PRESET,
-    DIFFCD_BATCH_SIZE,
-    DIFFCD_N_BATCHES,
-    DIFFCD_RESOLUTION,
+    COLMAP_IMAGE_SIZE,
+    COLMAP_MAX_FEATURES,
+    COLMAP_MATCHER,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
+    GS2MESH_GS_ITERATIONS,
+    GS2MESH_STEREO_MODEL,
+    GS2MESH_TSDF_DEPTH_TRUNC,
+    GS2MESH_TSDF_VOXEL_SIZE,
+    GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
-    MESH_DEFAULT_METHOD,
-    MESHWRAP_ALPHA_RATIO,
-    MESHWRAP_CROP_SCALE,
-    MESHWRAP_DENSITY_TRIM_Q,
-    MESHWRAP_ITERATIONS,
-    MESHWRAP_NORMAL_RADIUS_RATIO,
-    MESHWRAP_OFFSET_RATIO,
-    MESHWRAP_POISSON_DEPTH,
-    MESHWRAP_POISSON_SCALE,
-    MESHWRAP_QUALITY_THRESHOLD,
-    MESHWRAP_SAMPLE_POINTS,
-    MESHWRAP_SMOOTH_ITERATIONS,
-    MESHWRAP_TARGET_FACE_RATIO,
-    PI3X_CONFIDENCE_THRESHOLD,
-    PI3X_EDGE_RTOL,
-    PI3X_FRAME_TARGET,
-    PI3X_PIXEL_LIMIT,
-    REPAIR_ENABLED,
-    REPAIR_MAX_DIAMETER_RATIO,
-    REPAIR_SMOOTH_ITERS,
-    REPAIR_Y_BAND_RATIO,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
-    MESHWRAP_METHOD,
     OUTPUT_DIR_DEFAULT,
 )
 
@@ -70,35 +43,26 @@ class StageStatus(str, Enum):
 class PipelineStage(IntEnum):
     IDLE = 0
     EXTRACT_FRAMES = 1
-    PI3X_RECONSTRUCT = 2
+    COLMAP_SFM = 2
     SAM2_SEGMENT = 3
-    DENOISE = 4
-    DIFFCD_MESH = 5
-    MESH_WRAP = 6
-    MESH_REPAIR = 7
-    TEXTURE_BAKE = 8
-    COMPLETE = 9
+    GS2MESH_RECONSTRUCT = 4
+    TEXTURE_BAKE = 5
+    COMPLETE = 6
 
 
 STAGE_LABELS: dict[int, str] = {
     PipelineStage.EXTRACT_FRAMES: "Extract Frames",
-    PipelineStage.PI3X_RECONSTRUCT: "Pi3X 3D Reconstruction",
+    PipelineStage.COLMAP_SFM: "COLMAP SfM",
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
-    PipelineStage.DENOISE: "Point Cloud Denoise",
-    PipelineStage.DIFFCD_MESH: "Mesh Reconstruction",
-    PipelineStage.MESH_WRAP: "Mesh Wrap",
-    PipelineStage.MESH_REPAIR: "Mesh Repair",
+    PipelineStage.GS2MESH_RECONSTRUCT: "gs2mesh Reconstruction",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
 }
 
 STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
-    2: ("object_full.ply", "camera_poses.json", "pi3x_cache.npz"),
-    3: ("object.ply",),
-    4: ("object_denoised.ply",),
-    5: ("object_mesh.ply",),
-    6: ("object_mesh_wrapped.ply",),
-    7: ("object_mesh_repaired.ply",),
-    8: ("textured_mesh.obj",),
+    2: ("camera_poses.json",),
+    3: (),  # masks dir checked separately
+    4: ("object_mesh.ply",),
+    5: ("textured_mesh.obj",),
 }
 
 
@@ -113,15 +77,13 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
     frame_count = _count_indexed_files(out / "frames", ".jpg")
     mask_count = _count_indexed_files(out / "masks", ".png")
     textured_ready = (out / "textured_mesh.obj").is_file()
+    colmap_sparse_dir = out / "colmap_sparse"
     stage_complete = {
         1: frame_count > 0,
-        2: all((out / rel).is_file() for rel in STAGE_OUTPUT_FILES[2]),
-        3: (out / "object.ply").is_file() and mask_count > 0,
-        4: (out / "object_denoised.ply").is_file(),
-        5: (out / "object_mesh.ply").is_file(),
-        6: (out / "object_mesh_wrapped.ply").is_file(),
-        7: (out / "object_mesh_repaired.ply").is_file(),
-        8: textured_ready,
+        2: (out / "camera_poses.json").is_file() and colmap_sparse_dir.is_dir(),
+        3: mask_count > 0,
+        4: (out / "object_mesh.ply").is_file(),
+        5: textured_ready,
     }
     return stage_complete, frame_count, mask_count
 
@@ -135,50 +97,15 @@ class PipelineConfig:
     object_name: str = ""
     frame_interval: int = EXTRACT_FRAME_INTERVAL
     max_frames: int = EXTRACT_MAX_FRAMES
-    pixel_limit: int = PI3X_PIXEL_LIMIT
-    pi3x_frame_target: int = PI3X_FRAME_TARGET
-    confidence_threshold: float = PI3X_CONFIDENCE_THRESHOLD
-    edge_rtol: float = PI3X_EDGE_RTOL
     sam2_model: str = SAM2_DEFAULT_MODEL
-    denoise_preset: str = DENOISE_DEFAULT_PRESET
-    denoise_algorithm: str = DENOISE_DEFAULT_ALGORITHM
-    denoise_dbscan_eps: float = 0.0
-    denoise_dbscan_eps_ratio: float = 0.02
-    denoise_dbscan_min_samples: int = 10
-    denoise_dbscan_max_points: int = 500000
-    denoise_sor_neighbors: int = 20
-    denoise_sor_std_ratio: float = 2.0
-    denoise_radius_neighbors: int = 8
-    denoise_radius_radius_ratio: float = 0.015
-    mesh_method: str = MESH_DEFAULT_METHOD
-    diffcd_batch_size: int = DIFFCD_BATCH_SIZE
-    diffcd_n_batches: int = DIFFCD_N_BATCHES
-    diffcd_resolution: int = DIFFCD_RESOLUTION
-    meshwrap_method: str = MESHWRAP_METHOD
-    meshwrap_poisson_depth: int = MESHWRAP_POISSON_DEPTH
-    meshwrap_poisson_scale: float = MESHWRAP_POISSON_SCALE
-    meshwrap_density_trim_q: float = MESHWRAP_DENSITY_TRIM_Q
-    meshwrap_target_face_ratio: float = MESHWRAP_TARGET_FACE_RATIO
-    meshwrap_iterations: int = MESHWRAP_ITERATIONS
-    meshwrap_crop_scale: float = MESHWRAP_CROP_SCALE
-    meshwrap_sample_points: int = MESHWRAP_SAMPLE_POINTS
-    meshwrap_normal_radius_ratio: float = MESHWRAP_NORMAL_RADIUS_RATIO
-    meshwrap_smooth_iterations: int = MESHWRAP_SMOOTH_ITERATIONS
-    meshwrap_quality_threshold: float = MESHWRAP_QUALITY_THRESHOLD
-    meshwrap_alpha_ratio: float = MESHWRAP_ALPHA_RATIO
-    meshwrap_offset_ratio: float = MESHWRAP_OFFSET_RATIO
-    classical_preset: str = CLASSICAL_DEFAULT_PRESET
-    classical_preprocess_enabled: bool = CLASSICAL_PREPROCESS_ENABLED
-    classical_poisson_depth: int = CLASSICAL_POISSON_DEPTH
-    classical_density_trim_q: float = CLASSICAL_DENSITY_TRIM_Q
-    classical_auto_smooth: bool = CLASSICAL_AUTO_SMOOTH
-    classical_smooth_iterations: int = CLASSICAL_SMOOTH_ITERATIONS
-    classical_downsample_enabled: bool = CLASSICAL_DOWNSAMPLE_ENABLED
-    classical_downsample_target_faces: int = CLASSICAL_DOWNSAMPLE_TARGET_FACES
-    mesh_repair_enabled: bool = REPAIR_ENABLED
-    mesh_repair_max_diameter_ratio: float = REPAIR_MAX_DIAMETER_RATIO
-    mesh_repair_y_band_ratio: float = REPAIR_Y_BAND_RATIO
-    mesh_repair_smooth_iters: int = REPAIR_SMOOTH_ITERS
+    colmap_matcher: str = COLMAP_MATCHER
+    colmap_max_features: int = COLMAP_MAX_FEATURES
+    colmap_image_size: int = COLMAP_IMAGE_SIZE
+    gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS
+    gs2mesh_stereo_model: str = GS2MESH_STEREO_MODEL
+    gs2mesh_tsdf_voxel_size: float = GS2MESH_TSDF_VOXEL_SIZE
+    gs2mesh_tsdf_depth_trunc: float = GS2MESH_TSDF_DEPTH_TRUNC
+    gs2mesh_use_masks: bool = GS2MESH_USE_MASKS
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
@@ -242,14 +169,6 @@ class PipelineSession:
     next_stage_confirmation_to: int | None = None
     next_stage_confirmation_message: str | None = None
 
-    # Stage 7 interactive mesh-repair handshake
-    mesh_repair_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
-    mesh_repair_ready: bool = False
-    mesh_repair_candidates: list[dict[str, Any]] = field(default_factory=list)
-    mesh_repair_selected_loop_ids: list[int] = field(default_factory=list)
-    mesh_repair_source_mesh_path: str | None = None
-    mesh_repair_analysis: dict[str, Any] = field(default_factory=dict)
-
     # Pipeline task handle
     _task: asyncio.Task | None = field(default=None, repr=False)
     cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -261,11 +180,8 @@ class PipelineSession:
     mask_dir: str | None = None
     ground_mask_dir: str | None = None
     ground_plane_path: str | None = None
-    ply_full_path: str | None = None    # full (unmasked) PLY from Pi3X
-    pi3x_cache_path: str | None = None  # cache for mask filtering
-    ply_path: str | None = None
+    colmap_sparse_path: str | None = None
     poses_path: str | None = None
-    denoised_ply: str | None = None
     mesh_ply: str | None = None
     obj_path: str | None = None
     frame_count: int = 0
@@ -294,12 +210,6 @@ class PipelineSession:
         self.next_stage_confirmation_from = None
         self.next_stage_confirmation_to = None
         self.next_stage_confirmation_message = None
-        self.mesh_repair_confirm_event = asyncio.Event()
-        self.mesh_repair_ready = False
-        self.mesh_repair_candidates = []
-        self.mesh_repair_selected_loop_ids = []
-        self.mesh_repair_source_mesh_path = None
-        self.mesh_repair_analysis = {}
         self.sam2_frame_count = 0
         self._task = None
         self.cancel_event = threading.Event()
@@ -309,11 +219,8 @@ class PipelineSession:
         self.mask_dir = None
         self.ground_mask_dir = None
         self.ground_plane_path = None
-        self.ply_full_path = None
-        self.pi3x_cache_path = None
-        self.ply_path = None
+        self.colmap_sparse_path = None
         self.poses_path = None
-        self.denoised_ply = None
         self.mesh_ply = None
         self.obj_path = None
         self.frame_count = 0
@@ -339,22 +246,11 @@ class PipelineSession:
         self.ground_mask_dir = str(ground_mask_dir) if ground_mask_dir.is_dir() and any(ground_mask_dir.glob("*.png")) else None
         ground_plane_path = out / "ground_plane.json"
         self.ground_plane_path = str(ground_plane_path) if ground_plane_path.is_file() else None
-        self.ply_full_path = str(out / "object_full.ply") if (out / "object_full.ply").is_file() else None
-        self.pi3x_cache_path = str(out / "pi3x_cache.npz") if (out / "pi3x_cache.npz").is_file() else None
+        colmap_sparse = out / "colmap_sparse"
+        self.colmap_sparse_path = str(colmap_sparse) if colmap_sparse.is_dir() else None
         self.poses_path = str(out / "camera_poses.json") if (out / "camera_poses.json").is_file() else None
-        self.ply_path = str(out / "object.ply") if (out / "object.ply").is_file() else None
-        self.denoised_ply = str(out / "object_denoised.ply") if (out / "object_denoised.ply").is_file() else None
-        repaired_mesh = out / "object_mesh_repaired.ply"
-        wrapped_mesh = out / "object_mesh_wrapped.ply"
         base_mesh = out / "object_mesh.ply"
-        if repaired_mesh.is_file():
-            self.mesh_ply = str(repaired_mesh)
-        elif wrapped_mesh.is_file():
-            self.mesh_ply = str(wrapped_mesh)
-        elif base_mesh.is_file():
-            self.mesh_ply = str(base_mesh)
-        else:
-            self.mesh_ply = None
+        self.mesh_ply = str(base_mesh) if base_mesh.is_file() else None
         self.obj_path = str(out / "textured_mesh.obj") if (out / "textured_mesh.obj").is_file() else None
 
         for stage_id in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
@@ -398,38 +294,11 @@ class PipelineSession:
         self.next_stage_confirmation_to = None
         self.next_stage_confirmation_message = None
         self.next_stage_confirm_event = asyncio.Event()
-        self.mesh_repair_confirm_event = asyncio.Event()
-        self.mesh_repair_ready = False
-        self.mesh_repair_candidates = []
-        self.mesh_repair_selected_loop_ids = []
-        self.mesh_repair_source_mesh_path = None
-        self.mesh_repair_analysis = {}
         return {
             "stage_complete": stage_complete,
             "frame_count": frame_count,
             "mask_count": mask_count,
         }
-
-    def set_mesh_repair_candidates(
-        self,
-        mesh_path: str,
-        candidates: list[dict[str, Any]],
-        analysis: dict[str, Any] | None = None,
-    ) -> None:
-        self.mesh_repair_ready = True
-        self.mesh_repair_source_mesh_path = str(mesh_path)
-        self.mesh_repair_candidates = list(candidates)
-        self.mesh_repair_analysis = dict(analysis or {})
-        self.mesh_repair_selected_loop_ids = []
-        self.mesh_repair_confirm_event.clear()
-
-    def clear_mesh_repair_candidates(self) -> None:
-        self.mesh_repair_ready = False
-        self.mesh_repair_source_mesh_path = None
-        self.mesh_repair_candidates = []
-        self.mesh_repair_selected_loop_ids = []
-        self.mesh_repair_analysis = {}
-        self.mesh_repair_confirm_event = asyncio.Event()
 
     def stage_start(self, stage: PipelineStage) -> None:
         self.current_stage = stage
@@ -549,7 +418,6 @@ class PipelineSession:
             "cancel_force": self.cancel_force,
             "resume_from_stage": int(self.resume_from_stage),
             "object_name": self.config.object_name,
-            "mesh_method": self.config.mesh_method,
             "video_path": self.config.video_path,
             "output_dir": self.config.output_dir,
             "current_checkpoint_id": self.current_checkpoint_id,
@@ -563,13 +431,6 @@ class PipelineSession:
                 "from_stage": self.next_stage_confirmation_from,
                 "to_stage": self.next_stage_confirmation_to,
                 "message": self.next_stage_confirmation_message,
-            },
-            "mesh_repair": {
-                "ready": self.mesh_repair_ready,
-                "source_mesh_path": self.mesh_repair_source_mesh_path,
-                "candidate_count": len(self.mesh_repair_candidates),
-                "selected_loop_count": len(self.mesh_repair_selected_loop_ids),
-                "analysis": self.mesh_repair_analysis,
             },
             "stages": {
                 str(k): {

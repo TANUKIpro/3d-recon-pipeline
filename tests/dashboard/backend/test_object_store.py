@@ -25,7 +25,7 @@ from scripts.dashboard.object_store import (
 
 
 class TestResetOutputsFromStage(unittest.TestCase):
-    """7.2.3 — reset_outputs_from_stage keeps earlier stages intact."""
+    """reset_outputs_from_stage keeps earlier stages intact."""
 
     def test_reset_from_stage_3_preserves_1_and_2(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -34,45 +34,37 @@ class TestResetOutputsFromStage(unittest.TestCase):
             (out / "frames").mkdir()
             (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
             # Create stage 2 outputs
-            (out / "object_full.ply").write_text("ply\n")
-            (out / "pi3x_cache.npz").write_bytes(b"npz")
+            (out / "colmap_sparse").mkdir()
             (out / "camera_poses.json").write_text("{}")
             # Create stage 3 outputs
             (out / "masks").mkdir()
             (out / "masks" / "00000.png").write_bytes(b"png")
-            (out / "object.ply").write_text("ply\n")
             # Create stage 4 output
-            (out / "object_denoised.ply").write_text("ply\n")
+            (out / "object_mesh.ply").write_text("ply\n")
 
             reset_outputs_from_stage(out, 3)
 
             # Stages 1-2 intact
             self.assertTrue((out / "frames" / "00000.jpg").is_file())
-            self.assertTrue((out / "object_full.ply").is_file())
-            self.assertTrue((out / "pi3x_cache.npz").is_file())
+            self.assertTrue((out / "colmap_sparse").is_dir())
             self.assertTrue((out / "camera_poses.json").is_file())
             # Stages 3+ deleted
             self.assertFalse((out / "masks").is_dir())
-            self.assertFalse((out / "object.ply").is_file())
-            self.assertFalse((out / "object_denoised.ply").is_file())
+            self.assertFalse((out / "object_mesh.ply").is_file())
 
 
 class TestInferResumeStage(unittest.TestCase):
-    """7.2.4 — infer_resume_stage returns the first incomplete stage."""
+    """infer_resume_stage returns the first incomplete stage."""
 
-    def test_stages_1_2_complete_returns_3(self) -> None:
+    def test_stage_1_complete_returns_2(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             # Stage 1: frames dir with at least one .jpg
             (out / "frames").mkdir()
             (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
-            # Stage 2: Pi3X outputs
-            (out / "object_full.ply").write_text("ply\n")
-            (out / "pi3x_cache.npz").write_bytes(b"npz")
-            (out / "camera_poses.json").write_text("{}")
 
             result = infer_resume_stage(out)
-            self.assertEqual(result, 3)
+            self.assertEqual(result, 2)
 
     def test_empty_dir_returns_1(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -81,20 +73,22 @@ class TestInferResumeStage(unittest.TestCase):
 
 
 class TestValidateResumePrerequisites(unittest.TestCase):
-    """7.2.5 — validate_resume_prerequisites detects missing files."""
+    """validate_resume_prerequisites detects missing files."""
 
     def test_missing_files_returns_issues(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            # Stage 3 requires frames dir, object_full.ply, camera_poses.json, pi3x_cache.npz
+            # Stage 3 requires frames dir and camera_poses.json
             issues = validate_resume_prerequisites(out, 3)
             self.assertGreater(len(issues), 0)
 
     def test_all_present_returns_empty(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            # Set up prerequisites for stage 4 (needs object.ply)
-            (out / "object.ply").write_text("ply\n")
+            # Set up prerequisites for stage 4 (needs frames dir, camera_poses.json)
+            (out / "frames").mkdir()
+            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
+            (out / "camera_poses.json").write_text("{}")
 
             issues = validate_resume_prerequisites(out, 4)
             self.assertEqual(issues, [])
@@ -106,7 +100,7 @@ class TestValidateResumePrerequisites(unittest.TestCase):
 
 
 class TestWriteObjectMeta(unittest.TestCase):
-    """7.2.6 — write_object_meta creates/updates metadata file."""
+    """write_object_meta creates/updates metadata file."""
 
     def test_first_write_creates_meta(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -137,7 +131,7 @@ class TestWriteObjectMeta(unittest.TestCase):
 
 
 class TestSummarizeObject(unittest.TestCase):
-    """7.2.7 — summarize_object returns dict with expected keys."""
+    """summarize_object returns dict with expected keys."""
 
     def test_minimal_object_dir(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -156,7 +150,7 @@ class TestSummarizeObject(unittest.TestCase):
 
 
 class TestListObjects(unittest.TestCase):
-    """7.2.8 — list_objects returns sorted list."""
+    """list_objects returns sorted list."""
 
     def test_multiple_objects_sorted_by_updated_at_desc(self) -> None:
         with TemporaryDirectory() as tmp:

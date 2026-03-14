@@ -6,7 +6,7 @@
 import { STAGE_COUNT } from './constants.js';
 
 const STAGE_LABELS = [
-  'Frames', 'Pi3X', 'SAM2', 'Denoise', 'Mesh', 'Wrap', 'Repair', 'Texture',
+  'Frames', 'COLMAP', 'SAM2', 'gs2mesh', 'Texture',
 ];
 
 export class OverviewPanel {

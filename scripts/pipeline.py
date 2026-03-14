@@ -5,17 +5,13 @@ RGB video → Textured 3D mesh (OBJ)
 
 Pipeline stages:
   1. Frame extraction (CPU)
-  2. Pi3X 3D reconstruction (GPU)
-  3. SAM2 interactive segmentation + mask filtering (GPU, Gradio UI)
-  4. Point cloud denoising (CPU)
-  5. Mesh reconstruction (Classical Poisson or DiffCD)
-  6. Mesh wrap (CPU)
-  7. Mesh repair (CPU)
-  8. Texture baking (GPU when available, CPU fallback)
+  2. COLMAP SfM (GPU-accelerated feature matching)
+  3. SAM2 interactive segmentation (GPU, Gradio UI)
+  4. gs2mesh reconstruction (GPU — 3DGS + stereo depth + TSDF)
+  5. Texture baking (GPU when available, CPU fallback)
 """
 
 import argparse
-import json
 import time
 from pathlib import Path
 
@@ -36,25 +32,12 @@ Examples:
     )
     parser.add_argument("video_path", help="Path to input video (.mp4)")
     parser.add_argument("--output-dir", default="/data/output", help="Output directory")
-    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 9),
+    parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 6),
                         help="Skip to stage N (for resuming after interruption)")
-    parser.add_argument(
-        "--mesh-method",
-        default="poisson",
-        choices=["poisson", "diffcd"],
-        help="Mesh method for stage 5 (default: poisson)",
-    )
-    parser.add_argument(
-        "--repair-selection-json",
-        default="",
-        help="Stage 7 selection file JSON: {'selected_loop_ids': [..]} (required when stage 7 runs)",
-    )
     args = parser.parse_args()
 
     output_dir = args.output_dir
     skip_to = args.skip_to
-    mesh_method = str(args.mesh_method or "poisson").strip().lower()
-    repair_selection_json = str(args.repair_selection_json or "").strip()
 
     print("=" * 60)
     print("clip2mesh: RGB Video → Textured 3D Mesh")
@@ -73,41 +56,35 @@ Examples:
     # =====================================================================
     if skip_to <= 1:
         print("\n" + "=" * 60)
-        print("Stage 1/8: Frame Extraction")
+        print("Stage 1/5: Frame Extraction")
         print("=" * 60)
         from scripts.stage_extract_frames import extract_frames
 
         frames_dir = str(extract_frames(args.video_path, output_dir))
         print(f"  → {frames_dir}")
 
-    # VRAM gate: ensure sufficient free VRAM before Pi3X
-    if skip_to <= 1:
-        ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before Pi3X")
-
     # =====================================================================
-    # Stage 2: Pi3X 3D Reconstruction
+    # Stage 2: COLMAP SfM
     # =====================================================================
     if skip_to <= 2:
         print("\n" + "=" * 60)
-        print("Stage 2/8: Pi3X 3D Reconstruction")
+        print("Stage 2/5: COLMAP Structure-from-Motion")
         print("=" * 60)
-        from scripts.stage_pi3x_reconstruct import run_pi3x_inference
+        from scripts.stage_colmap_sfm import run_colmap_sfm
 
-        _ply_full, poses_path, cache_path = run_pi3x_inference(frames_dir, output_dir)
-        cleanup_pytorch_vram()
-        print(f"  → Full PLY: {_ply_full}")
+        poses_path, colmap_sparse_dir = run_colmap_sfm(frames_dir, output_dir)
         print(f"  → Poses: {poses_path}")
-        print(f"  → Cache: {cache_path}")
+        print(f"  → Sparse: {colmap_sparse_dir}")
     else:
-        poses_path = Path(output_dir) / "camera_poses.json"
-        cache_path = Path(output_dir) / "pi3x_cache.npz"
+        poses_path = str(Path(output_dir) / "camera_poses.json")
+        colmap_sparse_dir = str(Path(output_dir) / "colmap_sparse")
 
     # =====================================================================
-    # Stage 3: SAM2 Interactive Segmentation + Mask Filtering
+    # Stage 3: SAM2 Interactive Segmentation
     # =====================================================================
     if skip_to <= 3:
         print("\n" + "=" * 60)
-        print("Stage 3/8: SAM2 Interactive Segmentation")
+        print("Stage 3/5: SAM2 Interactive Segmentation")
         print("=" * 60)
         print(">>> Open http://localhost:7860 to select the object <<<")
         from scripts.stage_sam2_ui import run_sam2_interactive
@@ -116,111 +93,39 @@ Examples:
         cleanup_pytorch_vram()
         print(f"  → {mask_dir}")
 
-        # Apply SAM2 masks to Pi3X cache
-        from scripts.stage_pi3x_reconstruct import apply_sam2_masks
-        ply_path = apply_sam2_masks(str(cache_path), mask_dir, output_dir)
-        print(f"  → PLY: {ply_path}")
-    else:
-        ply_path = Path(output_dir) / "object.ply"
-
     # =====================================================================
-    # Stage 4: Point Cloud Denoising
+    # Stage 4: gs2mesh Reconstruction
     # =====================================================================
     if skip_to <= 4:
         print("\n" + "=" * 60)
-        print("Stage 4/8: Point Cloud Denoising")
+        print("Stage 4/5: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
         print("=" * 60)
-        from scripts.stage_denoise import denoise
+        ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before gs2mesh")
 
-        denoised_ply = denoise(str(ply_path), output_dir)
-        print(f"  → {denoised_ply}")
+        from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
+
+        mesh_ply = run_gs2mesh(
+            frames_dir,
+            colmap_sparse_dir,
+            mask_dir,
+            output_dir,
+        )
+        cleanup_pytorch_vram()
+        print(f"  → Mesh: {mesh_ply}")
     else:
-        denoised_ply = Path(output_dir) / "object_denoised.ply"
+        mesh_ply = str(Path(output_dir) / "object_mesh.ply")
 
     # =====================================================================
-    # Stage 5: Mesh Reconstruction
+    # Stage 5: Texture Baking
     # =====================================================================
     if skip_to <= 5:
         print("\n" + "=" * 60)
-        if mesh_method == "diffcd":
-            print("Stage 5/8: Learning Mesh Reconstruction (DiffCD)")
-            from scripts.stage_diffcd_mesh import run_diffcd
-
-            mesh_ply = run_diffcd(str(denoised_ply), output_dir)
-        else:
-            print("Stage 5/8: Classical Mesh Reconstruction (Normals + Poisson)")
-            from scripts.stage_classical_mesh import run_classical_mesh
-
-            mesh_ply = run_classical_mesh(str(denoised_ply), output_dir)
-        print("=" * 60)
-        print(f"  → {mesh_ply}")
-    else:
-        mesh_ply = Path(output_dir) / "object_mesh.ply"
-
-    # =====================================================================
-    # Stage 6: Mesh Wrap
-    # =====================================================================
-    if skip_to <= 6:
-        print("\n" + "=" * 60)
-        print("Stage 6/8: Mesh Wrap")
-        print("=" * 60)
-        from scripts.stage_mesh_wrap import run_mesh_wrap
-
-        wrapped_mesh_ply = run_mesh_wrap(str(mesh_ply), output_dir)
-        print(f"  → Wrapped: {wrapped_mesh_ply}")
-    else:
-        wrapped_mesh_ply = Path(output_dir) / "object_mesh_wrapped.ply"
-        if not wrapped_mesh_ply.exists():
-            wrapped_mesh_ply = Path(output_dir) / "object_mesh.ply"
-
-    # =====================================================================
-    # Stage 7: Mesh Repair
-    # =====================================================================
-    if skip_to <= 7:
-        print("\n" + "=" * 60)
-        print("Stage 7/8: Mesh Repair")
-        print("=" * 60)
-        from scripts.stage_contact_hole_repair import run_contact_hole_repair
-
-        if not repair_selection_json:
-            raise ValueError(
-                "Stage 7 requires --repair-selection-json when running from CLI"
-            )
-        selection_path = Path(repair_selection_json)
-        if not selection_path.is_file():
-            raise FileNotFoundError(
-                f"repair selection JSON not found: {selection_path}"
-            )
-        payload = json.loads(selection_path.read_text(encoding="utf-8"))
-        raw_selected = payload.get("selected_loop_ids") if isinstance(payload, dict) else None
-        if not isinstance(raw_selected, list) or len(raw_selected) == 0:
-            raise ValueError("repair selection JSON must contain non-empty 'selected_loop_ids' list")
-        selected_loop_ids = [int(v) for v in raw_selected]
-        repaired_mesh_ply = run_contact_hole_repair(
-            str(wrapped_mesh_ply),
-            output_dir,
-            selected_loop_ids=selected_loop_ids,
-            require_selection=True,
-        )
-        print(f"  → Repaired: {repaired_mesh_ply}")
-    else:
-        repaired_mesh_ply = Path(output_dir) / "object_mesh_repaired.ply"
-        if not repaired_mesh_ply.exists():
-            raise FileNotFoundError(
-                f"Stage 8 requires repaired mesh, but file is missing: {repaired_mesh_ply}"
-            )
-
-    # =====================================================================
-    # Stage 8: Texture Baking
-    # =====================================================================
-    if skip_to <= 8:
-        print("\n" + "=" * 60)
-        print("Stage 8/8: Texture Baking")
+        print("Stage 5/5: Texture Baking")
         print("=" * 60)
         from scripts.stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
-            str(repaired_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            str(mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
         )
         print(f"  → {obj_path}")
 
@@ -237,9 +142,7 @@ Examples:
 
     out = Path(output_dir)
     for name in ["textured_mesh.obj", "textured_mesh.mtl", "texture.png",
-                  "object_mesh_repaired.ply",
-                  "object_mesh_wrapped.ply",
-                  "object_mesh.ply", "object_denoised.ply", "object.ply",
+                  "object_mesh.ply",
                   "camera_poses.json", "intrinsics.json"]:
         p = out / name
         if p.exists():

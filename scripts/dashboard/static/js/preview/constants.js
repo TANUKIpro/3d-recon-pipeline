@@ -2,14 +2,6 @@
  * Constants shared across preview submodules.
  */
 
-export const FIRST_MESH_PREVIEW_FILES = new Set([
-  'object_mesh_raw.ply',
-  'object_mesh_preview.ply',
-  'object_mesh_poisson_raw.ply',
-  'object_mesh_wrapped.ply',
-  'object_mesh_repaired.ply',
-]);
-
 export const SCENE_THEMES = {
   dark: {
     background:    0x0a0a14,

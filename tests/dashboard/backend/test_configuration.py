@@ -10,57 +10,45 @@ from scripts.dashboard.state import detect_stage_outputs
 
 
 class BuildPipelineConfigTests(unittest.TestCase):
-    def test_respects_raw_diffcd_values_without_legacy_upgrade(self) -> None:
+    def test_colmap_matcher_defaults_to_sequential(self) -> None:
         cfg = build_pipeline_config(
-            {
-                "diffcd_batch_size": 3000,
-                "diffcd_n_batches": 2500,
-                "diffcd_resolution": 384,
-            },
-            video_path="input.mp4",
-            object_name="sample",
-            output_dir=Path("/tmp/sample"),
-            env={
-                "DIFFCD_BATCH_SIZE": "5000",
-                "DIFFCD_N_BATCHES": "30000",
-                "DIFFCD_RESOLUTION": "512",
-            },
-        )
-
-        self.assertEqual(cfg.diffcd_batch_size, 3000)
-        self.assertEqual(cfg.diffcd_n_batches, 2500)
-        self.assertEqual(cfg.diffcd_resolution, 384)
-
-    def test_clamps_and_normalizes_numeric_fields(self) -> None:
-        cfg = build_pipeline_config(
-            {
-                "max_frames": 1,
-                "pi3x_frame_target": 999,
-                "denoise_dbscan_eps": -1,
-                "denoise_dbscan_eps_ratio": -0.1,
-                "denoise_dbscan_min_samples": 0,
-                "denoise_dbscan_max_points": 10,
-                "denoise_sor_neighbors": 1,
-                "denoise_sor_std_ratio": 0,
-                "denoise_radius_neighbors": 0,
-                "denoise_radius_radius_ratio": 0,
-            },
+            {},
             video_path="input.mp4",
             object_name="sample",
             output_dir=Path("/tmp/sample"),
             env={},
         )
+        self.assertEqual(cfg.colmap_matcher, "sequential")
 
+    def test_colmap_max_features_clamp(self) -> None:
+        cfg = build_pipeline_config(
+            {"colmap_max_features": 500},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+        self.assertEqual(cfg.colmap_max_features, 1000)
+
+    def test_colmap_image_size_clamp(self) -> None:
+        cfg = build_pipeline_config(
+            {"colmap_image_size": 100},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+        self.assertEqual(cfg.colmap_image_size, 256)
+
+    def test_max_frames_clamp(self) -> None:
+        cfg = build_pipeline_config(
+            {"max_frames": 1},
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
         self.assertEqual(cfg.max_frames, 2)
-        self.assertEqual(cfg.pi3x_frame_target, 2)
-        self.assertEqual(cfg.denoise_dbscan_eps, 0.0)
-        self.assertEqual(cfg.denoise_dbscan_eps_ratio, 0.0001)
-        self.assertEqual(cfg.denoise_dbscan_min_samples, 1)
-        self.assertEqual(cfg.denoise_dbscan_max_points, 1000)
-        self.assertEqual(cfg.denoise_sor_neighbors, 2)
-        self.assertEqual(cfg.denoise_sor_std_ratio, 0.1)
-        self.assertEqual(cfg.denoise_radius_neighbors, 1)
-        self.assertEqual(cfg.denoise_radius_radius_ratio, 0.0001)
 
     def test_texture_size_zero_is_preserved_for_auto_mode(self) -> None:
         cfg = build_pipeline_config(
@@ -123,7 +111,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.texture_quality_boost)
 
-    def test_mesh_wrap_and_repair_defaults_match_contact_friendly_profile(self) -> None:
+    def test_gs2mesh_defaults(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -132,34 +120,19 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.meshwrap_poisson_depth, 8)
-        self.assertEqual(cfg.meshwrap_poisson_scale, 1.18)
-        self.assertEqual(cfg.meshwrap_density_trim_q, 0.003)
-        self.assertEqual(cfg.meshwrap_target_face_ratio, 2.2)
-        self.assertEqual(cfg.meshwrap_iterations, 1)
-        self.assertEqual(cfg.meshwrap_crop_scale, 1.08)
-        self.assertEqual(cfg.meshwrap_sample_points, 400000)
-        self.assertEqual(cfg.meshwrap_normal_radius_ratio, 0.02)
-        self.assertEqual(cfg.mesh_repair_smooth_iters, 3)
+        self.assertEqual(cfg.gs2mesh_gs_iterations, 30000)
+        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR")
+        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
+        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
+        self.assertTrue(cfg.gs2mesh_use_masks)
 
-    def test_mesh_repair_defaults_include_tuned_bottom_hole_ratio(self) -> None:
-        cfg = build_pipeline_config(
-            {},
-            video_path="input.mp4",
-            object_name="sample",
-            output_dir=Path("/tmp/sample"),
-            env={},
-        )
-
-        self.assertEqual(cfg.mesh_repair_max_diameter_ratio, 0.46)
-
-    def test_mesh_repair_fields_are_parsed_and_clamped(self) -> None:
+    def test_gs2mesh_fields_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
             {
-                "mesh_repair_enabled": False,
-                "mesh_repair_max_diameter_ratio": -1.0,
-                "mesh_repair_y_band_ratio": 9.9,
-                "mesh_repair_smooth_iters": 999,
+                "gs2mesh_gs_iterations": 500,
+                "gs2mesh_tsdf_voxel_size": 0.0001,
+                "gs2mesh_tsdf_depth_trunc": 0.001,
+                "gs2mesh_use_masks": False,
             },
             video_path="input.mp4",
             object_name="sample",
@@ -167,42 +140,29 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertFalse(cfg.mesh_repair_enabled)
-        self.assertEqual(cfg.mesh_repair_max_diameter_ratio, 0.005)
-        self.assertEqual(cfg.mesh_repair_y_band_ratio, 0.5)
-        self.assertEqual(cfg.mesh_repair_smooth_iters, 12)
+        self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
+        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
+        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
+        self.assertFalse(cfg.gs2mesh_use_masks)
 
 
 class DetectStageOutputsTests(unittest.TestCase):
-    def test_stage5_reset_plan_includes_preview_mesh(self) -> None:
-        self.assertIn("object_mesh_preview.ply", STAGE_RESET_PATHS[5]["files"])
+    def test_stage4_reset_includes_mesh(self) -> None:
+        self.assertIn("object_mesh.ply", STAGE_RESET_PATHS[4]["files"])
 
-    def test_stage6_and_stage7_require_mesh_outputs(self) -> None:
+    def test_stage5_detected_when_obj_exists(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             (out / "textured_mesh.obj").write_text("v 0 0 0\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
+            self.assertTrue(stages[5])
 
-            self.assertFalse(stages[6])
-            self.assertFalse(stages[7])
-            self.assertTrue(stages[8])
-
-    def test_stage6_complete_when_wrapped_mesh_exists(self) -> None:
+    def test_stage4_detected_when_mesh_exists(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "object_mesh_wrapped.ply").write_text("ply\n", encoding="utf-8")
+            (out / "object_mesh.ply").write_text("ply\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
-
-            self.assertTrue(stages[6])
-
-    def test_stage7_complete_when_repaired_mesh_exists(self) -> None:
-        with TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            (out / "object_mesh_repaired.ply").write_text("ply\n", encoding="utf-8")
-            stages, _, _ = detect_stage_outputs(out)
-
-            self.assertFalse(stages[6])
-            self.assertTrue(stages[7])
+            self.assertTrue(stages[4])
 
 
 if __name__ == "__main__":

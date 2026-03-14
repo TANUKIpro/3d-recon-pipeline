@@ -48,7 +48,7 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="2">
       <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.pi3x">Pi3X</span>
+      <span class="stage-label" data-i18n="stage.colmap">COLMAP</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
@@ -62,52 +62,12 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="4">
       <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.denoise">Denoise</span>
+      <span class="stage-label" data-i18n="stage.gs2mesh">gs2mesh</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
     <div class="stage-connector stage-connector-main"></div>
-    <div id="mesh-branch-slot">
-      <div id="mesh-pill-diffcd" class="stage-pill mesh-stage-pill mesh-method-pill" data-stage="5" data-mesh-method="diffcd">
-        <span class="stage-dot"></span>
-        <span class="stage-label" data-i18n="stage.learning_mesh">Learning Mesh</span>
-        <span class="stage-progress">0%</span>
-        <span class="stage-time"></span>
-      </div>
-      <div
-        id="mesh-pill-poisson"
-        class="stage-pill mesh-stage-pill mesh-method-pill mesh-method-branch active"
-        data-mesh-method="poisson"
-        role="button"
-        tabindex="0"
-        aria-label="Select classical mesh reconstruction"
-      >
-        <span class="stage-dot"></span>
-        <span class="stage-label" data-i18n="stage.classical_mesh">Classical Mesh</span>
-        <span class="stage-progress">0%</span>
-        <span class="stage-time"></span>
-      </div>
-      <div id="mesh-connector-poisson-left" class="stage-connector stage-connector-branch active"></div>
-      <div id="mesh-connector-poisson-right" class="stage-connector stage-connector-branch active"></div>
-      <div id="mesh-connector-diffcd-left" class="stage-connector stage-connector-diffcd"></div>
-      <div id="mesh-connector-diffcd-right" class="stage-connector stage-connector-diffcd"></div>
-    </div>
-    <div class="stage-connector stage-connector-main"></div>
-    <div class="stage-pill" data-stage="6">
-      <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.wrap">Wrap</span>
-      <span class="stage-progress">0%</span>
-      <span class="stage-time"></span>
-    </div>
-    <div class="stage-connector stage-connector-main"></div>
-    <div class="stage-pill" data-stage="7">
-      <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.repair">Repair</span>
-      <span class="stage-progress">0%</span>
-      <span class="stage-time"></span>
-    </div>
-    <div class="stage-connector stage-connector-main"></div>
-    <div class="stage-pill" data-stage="8">
+    <div class="stage-pill" data-stage="5">
       <span class="stage-dot"></span>
       <span class="stage-label" data-i18n="stage.texture">Texture</span>
       <span class="stage-progress">0%</span>
@@ -130,18 +90,18 @@
         <div id="gallery-grid"></div>
       </div>
 
-      <!-- Stage 2: Pi3X 3D Reconstruction -->
+      <!-- Stage 2: COLMAP SfM -->
       <div id="stage-panel-2" class="stage-panel">
         <div class="stage-panel-empty" id="stage-2-empty">
-          <p>Pi3X point cloud + camera positions will appear here.</p>
+          <p>COLMAP sparse point cloud + camera positions will appear here.</p>
         </div>
         <div id="three-container-2" class="three-container"></div>
-        <div id="pi3x-toolbar" class="hidden">
+        <div id="colmap-toolbar" class="hidden">
           <label class="toolbar-check">
-            <input type="checkbox" id="pi3x-cameras-toggle" checked> Show cameras
+            <input type="checkbox" id="colmap-cameras-toggle" checked> Show cameras
           </label>
-          <span id="pi3x-point-count" class="toolbar-info"></span>
-          <span id="pi3x-camera-count" class="toolbar-info"></span>
+          <span id="colmap-point-count" class="toolbar-info"></span>
+          <span id="colmap-camera-count" class="toolbar-info"></span>
         </div>
       </div>
 
@@ -177,86 +137,20 @@
         </div>
       </div>
 
-      <!-- Stage 4: Denoise -->
+      <!-- Stage 4: gs2mesh Reconstruction -->
       <div id="stage-panel-4" class="stage-panel">
         <div class="stage-panel-empty" id="stage-4-empty">
-          <p>Denoised point cloud will appear here after Stage 4 completes.</p>
+          <p>Reconstructed mesh will appear here after gs2mesh completes.</p>
         </div>
         <div id="three-container-4" class="three-container"></div>
       </div>
 
-      <!-- Stage 5: Mesh Reconstruction -->
+      <!-- Stage 5: Texture Bake -->
       <div id="stage-panel-5" class="stage-panel">
         <div class="stage-panel-empty" id="stage-5-empty">
-          <p>Selected mesh result will appear here after Stage 5 completes.</p>
+          <p>Textured mesh will appear here after Texture Bake completes.</p>
         </div>
         <div id="three-container-5" class="three-container"></div>
-        <div id="mesh-phase-status" class="mesh-phase-status hidden">
-          <span id="mesh-phase-status-text"></span>
-        </div>
-        <div id="mesh-post-toolbar" class="hidden">
-          <label for="mesh-post-method">Smoothing</label>
-          <select id="mesh-post-method">
-            <option value="laplacian" selected>Laplacian</option>
-            <option value="taubin">Taubin</option>
-          </select>
-          <label for="mesh-post-iterations">Iterations</label>
-          <input type="number" id="mesh-post-iterations" value="8" min="0" max="100" step="1">
-          <label for="mesh-post-lambda">&lambda;</label>
-          <input type="number" id="mesh-post-lambda" value="0.50" min="0.01" max="1.50" step="0.01">
-          <label for="mesh-post-downsample-enabled">Downsample</label>
-          <input type="checkbox" id="mesh-post-downsample-enabled" checked>
-          <label for="mesh-post-target-faces">Target Faces</label>
-          <input type="number" id="mesh-post-target-faces" value="120000" min="1000" step="1000">
-          <label for="mesh-post-trigger-faces">Trigger Faces</label>
-          <input type="number" id="mesh-post-trigger-faces" value="170000" min="1000" step="1000">
-          <button id="mesh-post-apply" class="btn-primary btn-small" type="button">Apply</button>
-          <button id="mesh-post-reset" class="btn-small" type="button">Reset</button>
-          <span id="mesh-post-status" class="toolbar-info"></span>
-        </div>
-      </div>
-
-      <!-- Stage 6: Mesh Wrap -->
-      <div id="stage-panel-6" class="stage-panel">
-        <div class="stage-panel-empty" id="stage-6-empty">
-          <p>Wrapped mesh will appear here after Stage 6 completes.</p>
-        </div>
-        <div id="three-container-6" class="three-container"></div>
-      </div>
-
-      <!-- Stage 7: Mesh Repair -->
-      <div id="stage-panel-7" class="stage-panel">
-        <div class="stage-panel-empty" id="stage-7-empty">
-          <p>Repaired mesh will appear here after Stage 7 completes.</p>
-        </div>
-        <div id="three-container-7" class="three-container"></div>
-        <div id="mesh-repair-toolbar" class="hidden">
-          <span id="mesh-repair-status" class="toolbar-info"></span>
-          <div id="mesh-repair-threshold-control">
-            <div class="range-label-row">
-              <label for="mesh-repair-threshold">Closed-surface threshold (normal_y)</label>
-              <span id="mesh-repair-threshold-value" class="range-value">-0.25</span>
-            </div>
-            <input
-              type="range"
-              id="mesh-repair-threshold"
-              value="-0.25"
-              min="-1"
-              max="0"
-              step="0.01"
-            >
-          </div>
-          <button id="mesh-repair-clear" class="btn-small" type="button">Clear Selection</button>
-          <button id="mesh-repair-apply" class="btn-primary btn-small" type="button">Confirm Selection</button>
-        </div>
-      </div>
-
-      <!-- Stage 8: Texture Bake -->
-      <div id="stage-panel-8" class="stage-panel">
-        <div class="stage-panel-empty" id="stage-8-empty">
-          <p>Textured mesh will appear here after Stage 8 completes.</p>
-        </div>
-        <div id="three-container-8" class="three-container"></div>
       </div>
 
       <div id="task-confirm-dock">
@@ -276,19 +170,7 @@
           <span class="task-confirm-message">Stage 4 confirmation will appear after completion.</span>
           <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
         </div>
-        <div class="task-confirm-bar idle" data-stage="5" aria-live="polite">
-          <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
-        <div class="task-confirm-bar idle" data-stage="6" aria-live="polite">
-          <span class="task-confirm-message">Stage 6 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
-        <div class="task-confirm-bar idle" data-stage="7" aria-live="polite">
-          <span class="task-confirm-message">Stage 7 confirmation will appear after completion.</span>
-          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
-        </div>
-        <div class="task-confirm-bar task-confirm-final" data-stage="8" aria-live="polite">
+        <div class="task-confirm-bar task-confirm-final" data-stage="5" aria-live="polite">
           <span class="task-confirm-message">Final stage. No next-stage confirmation.</span>
           <button class="task-confirm-btn btn-small" disabled>Done</button>
         </div>
@@ -339,38 +221,26 @@
           </div>
         </div>
 
-        <!-- Stage 2: Pi3X easy controls -->
+        <!-- Stage 2: COLMAP SfM -->
         <div class="config-section" data-stages="2">
           <div class="form-group">
-            <label for="cfg-pixel-limit">Pixel Limit</label>
-            <input type="number" id="cfg-pixel-limit" value="255000" min="50000" step="5000">
-          </div>
-          <div class="form-group">
-            <div class="range-label-row">
-              <label for="cfg-pi3x-frame-target">Frame Target</label>
-              <span id="cfg-pi3x-frame-target-value" class="range-value">50</span>
-            </div>
-            <div class="range-marker-wrap">
-              <input type="range" id="cfg-pi3x-frame-target" value="50" min="2" max="50" step="1">
-              <div id="cfg-pi3x-frame-target-marker" class="range-marker hidden">
-                <div class="range-marker-line"></div>
-                <span class="range-marker-label">Recommended</span>
-              </div>
-            </div>
-            <div id="cfg-pi3x-frame-target-note" class="config-note"></div>
-            <div id="cfg-pi3x-plan-note" class="config-note"></div>
+            <label for="cfg-colmap-matcher">Feature Matcher</label>
+            <select id="cfg-colmap-matcher">
+              <option value="sequential" selected>Sequential</option>
+              <option value="exhaustive">Exhaustive</option>
+            </select>
           </div>
           <details class="config-advanced">
-            <summary>Filtering (Advanced)</summary>
+            <summary>Advanced Parameters</summary>
             <div class="config-advanced-body">
               <div class="form-row">
                 <div class="form-group">
-                  <label for="cfg-conf-threshold">Confidence</label>
-                  <input type="number" id="cfg-conf-threshold" value="0.2" min="0" max="1" step="0.01">
+                  <label for="cfg-colmap-max-features">Max Features</label>
+                  <input type="number" id="cfg-colmap-max-features" value="8192" min="1000" step="1000">
                 </div>
                 <div class="form-group">
-                  <label for="cfg-edge-rtol">Edge RTol</label>
-                  <input type="number" id="cfg-edge-rtol" value="0.03" min="0" max="0.5" step="0.005">
+                  <label for="cfg-colmap-image-size">Image Size</label>
+                  <input type="number" id="cfg-colmap-image-size" value="1024" min="256" step="128">
                 </div>
               </div>
             </div>
@@ -393,299 +263,47 @@
               <input type="checkbox" id="cfg-ground-plane-enabled" checked>
               Ground Plane Segmentation
             </label>
-            <div class="config-note">Segment the ground surface for better bottom repair.</div>
+            <div class="config-note">Segment the ground surface for mesh isolation.</div>
           </div>
         </div>
 
-        <!-- Stage 4: Denoise presets + algorithm controls -->
+        <!-- Stage 4: gs2mesh Reconstruction -->
         <div class="config-section" data-stages="4">
           <div class="form-group">
-            <label for="cfg-denoise-preset">Denoise Preset</label>
-            <select id="cfg-denoise-preset">
-              <option value="balanced" selected>Balanced (DBSCAN + SOR)</option>
-              <option value="detail_preserving">Detail Preserving (SOR)</option>
-              <option value="isolate_subject">Isolate Main Object (DBSCAN)</option>
-              <option value="sparse_noise">Sparse Noise Cleanup (Radius)</option>
-              <option value="aggressive_cleanup">Aggressive Cleanup (DBSCAN + Radius)</option>
-              <option value="custom">Custom</option>
-            </select>
-            <div id="cfg-denoise-summary" class="config-note"></div>
+            <label for="cfg-gs2mesh-gs-iterations">3DGS Training Iterations</label>
+            <input type="number" id="cfg-gs2mesh-gs-iterations" value="30000" min="1000" step="1000">
           </div>
           <div class="form-group">
-            <label for="cfg-denoise-algorithm">Algorithm</label>
-            <select id="cfg-denoise-algorithm">
-              <option value="dbscan_sor" selected>DBSCAN + SOR</option>
-              <option value="dbscan_only">DBSCAN Only</option>
-              <option value="sor_only">SOR Only</option>
-              <option value="radius_only">Radius Outlier Only</option>
-              <option value="dbscan_radius">DBSCAN + Radius Outlier</option>
-            </select>
-          </div>
-          <details class="config-advanced" open>
-            <summary>Advanced Parameters</summary>
-            <div class="config-advanced-body">
-              <div id="cfg-denoise-dbscan" class="denoise-param-group">
-                <div class="denoise-param-title">DBSCAN</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-denoise-dbscan-eps-ratio">EPS Ratio (auto)</label>
-                    <input type="number" id="cfg-denoise-dbscan-eps-ratio" value="0.02" min="0.0001" max="0.5" step="0.001">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-denoise-dbscan-eps">Fixed EPS (optional)</label>
-                    <input type="number" id="cfg-denoise-dbscan-eps" value="0.0" min="0" step="0.0001">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-denoise-dbscan-min-samples">Min Samples</label>
-                    <input type="number" id="cfg-denoise-dbscan-min-samples" value="10" min="1" step="1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-denoise-dbscan-max-points">Max Points</label>
-                    <input type="number" id="cfg-denoise-dbscan-max-points" value="500000" min="1000" step="1000">
-                  </div>
-                </div>
-                <div class="config-note">If `Fixed EPS` is 0, DBSCAN uses `EPS Ratio * median(bbox extent)`.</div>
-              </div>
-              <div id="cfg-denoise-sor" class="denoise-param-group">
-                <div class="denoise-param-title">Statistical Outlier Removal (SOR)</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-denoise-sor-neighbors">Neighbors</label>
-                    <input type="number" id="cfg-denoise-sor-neighbors" value="20" min="2" step="1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-denoise-sor-std">STD Ratio</label>
-                    <input type="number" id="cfg-denoise-sor-std" value="2.0" min="0.1" step="0.1">
-                  </div>
-                </div>
-              </div>
-              <div id="cfg-denoise-radius" class="denoise-param-group">
-                <div class="denoise-param-title">Radius Outlier Removal</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-denoise-radius-neighbors">Min Neighbors</label>
-                    <input type="number" id="cfg-denoise-radius-neighbors" value="8" min="1" step="1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-denoise-radius-ratio">Radius Ratio</label>
-                    <input type="number" id="cfg-denoise-radius-ratio" value="0.015" min="0.0001" max="0.5" step="0.001">
-                  </div>
-                </div>
-              </div>
-            </div>
-          </details>
-        </div>
-
-        <!-- Stage 5: Mesh method -->
-        <div class="config-section" data-stages="5">
-          <input type="hidden" id="cfg-mesh-method" value="poisson">
-          <div id="cfg-mesh-method-summary" class="config-note">
-            Classical Mesh pipeline is active.
-          </div>
-          <div id="cfg-poisson-summary" class="config-note">
-            Classical path runs as a single Stage 5 task.
-          </div>
-          <div id="cfg-classical-controls">
-            <div class="form-group">
-              <label for="cfg-classical-preset">Preset</label>
-              <select id="cfg-classical-preset">
-                <option value="lightweight">Lightweight</option>
-                <option value="trust_point_cloud" selected>Trust Point Cloud</option>
-                <option value="custom">Custom</option>
-              </select>
-            </div>
-            <div id="cfg-classical-summary" class="config-note"></div>
-            <details class="config-advanced">
-              <summary>Advanced Parameters <button type="button" id="btn-classical-reset" class="btn-small">Reset</button></summary>
-              <div class="config-advanced-body">
-                <div class="form-row">
-                  <div class="form-group">
-                    <label><input type="checkbox" id="cfg-classical-preprocess" checked> Preprocess</label>
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-classical-poisson-depth">Poisson Depth</label>
-                    <input type="number" id="cfg-classical-poisson-depth" value="9" min="6" max="12" step="1">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-classical-density-trim-q">Density Trim Q</label>
-                    <input type="number" id="cfg-classical-density-trim-q" value="0.005" min="0" max="0.49" step="0.001">
-                  </div>
-                  <div class="form-group">
-                    <label><input type="checkbox" id="cfg-classical-auto-smooth"> Auto Smooth</label>
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-classical-smooth-iters">Smooth Iterations</label>
-                    <input type="number" id="cfg-classical-smooth-iters" value="2" min="0" max="20" step="1">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label><input type="checkbox" id="cfg-classical-downsample" checked> Downsample</label>
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-classical-target-faces">Target Faces</label>
-                    <input type="number" id="cfg-classical-target-faces" value="120000" min="1000" step="1000">
-                  </div>
-                </div>
-              </div>
-            </details>
-          </div>
-          <div id="cfg-diffcd-controls" class="hidden">
-            <div class="form-group">
-              <label for="cfg-diffcd-res">DiffCD Resolution</label>
-              <input type="number" id="cfg-diffcd-res" value="512" min="64" step="64">
-            </div>
-            <details class="config-advanced">
-              <summary>Advanced (High Impact)</summary>
-              <div class="config-advanced-body">
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-diffcd-batch">DiffCD Batch</label>
-                    <input type="number" id="cfg-diffcd-batch" value="5000" min="100" step="100">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-diffcd-nbatches">DiffCD N-Batches</label>
-                    <input type="number" id="cfg-diffcd-nbatches" value="30000" min="1000" step="1000">
-                  </div>
-                </div>
-              </div>
-            </details>
-          </div>
-        </div>
-
-        <!-- Stage 6: Mesh Wrap -->
-        <div class="config-section" data-stages="6">
-          <div class="form-group">
-            <div id="cfg-meshwrap-summary" class="config-note"></div>
-          </div>
-          <div class="form-group">
-            <label for="cfg-meshwrap-method">Wrap Method</label>
-            <select id="cfg-meshwrap-method">
-              <option value="poisson_iterative">Poisson Iterative</option>
-              <option value="alpha_wrap" selected>CGAL Alpha Wrap</option>
+            <label for="cfg-gs2mesh-stereo-model">Stereo Model</label>
+            <select id="cfg-gs2mesh-stereo-model">
+              <option value="DLNR" selected>DLNR</option>
             </select>
           </div>
           <details class="config-advanced">
-            <summary>Advanced Parameters <button type="button" id="btn-meshwrap-reset" class="btn-small">Reset</button></summary>
+            <summary>Advanced Parameters</summary>
             <div class="config-advanced-body">
-              <div class="meshwrap-param-group hidden" id="cfg-meshwrap-poisson-group">
-                <div class="meshwrap-param-title">Reconstruction (Poisson)</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-poisson-depth">Poisson Depth</label>
-                    <input type="number" id="cfg-meshwrap-poisson-depth" value="8" min="6" max="12" step="1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-poisson-scale">Poisson Scale</label>
-                    <input type="number" id="cfg-meshwrap-poisson-scale" value="1.18" min="1.0" max="2.0" step="0.01">
-                  </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cfg-gs2mesh-tsdf-voxel-size">TSDF Voxel Size</label>
+                  <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005" min="0.001" max="0.1" step="0.001">
                 </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-iterations">Iterations</label>
-                    <input type="number" id="cfg-meshwrap-iterations" value="1" min="1" max="5" step="1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-sample-points">Sample Points</label>
-                    <input type="number" id="cfg-meshwrap-sample-points" value="400000" min="50000" max="500000" step="10000">
-                  </div>
+                <div class="form-group">
+                  <label for="cfg-gs2mesh-tsdf-depth-trunc">TSDF Depth Trunc</label>
+                  <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04" min="0.005" max="0.5" step="0.005">
                 </div>
               </div>
-              <div class="meshwrap-param-group" id="cfg-meshwrap-alpha-group">
-                <div class="meshwrap-param-title">Alpha Wrap (CGAL)</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-alpha-ratio">Alpha Ratio</label>
-                    <input type="number" id="cfg-meshwrap-alpha-ratio" value="0.02" min="0.001" max="0.2" step="0.001">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-offset-ratio">Offset Ratio</label>
-                    <input type="number" id="cfg-meshwrap-offset-ratio" value="0.3" min="0.01" max="2.0" step="0.01">
-                  </div>
-                </div>
-              </div>
-              <div class="meshwrap-param-group">
-                <div class="meshwrap-param-title">Trimming</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-density-trim-q">Density Trim Q</label>
-                    <input type="number" id="cfg-meshwrap-density-trim-q" value="0.003" min="0" max="0.49" step="0.001">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-crop-scale">Crop Scale</label>
-                    <input type="number" id="cfg-meshwrap-crop-scale" value="1.08" min="1.0" max="2.0" step="0.01">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-face-ratio">Face Ratio</label>
-                    <input type="number" id="cfg-meshwrap-face-ratio" value="2.20" min="0.2" max="3.0" step="0.1">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-normal-radius">Normal Radius</label>
-                    <input type="number" id="cfg-meshwrap-normal-radius" value="0.02" min="0.001" max="0.2" step="0.005">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-quality-threshold">Quality Threshold</label>
-                    <input type="number" id="cfg-meshwrap-quality-threshold" value="0.02" min="0" max="1.0" step="0.005">
-                  </div>
-                </div>
-              </div>
-              <div class="meshwrap-param-group">
-                <div class="meshwrap-param-title">Smoothing</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-meshwrap-smooth-iterations">Smooth Iterations</label>
-                    <input type="number" id="cfg-meshwrap-smooth-iterations" value="2" min="0" max="10" step="1">
-                  </div>
-                </div>
+              <div class="form-group">
+                <label class="checkbox-label" for="cfg-gs2mesh-use-masks">
+                  <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
+                  Apply SAM2 masks to depth maps
+                </label>
               </div>
             </div>
           </details>
         </div>
 
-        <!-- Stage 7: Mesh Repair -->
-        <div class="config-section" data-stages="7">
-          <details class="config-advanced" open>
-            <summary>Mesh Repair Parameters</summary>
-            <div class="config-advanced-body">
-              <div class="meshwrap-param-group">
-                <div class="meshwrap-param-title">Contact Hole Repair</div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-mesh-repair-enabled">Enabled</label>
-                    <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-mesh-repair-smooth-iters">Smooth Iters</label>
-                    <input type="number" id="cfg-mesh-repair-smooth-iters" value="3" min="0" max="12" step="1">
-                  </div>
-                </div>
-                <div class="form-row">
-                  <div class="form-group">
-                    <label for="cfg-mesh-repair-max-diameter-ratio">Max Diameter Ratio</label>
-                    <input type="number" id="cfg-mesh-repair-max-diameter-ratio" value="0.46" min="0.005" max="1.5" step="0.005">
-                  </div>
-                  <div class="form-group">
-                    <label for="cfg-mesh-repair-y-band-ratio">Y Band Ratio</label>
-                    <input type="number" id="cfg-mesh-repair-y-band-ratio" value="0.06" min="0.005" max="0.5" step="0.005">
-                  </div>
-                </div>
-              </div>
-            </div>
-          </details>
-        </div>
-
-        <!-- Stage 8: Texture -->
-        <div class="config-section" data-stages="8">
+        <!-- Stage 5: Texture -->
+        <div class="config-section" data-stages="5">
           <div class="form-group">
             <label for="cfg-texture-size">Texture Size</label>
             <select id="cfg-texture-size">

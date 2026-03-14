@@ -18,19 +18,12 @@ import { SAM2Verification } from './sam2-verification.js';
 import { CameraOverlay } from './camera-overlay.js';
 import { CheckpointPanel } from './checkpoint-panel.js';
 import { TaskConfirmController } from './task-confirm-controller.js';
-import { MeshRepairController } from './mesh-repair-controller.js';
-import { MeshPostController } from './mesh-post-controller.js';
 import { StatusHydrator } from './status-hydrator.js';
 import {
   STAGE_COUNT,
   TRANSITION_STAGE_MAX,
-  MESH_METHOD_DEFAULT,
-  CLASSICAL_PREVIEW_TITLE,
 } from './constants.js';
-import {
-  formatTime,
-  normalizeMeshMethod,
-} from './utils.js';
+import { formatTime } from './utils.js';
 import {
   defaultTaskConfirmConfirmedMessage,
   defaultTaskConfirmWaitingMessage,
@@ -85,59 +78,22 @@ function appendLog(stream, text, opts = {}) {
 const statusBadge = document.getElementById('status-badge');
 const vramBadge = document.getElementById('vram-badge');
 const overallProgressBadge = document.getElementById('overall-progress-badge');
-const meshPhaseStatusBar = document.getElementById('mesh-phase-status');
-const meshPhaseStatusText = document.getElementById('mesh-phase-status-text');
-const meshMethodPills = {
-  diffcd: document.getElementById('mesh-pill-diffcd'),
-  poisson: document.getElementById('mesh-pill-poisson'),
-};
 
 // ── State ────────────────────────────────────────────────────
 
 let _extractedFrameCount = 0;
 let _objectLoadRequestId = 0;
-let _meshMethod = MESH_METHOD_DEFAULT;
 
 // ── Init controllers ─────────────────────────────────────────
 
 const taskConfirm = new TaskConfirmController({ stageCtrl, appendLog });
 
-const meshRepair = new MeshRepairController({ preview, appendLog });
-meshRepair.init();
-preview.onMeshRepairSelectionChanged = (selectedIds) => {
-  meshRepair.updateStatus(selectedIds);
-};
-
-const meshPost = new MeshPostController({
-  preview,
-  stageCtrl,
-  appendLog,
-  getMeshMethod: () => _meshMethod,
-  isPipelineRunning,
-  setMeshPhaseStatus,
-  applyStatusSnapshot: (status, opts) => statusHydrator.applySnapshot(status, opts),
-});
-meshPost.init();
-meshPost.onPostprocessComplete = () => {
-  meshPost.syncFromStatus(statusHydrator.latestSnapshot);
-};
-
 const statusHydrator = new StatusHydrator({
   preview, cameraOverlay, sam2, sam2Verify, config, stageCtrl,
-  checkpoints, pipelineUI, taskConfirm, meshPost, meshRepair,
-  getMeshMethod: () => _meshMethod,
-  applyMeshMethod,
-  setMeshPhaseStatus,
+  checkpoints, pipelineUI, taskConfirm,
   setStatus,
   setOverallProgress,
 });
-
-bindMeshMethodPills();
-applyMeshMethod(config.getMeshMethod?.() || MESH_METHOD_DEFAULT, { announce: false });
-
-config.onCropScaleChanged = (cropScale) => {
-  preview.updateCropBbox(cropScale);
-};
 
 // ── Stage-activated event: lazy-init 3D ─────────────────────
 
@@ -147,17 +103,9 @@ document.addEventListener('stage-activated', async (e) => {
   config.setActiveStage(stage);
   checkpoints.setActiveStage(stage);
 
-  if (stage === 2 || (stage >= 4 && stage <= 8)) {
+  if (stage === 2 || stage === 4 || stage === 5) {
     if (preview._stages?.[stage]?.initialized) {
       preview.activateStage(stage);
-    }
-  }
-
-  if (stage === 6) {
-    const s5 = stageCtrl.getStageState(5);
-    const s6 = stageCtrl.getStageState(6);
-    if (s5 === 'complete' && s6 !== 'complete' && s6 !== 'interactive') {
-      await preview.showCropBbox(config.getCropScale(), { preferPreview: _meshMethod === 'poisson' });
     }
   }
 
@@ -170,78 +118,6 @@ stageCtrl.activateStage(stageCtrl.activeStage);
 
 function isPipelineRunning() {
   return statusHydrator.latestSnapshot?.running === true || statusBadge?.classList.contains('badge-running');
-}
-
-function setMeshPhaseStatus(message, tone = '') {
-  if (!meshPhaseStatusBar || !meshPhaseStatusText) return;
-  const text = String(message || '').trim();
-  meshPhaseStatusBar.classList.remove('live', 'ready', 'error', 'hidden');
-  if (!text) {
-    meshPhaseStatusText.textContent = '';
-    meshPhaseStatusBar.classList.add('hidden');
-    return;
-  }
-  meshPhaseStatusText.textContent = text;
-  if (tone === 'live' || tone === 'ready' || tone === 'error') {
-    meshPhaseStatusBar.classList.add(tone);
-  }
-}
-
-function bindMeshMethodPills() {
-  const diffcdPill = meshMethodPills.diffcd;
-  const poissonPill = meshMethodPills.poisson;
-
-  diffcdPill?.addEventListener('click', (event) => {
-    if (isPipelineRunning()) {
-      event.preventDefault();
-      return;
-    }
-    applyMeshMethod('diffcd');
-    stageCtrl.activateStage(5);
-  });
-
-  const choosePoisson = (event) => {
-    if (isPipelineRunning()) {
-      if (_meshMethod !== 'poisson') {
-        event.preventDefault();
-        return;
-      }
-      stageCtrl.activateStage(5);
-      return;
-    }
-
-    applyMeshMethod('poisson');
-    stageCtrl.activateStage(5);
-  };
-  poissonPill?.addEventListener('click', (event) => {
-    choosePoisson(event);
-  });
-  poissonPill?.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      choosePoisson(event);
-    }
-  });
-}
-
-function applyMeshMethod(method, opts = {}) {
-  const resolved = normalizeMeshMethod(method);
-  const changed = resolved !== _meshMethod;
-  _meshMethod = resolved;
-
-  checkpoints.setMeshMethod(resolved);
-  pipelineUI.setMeshMethod(resolved);
-  config.setMeshMethod?.(resolved);
-  if (resolved !== 'poisson') {
-    setMeshPhaseStatus('', '');
-  }
-
-  if (changed && opts.announce !== false) {
-    const label = resolved === 'diffcd'
-      ? 'Learning Mesh (DiffCD)'
-      : 'Classical Mesh';
-    appendLog('stdout', `Mesh method switched to: ${label}\n`, { stage: 5 });
-  }
 }
 
 function setStatus(state, text) {
@@ -271,16 +147,8 @@ config.onObjectSelected = async (objectName) => {
     preview.reset();
     pipelineUI.reset();
     taskConfirm.resetBars();
-    meshPost.setToolbarVisible(false);
-    meshPost.setStatus('');
-    meshRepair.setToolbarVisible(false);
-    meshRepair.setStatus('');
-    meshRepair.resetState({ resetThreshold: true });
-    setMeshPhaseStatus('', '');
     setOverallProgress(0);
     setStatus('idle', 'Idle');
-    pipelineUI.setMeshMethodEnabled(true);
-    applyMeshMethod(MESH_METHOD_DEFAULT, { announce: false });
     checkpoints.reset(1);
     stageCtrl.activateStage(1);
     return;
@@ -314,9 +182,7 @@ config.onStart = async (cfg) => {
   try {
     _objectLoadRequestId += 1;
     cfg.auto_accept = settings.autoAccept;
-    applyMeshMethod(cfg.mesh_method || _meshMethod, { announce: false });
     config.setRunning(true);
-    pipelineUI.setMeshMethodEnabled(false);
     setStatus('running', 'Running');
 
     const res = await fetch('/api/pipeline/start', {
@@ -328,7 +194,6 @@ config.onStart = async (cfg) => {
     if (!res.ok || data.error) {
       alert('Start failed: ' + (data.error || res.status));
       config.setRunning(false);
-      pipelineUI.setMeshMethodEnabled(true);
       setStatus('idle', 'Idle');
       return;
     }
@@ -344,12 +209,6 @@ config.onStart = async (cfg) => {
     checkpoints.reset(resumeFromStage);
     _extractedFrameCount = 0;
     statusHydrator.reset();
-    meshPost.setToolbarVisible(false);
-    meshPost.setStatus('');
-    meshRepair.setToolbarVisible(false);
-    meshRepair.setStatus('');
-    meshRepair.resetState({ resetThreshold: true });
-    setMeshPhaseStatus('', '');
     setOverallProgress(pipelineUI.getOverallProgress());
 
     if (data.object_name) {
@@ -361,7 +220,6 @@ config.onStart = async (cfg) => {
   } catch (e) {
     alert('Start failed: ' + e.message);
     config.setRunning(false);
-    pipelineUI.setMeshMethodEnabled(true);
     setStatus('idle', 'Idle');
   }
 };
@@ -406,25 +264,7 @@ ws.on('stage_start', (msg) => {
   stageCtrl.setStageState(msg.stage, 'running');
   pipelineUI.stageStart(msg.stage);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  appendLog('stdout', `\n=== Stage ${msg.stage}/8: ${msg.label} ===\n`, { stage: msg.stage });
-  meshPost.setToolbarVisible(false);
-  if (!meshPost.inFlight) {
-    meshPost.setStatus('');
-  }
-  if (Number(msg.stage) === 7) {
-    meshRepair.resetState({ resetThreshold: true });
-  }
-  if (Number(msg.stage) !== 7 || !meshRepair.inFlight) {
-    meshRepair.setToolbarVisible(false);
-    if (!meshRepair.inFlight) {
-      meshRepair.setStatus('');
-    }
-  }
-  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
-    setMeshPhaseStatus('Classical Mesh started.', 'live');
-  } else if (Number(msg.stage) === 5 && _meshMethod !== 'poisson') {
-    setMeshPhaseStatus('', '');
-  }
+  appendLog('stdout', `\n=== Stage ${msg.stage}/${STAGE_COUNT}: ${msg.label} ===\n`, { stage: msg.stage });
 });
 
 ws.on('extract_frames_result', (msg) => {
@@ -438,14 +278,6 @@ ws.on('stage_complete', async (msg) => {
     checkpoints.onStageFailed(msg.stage, msg.error, msg.checkpoint_id);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
-    if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
-      setMeshPhaseStatus(`Stage 5 failed: ${msg.error}`, 'error');
-    }
-    if (Number(msg.stage) === 7) {
-      meshRepair.setToolbarVisible(false);
-      meshRepair.setStatus(`Stage 7 failed: ${msg.error}`, 'error');
-      meshRepair.resetState({ resetThreshold: true });
-    }
     return;
   }
   checkpoints.onStageComplete(msg.stage);
@@ -456,31 +288,9 @@ ws.on('stage_complete', async (msg) => {
     if (empty) empty.classList.add('hidden');
     await preview.loadGallery(_extractedFrameCount);
   } else if (msg.stage === 2) {
-    await preview.loadPi3xResults(cameraOverlay);
-  } else if (msg.stage === 3) {
-    await preview.loadPi3xResults(cameraOverlay, 'object.ply');
-  } else if (msg.stage === 5) {
-    await preview.loadStageResult(5, { preferPreview: _meshMethod === 'poisson' });
-  } else if (msg.stage >= 4 && msg.stage <= 8) {
+    await preview.loadColmapResults(cameraOverlay);
+  } else if (msg.stage === 4 || msg.stage === 5) {
     await preview.loadStageResult(msg.stage);
-  }
-
-  if (msg.stage === 5) {
-    if (_meshMethod === 'poisson') {
-      setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
-    } else {
-      setMeshPhaseStatus('', '');
-    }
-    meshPost.setToolbarVisible(true);
-    meshPost.setEnabled(true);
-    if (!meshPost.inFlight) {
-      meshPost.setStatus('');
-    }
-  }
-  if (msg.stage === 7) {
-    meshRepair.resetState({ resetThreshold: true });
-    meshRepair.setToolbarVisible(false);
-    meshRepair.setStatus('');
   }
 });
 
@@ -488,9 +298,6 @@ ws.on('stage_progress', (msg) => {
   checkpoints.onStageProgress(msg.stage, msg.detail, 'running', msg.checkpoint_id);
   pipelineUI.stageProgress(msg.stage, msg.progress, msg.detail);
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
-    setMeshPhaseStatus('Running: Classical Mesh', 'live');
-  }
 });
 
 ws.on('sam2_ready', (msg) => {
@@ -528,60 +335,12 @@ ws.on('sam2_verification_ready', (msg) => {
   appendLog('stdout', 'Mask propagation complete. Please verify the results.\n', { stage: 3 });
 });
 
-ws.on('pi3x_preview_ready', () => {
+ws.on('colmap_preview_ready', () => {
   checkpoints.onStageInteractive(2, 'Waiting for next-stage confirmation');
   pipelineUI.stageInteractive(2);
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
-  appendLog('stdout', 'Pi3X complete. Review the 3D preview, then confirm on Stage 2.\n', { stage: 2 });
-});
-
-ws.on('mesh_repair_ready', async (msg) => {
-  const autoAccepted = msg.auto_accepted === true;
-  const hasGroundPlane = msg.has_ground_plane === true;
-  const loopCount = Number(msg.candidate_count) || 0;
-  if (loopCount === 0) {
-    if (hasGroundPlane) {
-      appendLog(
-        'stdout',
-        'Mesh Repair: using ground plane for bottom surface repair.\n',
-        { stage: 7 },
-      );
-    } else {
-      const prefix = autoAccepted ? '[Auto] ' : '';
-      appendLog(
-        'warn',
-        `${prefix}Mesh Repair: no closed surfaces found — skipped.\n`,
-        { stage: 7 },
-      );
-    }
-    return;
-  }
-  if (autoAccepted) {
-    appendLog(
-      'stdout',
-      `[Auto] Mesh Repair: auto-selected all ${loopCount} closed surfaces.\n`,
-      { stage: 7 },
-    );
-    return;
-  }
-  checkpoints.onStageInteractive(7, 'Waiting for repair-loop selection');
-  pipelineUI.stageInteractive(7);
-  stageCtrl.setStageState(7, 'interactive');
-  try {
-    await meshRepair.activateFromApi();
-    stageCtrl.activateStage(7);
-    const loopCount = Number(msg.candidate_count) || meshRepair.candidateCount;
-    appendLog(
-      'stdout',
-      `Mesh Repair ready: ${loopCount} selectable loops. Click closed surfaces, then confirm selection (0 selected = skip).\n`,
-      { stage: 7 },
-    );
-  } catch (e) {
-    meshRepair.setToolbarVisible(false);
-    meshRepair.setStatus(`Mesh Repair UI failed: ${e.message}`, 'error');
-    appendLog('stderr', `Mesh Repair setup failed: ${e.message}\n`, { stage: 7 });
-  }
+  appendLog('stdout', 'COLMAP SfM complete. Review the 3D preview, then confirm on Stage 2.\n', { stage: 2 });
 });
 
 ws.on('next_stage_confirmation_required', (msg) => {
@@ -635,9 +394,8 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
 });
 
 ws.on('pipeline_complete', (msg) => {
-  checkpoints.onStageComplete(8);
+  checkpoints.onStageComplete(STAGE_COUNT);
   config.setRunning(false);
-  pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
   overview.markStale();
@@ -646,26 +404,15 @@ ws.on('pipeline_complete', (msg) => {
   for (let stage = 1; stage <= TRANSITION_STAGE_MAX; stage++) {
     taskConfirm.setState(stage, 'confirmed', defaultTaskConfirmConfirmedMessage(stage));
   }
-  taskConfirm.setState(8, 'final', 'Final stage complete. No next-stage confirmation.');
-  taskConfirm.setVisibleStage(8);
+  taskConfirm.setState(STAGE_COUNT, 'final', 'Final stage complete. No next-stage confirmation.');
+  taskConfirm.setVisibleStage(STAGE_COUNT);
   setOverallProgress(msg.overall_progress ?? 100);
   setStatus('complete', `Done (${formatTime(msg.elapsed)})`);
-  meshPost.setToolbarVisible(true);
-  meshPost.setEnabled(true);
-  meshRepair.setToolbarVisible(false);
-  meshRepair.setStatus('');
-  meshRepair.resetState({ resetThreshold: true });
-  if (_meshMethod === 'poisson') {
-    setMeshPhaseStatus(`Showing: ${CLASSICAL_PREVIEW_TITLE}`, 'ready');
-  } else {
-    setMeshPhaseStatus('', '');
-  }
-  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: 8 });
+  appendLog('stdout', `\n=== Pipeline Complete! (${formatTime(msg.elapsed)}) ===\n`, { stage: STAGE_COUNT });
 });
 
 ws.on('pipeline_error', (msg) => {
   config.setRunning(false);
-  pipelineUI.setMeshMethodEnabled(true);
   config.setActiveStage(null);
   config.refreshObjects();
   overview.markStale();
@@ -682,24 +429,12 @@ ws.on('pipeline_error', (msg) => {
   const cancelled = String(msg.reason_code || '').startsWith('cancelled')
     || /cancel/i.test(String(msg.error || ''));
   setStatus(cancelled ? 'idle' : 'error', cancelled ? 'Cancelled' : 'Error');
-  if (msg.stage >= 1 && msg.stage <= 8) {
+  if (msg.stage >= 1 && msg.stage <= STAGE_COUNT) {
     checkpoints.onStageFailed(msg.stage, msg.error, msg.checkpoint_id);
     pipelineUI.stageFailed(msg.stage);
     stageCtrl.setStageState(msg.stage, 'failed');
   }
   setOverallProgress(msg.overall_progress ?? pipelineUI.getOverallProgress());
-  meshPost.setToolbarVisible(false);
-  if (!meshPost.inFlight) {
-    meshPost.setStatus('');
-  }
-  meshRepair.setToolbarVisible(false);
-  if (!meshRepair.inFlight) {
-    meshRepair.setStatus('');
-  }
-  meshRepair.resetState({ resetThreshold: true });
-  if (Number(msg.stage) === 5 && _meshMethod === 'poisson') {
-    setMeshPhaseStatus(`Stage 5 error: ${msg.error}`, 'error');
-  }
   appendLog('stderr', `\nPipeline error at stage ${msg.stage}: ${msg.error}\n`, { stage: msg.stage });
 });
 

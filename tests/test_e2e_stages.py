@@ -43,108 +43,7 @@ class TestExtractFramesE2E:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: Pi3X reconstruction
-# ---------------------------------------------------------------------------
-
-
-class TestPi3xReconstructionE2E:
-    def test_produces_point_cloud_from_fixture_frames(
-        self, tmp_path: Path
-    ) -> None:
-        from scripts.stage_pi3x_reconstruct import run_pi3x_inference
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        ply_path, poses_path, cache_path = run_pi3x_inference(
-            str(FIXTURE_DIR / "frames"),
-            str(output_dir),
-            pixel_limit=64000,
-            max_frames=5,
-        )
-        assert ply_path.exists()
-        assert ply_path.stat().st_size > 0
-        assert poses_path.exists()
-
-
-# ---------------------------------------------------------------------------
-# Stage 4: denoise
-# ---------------------------------------------------------------------------
-
-
-class TestDenoiseE2E:
-    def test_denoises_fixture_point_cloud(self, tmp_path: Path) -> None:
-        from scripts.stage_denoise import denoise
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        result = denoise(
-            str(FIXTURE_DIR / "object_full.ply"),
-            str(output_dir),
-            preset="balanced",
-        )
-        assert result.exists()
-        assert result.stat().st_size > 0
-
-
-# ---------------------------------------------------------------------------
-# Stage 5: classical_mesh
-# ---------------------------------------------------------------------------
-
-
-class TestClassicalMeshE2E:
-    def test_creates_mesh_from_denoised_ply(self, tmp_path: Path) -> None:
-        from scripts.stage_classical_mesh import run_classical_mesh
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        result = run_classical_mesh(
-            str(FIXTURE_DIR / "object_denoised.ply"),
-            str(output_dir),
-        )
-        assert result.exists()
-        assert result.stat().st_size > 0
-
-
-# ---------------------------------------------------------------------------
-# Stage 6: mesh_wrap
-# ---------------------------------------------------------------------------
-
-
-class TestMeshWrapE2E:
-    def test_wraps_fixture_mesh(self, tmp_path: Path) -> None:
-        from scripts.stage_mesh_wrap import run_mesh_wrap
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        result = run_mesh_wrap(
-            str(FIXTURE_DIR / "object_mesh.ply"),
-            str(output_dir),
-        )
-        assert result.exists()
-        assert result.stat().st_size > 0
-
-
-# ---------------------------------------------------------------------------
-# Stage 7: contact_hole_repair
-# ---------------------------------------------------------------------------
-
-
-class TestContactHoleRepairE2E:
-    def test_repairs_wrapped_mesh(self, tmp_path: Path) -> None:
-        from scripts.stage_contact_hole_repair import run_contact_hole_repair
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        result = run_contact_hole_repair(
-            str(FIXTURE_DIR / "object_mesh_wrapped.ply"),
-            str(output_dir),
-        )
-        assert result.exists()
-        assert result.stat().st_size > 0
-
-
-# ---------------------------------------------------------------------------
-# Stage 8: texture_bake
+# Stage 5: texture_bake
 # ---------------------------------------------------------------------------
 
 
@@ -156,15 +55,11 @@ class TestTextureBakeE2E:
         output_dir.mkdir()
         # Copy fixture files to output_dir as bake_texture expects them there
         shutil.copy(
-            FIXTURE_DIR / "object_mesh_repaired.ply",
-            output_dir / "object_mesh_repaired.ply",
-        )
-        shutil.copy(
-            FIXTURE_DIR / "object_denoised.ply",
-            output_dir / "object_denoised.ply",
+            FIXTURE_DIR / "object_mesh.ply",
+            output_dir / "object_mesh.ply",
         )
         result = bake_texture(
-            str(output_dir / "object_mesh_repaired.ply"),
+            str(output_dir / "object_mesh.ply"),
             str(FIXTURE_DIR / "camera_poses.json"),
             str(FIXTURE_DIR / "frames"),
             str(FIXTURE_DIR / "masks"),
