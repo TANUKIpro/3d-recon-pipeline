@@ -364,21 +364,20 @@
 
 ---
 
-## Phase 10: ドキュメント・設定の整理
+## Phase 10: ドキュメント・設定の整理 ✅
 
-### 10-1. `pyproject.toml` の充実
-> **事前確認**: `pyproject.toml` の現在の内容を確認
+### 10-1. `pyproject.toml` の充実 ✅
 
-- [ ] `[project]` セクションに name, version, description, dependencies を追加
-- [ ] `[tool.setuptools]` でパッケージ検出設定を追加
-- [ ] `[tool.ruff]` や `[tool.mypy]` 等の静的解析ツール設定を追加（任意）
+- [x] `[project]` セクションに name, version, description, requires-python, dependencies を追加
+- [x] `[project.optional-dependencies]` に dev 依存（pytest, pytest-asyncio）を追加
+- [x] `[tool.setuptools.packages.find]` でパッケージ検出設定を追加
+- [x] 静的解析ツール設定はスコープ外（プロジェクト未使用）
 
-### 10-2. Dockerfile の整理
-> **事前確認**: `Dockerfile` を全体読み取り
+### 10-2. Dockerfile の整理 ✅
 
-- [ ] ビルドキャッシュの効率を確認
-- [ ] 不要なレイヤー統合の余地を確認
-- [ ] 実施する場合は Docker ビルドテスト
+- [x] Layer 3 + 3b 統合: `wandb` を Layer 3 に統合、`scikit-image` は numpy 依存のため同 RUN 内で別 pip install
+- [x] Layer 5 コメント修正: `sys.path usage` → `pinned for API compat with stage offloading`
+- [x] Docker ビルド + 全469テストパス確認
 
 ---
 
@@ -415,4 +414,4 @@
 | **低** | Phase 7 (CSS 分割) | ✅ 完了 |
 | **低** | Phase 8 (テスト構造改善) | ✅ 完了 |
 | **低** | Phase 9 (HTML インラインスタイル排除) | ✅ 完了 |
-| **低** | Phase 10 | 未着手 |
+| **低** | Phase 10 (ドキュメント・設定整理) | ✅ 完了 |
