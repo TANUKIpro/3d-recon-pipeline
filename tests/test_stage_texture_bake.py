@@ -1,5 +1,8 @@
+import json
 import os
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import cv2
@@ -18,10 +21,16 @@ from scripts.stage_texture_bake import (
     _resolve_texture_quality_boost,
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
+    _load_poses,
     _select_detail_companion_view_candidates,
     _select_detail_companion_views,
     _translate_patch,
     _update_topk_scores,
+)
+from scripts.texture.bake import (
+    _maybe_simplify_mesh_for_uv,
+    _resolve_intrinsics_point_cloud,
+    _resolve_uv_face_budget,
 )
 
 
@@ -199,6 +208,125 @@ class BlendNormalizationTests(unittest.TestCase):
         np.testing.assert_array_almost_equal(texture[3], expected_blend, decimal=5)
         # Single view → just that color
         np.testing.assert_array_almost_equal(texture[2], color_v0, decimal=5)
+
+
+class PoseLoadingTests(unittest.TestCase):
+    def test_load_poses_accepts_stage_two_list_format(self) -> None:
+        payload = [
+            {
+                "frame_name": "00007.jpg",
+                "transform_matrix": np.eye(4).tolist(),
+            },
+            {
+                "frame_name": "00011.jpg",
+                "transform_matrix": (np.eye(4) * 2.0).tolist(),
+            },
+        ]
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "camera_poses.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            poses, frame_indices = _load_poses(str(path))
+
+        self.assertEqual(poses.shape, (2, 4, 4))
+        self.assertEqual(frame_indices, [7, 11])
+
+    def test_load_poses_uses_positional_indices_when_names_missing(self) -> None:
+        payload = [
+            {"transform_matrix": np.eye(4).tolist()},
+            {"transform_matrix": np.eye(4).tolist()},
+        ]
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "camera_poses.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+            _, frame_indices = _load_poses(str(path))
+
+        self.assertEqual(frame_indices, [0, 1])
+
+
+class IntrinsicsPointCloudFallbackTests(unittest.TestCase):
+    def test_falls_back_to_mesh_vertex_colors(self) -> None:
+        mesh_vertices = np.array([[1.0, 2.0, 3.0]], dtype=np.float64)
+        mesh_colors = np.array([[0.2, 0.4, 0.6]], dtype=np.float64)
+
+        with TemporaryDirectory() as tmp:
+            points, colors = _resolve_intrinsics_point_cloud(
+                Path(tmp),
+                mesh_vertices,
+                mesh_colors,
+            )
+
+        np.testing.assert_array_equal(points, mesh_vertices)
+        np.testing.assert_array_equal(colors, mesh_colors)
+
+    def test_errors_when_no_colored_source_exists(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(
+                FileNotFoundError,
+                "Missing colored point cloud",
+            ):
+                _resolve_intrinsics_point_cloud(
+                    Path(tmp),
+                    np.array([[1.0, 2.0, 3.0]], dtype=np.float64),
+                    None,
+                )
+
+
+class TextureUvProxyTests(unittest.TestCase):
+    def test_resolve_uv_face_budget_defaults_and_clamps(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            self.assertEqual(_resolve_uv_face_budget(), 50000)
+
+        with patch.dict(os.environ, {"TEXTURE_UV_MAX_FACES": "-1"}, clear=False):
+            self.assertEqual(_resolve_uv_face_budget(), 0)
+
+        with patch.dict(os.environ, {"TEXTURE_UV_MAX_FACES": "bad"}, clear=False):
+            self.assertEqual(_resolve_uv_face_budget(), 50000)
+
+    @patch("scripts.texture.bake._simplify_mesh_for_uv")
+    def test_skips_simplification_when_under_budget(self, mock_simplify) -> None:
+        vertices = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float64,
+        )
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+
+        uv_vertices, uv_faces, simplified = _maybe_simplify_mesh_for_uv(
+            vertices,
+            faces,
+            face_budget=10,
+        )
+
+        self.assertFalse(simplified)
+        np.testing.assert_array_equal(uv_vertices, vertices)
+        np.testing.assert_array_equal(uv_faces, faces)
+        mock_simplify.assert_not_called()
+
+    @patch("scripts.texture.bake._simplify_mesh_for_uv")
+    def test_uses_proxy_when_over_budget(self, mock_simplify) -> None:
+        vertices = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float64,
+        )
+        faces = np.array([[0, 1, 2], [0, 2, 1]], dtype=np.int32)
+        proxy_vertices = np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=np.float64,
+        )
+        proxy_faces = np.array([[0, 1, 2]], dtype=np.int32)
+        mock_simplify.return_value = (proxy_vertices, proxy_faces)
+
+        uv_vertices, uv_faces, simplified = _maybe_simplify_mesh_for_uv(
+            vertices,
+            faces,
+            face_budget=1,
+        )
+
+        self.assertTrue(simplified)
+        np.testing.assert_array_equal(uv_vertices, proxy_vertices)
+        np.testing.assert_array_equal(uv_faces, proxy_faces)
+        mock_simplify.assert_called_once()
 
 
 class ResolveTextureSizeTests(unittest.TestCase):

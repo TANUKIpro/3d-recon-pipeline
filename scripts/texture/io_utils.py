@@ -1,6 +1,7 @@
 """Data loading and caching utilities for texture baking."""
 
 import json
+import re
 import threading
 from collections import OrderedDict
 from functools import lru_cache
@@ -27,11 +28,46 @@ def _load_point_cloud(path: str) -> tuple[np.ndarray, np.ndarray]:
     return points, colors
 
 
+def _frame_name_to_index(frame_name: str | None, default: int) -> int:
+    if not frame_name:
+        return default
+    stem = Path(frame_name).stem
+    match = re.search(r"(\d+)$", stem)
+    if match is None:
+        return default
+    return int(match.group(1))
+
+
 def _load_poses(path: str) -> tuple[np.ndarray, list[int]]:
     with open(path) as f:
         data = json.load(f)
-    poses = np.array(data["poses"], dtype=np.float64)
-    frame_indices = data.get("frame_indices")
+
+    if isinstance(data, dict):
+        poses = np.array(data["poses"], dtype=np.float64)
+        frame_indices = data.get("frame_indices")
+    elif isinstance(data, list):
+        poses_list: list[object] = []
+        frame_indices = []
+        for idx, item in enumerate(data):
+            if not isinstance(item, dict) or "transform_matrix" not in item:
+                raise TypeError(
+                    "camera_poses.json list entries must include transform_matrix"
+                )
+            poses_list.append(item["transform_matrix"])
+            frame_indices.append(
+                int(
+                    item.get(
+                        "frame_index",
+                        _frame_name_to_index(item.get("frame_name"), idx),
+                    )
+                )
+            )
+        poses = np.array(poses_list, dtype=np.float64)
+    else:
+        raise TypeError(
+            "camera_poses.json must be either a dict with poses or a list of pose entries"
+        )
+
     if frame_indices is None:
         frame_indices = list(range(len(poses)))
     else:

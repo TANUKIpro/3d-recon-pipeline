@@ -51,6 +51,93 @@ from scripts.texture.view_scoring import (
     _update_topk_scores,
 )
 
+# Dense stage-4 meshes can exhaust xatlas/native memory during UV generation.
+# Keep a conservative proxy budget by default; users can override upward via
+# TEXTURE_UV_MAX_FACES when they explicitly want a denser textured mesh.
+_TEXTURE_UV_MAX_FACES_DEFAULT = 50_000
+
+
+def _resolve_intrinsics_point_cloud(
+    output_path: Path,
+    mesh_vertices: np.ndarray,
+    mesh_vertex_colors: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Choose the best available colored point cloud for intrinsics fitting."""
+    for candidate in ("object_denoised.ply", "object.ply"):
+        path = output_path / candidate
+        if path.exists():
+            return _load_point_cloud(str(path))
+
+    if mesh_vertex_colors is not None:
+        return mesh_vertices, mesh_vertex_colors
+
+    raise FileNotFoundError(
+        "Missing colored point cloud for intrinsics estimation. "
+        "Expected object_denoised.ply, object.ply, or vertex colors in mesh_ply."
+    )
+
+
+def _resolve_uv_face_budget() -> int:
+    raw = os.environ.get(
+        "TEXTURE_UV_MAX_FACES",
+        str(_TEXTURE_UV_MAX_FACES_DEFAULT),
+    ).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _TEXTURE_UV_MAX_FACES_DEFAULT
+
+
+def _simplify_mesh_for_uv(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    target_faces: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    import open3d as o3d
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(
+        vertices.astype(np.float64, copy=False)
+    )
+    mesh.triangles = o3d.utility.Vector3iVector(
+        faces.astype(np.int32, copy=False)
+    )
+
+    simplified = mesh.simplify_quadric_decimation(
+        target_number_of_triangles=int(target_faces)
+    )
+    simplified.remove_degenerate_triangles()
+    simplified.remove_duplicated_triangles()
+    simplified.remove_unreferenced_vertices()
+
+    simp_vertices = np.asarray(simplified.vertices, dtype=np.float64)
+    simp_faces = np.asarray(simplified.triangles, dtype=np.int32)
+    if len(simp_faces) == 0 or len(simp_vertices) == 0:
+        raise RuntimeError(
+            "UV proxy mesh simplification produced an empty mesh."
+        )
+
+    return simp_vertices, simp_faces
+
+
+def _maybe_simplify_mesh_for_uv(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    face_budget: int,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    if face_budget <= 0 or len(faces) <= face_budget:
+        return vertices, faces, False
+
+    simplified_vertices, simplified_faces = _simplify_mesh_for_uv(
+        vertices,
+        faces,
+        face_budget,
+    )
+    if len(simplified_faces) >= len(faces):
+        return vertices, faces, False
+
+    return simplified_vertices, simplified_faces, True
+
 
 def bake_texture(
     mesh_ply: str,
@@ -159,14 +246,13 @@ def bake_texture(
         print(f"  Texture size: manual -> {tex_size}x{tex_size}")
 
     # --- Estimate intrinsics ---
-    # Load denoised PLY for intrinsics estimation (original colored point cloud)
-    denoised_ply = output_path / "object_denoised.ply"
-    if denoised_ply.exists():
-        pc_points, pc_colors = _load_point_cloud(str(denoised_ply))
-    else:
-        # Fallback: use object.ply
-        object_ply = output_path / "object.ply"
-        pc_points, pc_colors = _load_point_cloud(str(object_ply))
+    # Prefer the original colored point cloud when present, but fall back to
+    # the stage-4 mesh if that's the only artifact available on resume.
+    pc_points, pc_colors = _resolve_intrinsics_point_cloud(
+        output_path,
+        vertices,
+        vert_colors,
+    )
 
     print("Estimating camera intrinsics...")
     _emit_progress(progress_cb, 15.0, "Estimating camera intrinsics")
@@ -192,12 +278,25 @@ def bake_texture(
         json.dump(intrinsics, f_out, indent=2)
 
     # --- UV Atlas ---
+    uv_face_budget = _resolve_uv_face_budget()
+    uv_vertices, uv_faces, uv_simplified = _maybe_simplify_mesh_for_uv(
+        vertices,
+        faces,
+        uv_face_budget,
+    )
+    if uv_simplified:
+        print(
+            "  UV proxy simplification: "
+            f"{len(faces)} -> {len(uv_faces)} faces "
+            f"(budget {uv_face_budget})"
+        )
+
     print("Generating UV atlas...")
     _emit_progress(progress_cb, 58.0, "Generating UV atlas")
     vmapping, new_faces, uvs = xatlas.parametrize(
-        vertices.astype(np.float32), faces.astype(np.uint32)
+        uv_vertices.astype(np.float32), uv_faces.astype(np.uint32)
     )
-    new_vertices = vertices[vmapping]
+    new_vertices = uv_vertices[vmapping]
     new_faces, flipped_winding, ratio_before, ratio_after = orient_faces_outward(
         new_vertices,
         new_faces,

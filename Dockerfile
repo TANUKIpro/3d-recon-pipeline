@@ -65,6 +65,17 @@ RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.
     && cd /opt/gaussian-splatting \
     && python3 -c "from diff_gaussian_rasterization import SparseGaussianAdam"
 
+# Build a compat rasterizer overlay so stage 4 can fall back without changing
+# reconstruction inputs or quality settings. Reuse the main checkout and only
+# replace diff_gaussian_rasterization; the global simple_knn/fused-ssim wheels
+# from the accel build remain available on the default site-packages path.
+RUN mkdir -p /opt/gs-compat-site \
+    && git clone --recursive https://github.com/graphdeco-inria/diff-gaussian-rasterization.git /opt/diff-gaussian-rasterization-compat \
+    && pip install --no-cache-dir --no-build-isolation \
+        --target /opt/gs-compat-site \
+        /opt/diff-gaussian-rasterization-compat
+RUN PYTHONPATH=/opt/gs-compat-site python3 -c "import diff_gaussian_rasterization"
+
 # --- Layer 5b: gs2mesh + DLNR stereo weights ---
 RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
     && rm -rf /opt/gs2mesh/third_party/gaussian-splatting \
@@ -92,6 +103,47 @@ t=open(p).read().replace( \
   'import third_party.GroundingDINO.groundingdino.util.inference as GD', \
   'try:\n    import third_party.GroundingDINO.groundingdino.util.inference as GD\nexcept (ImportError, ModuleNotFoundError):\n    GD = None'); \
 open(p,'w').write(t)"
+
+# gs2mesh hardcodes gaussian-splatting renderer integration.
+# Newer gaussian-splatting expects `depths` / `train_test_exp` fields and a
+# different Camera constructor signature.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+p = Path('/opt/gs2mesh/gs2mesh_utils/renderer_utils.py')
+t = p.read_text()
+if "from PIL import Image" not in t:
+    t = t.replace("import copy\n", "import copy\nfrom PIL import Image\n", 1)
+img = "                         images='images', \n"
+ev = "                         eval=False, \n"
+dbg = "                         debug=False, \n"
+if "depths=''" not in t:
+    t = t.replace(img, img + "                         depths='', \n", 1)
+if "train_test_exp=False" not in t:
+    t = t.replace(ev, ev + "                         train_test_exp=False, \n", 1)
+if "antialiasing=False" not in t:
+    t = t.replace(dbg, dbg + "                         antialiasing=False, \n", 1)
+old_camera = '                view = cameras.Camera(0, R, T, FoVx, FoVy, torch.rand(3,h,w), None, "abcd", 0)\n'
+new_camera = """                dummy_image = Image.fromarray(np.zeros((h, w, 3), dtype=np.uint8))
+                view = cameras.Camera(
+                    (w, h),
+                    0,
+                    R,
+                    T,
+                    FoVx,
+                    FoVy,
+                    None,
+                    dummy_image,
+                    None,
+                    f"{camera_name}",
+                    camera_number,
+                    data_device=self.device,
+                )
+"""
+if old_camera in t:
+    t = t.replace(old_camera, new_camera, 1)
+p.write_text(t)
+PY
 
 RUN mkdir -p /opt/gs2mesh/third_party/DLNR/pretrained \
     && wget -q -O /opt/gs2mesh/third_party/DLNR/pretrained/DLNR_Middlebury.pth \
