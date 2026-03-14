@@ -51,14 +51,22 @@ RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
-# --- Layer 5: gaussian-splatting + gs2mesh ---
-RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
-    && cd /opt/gaussian-splatting \
-    && pip install --no-cache-dir -e . 2>/dev/null || true
+# --- Layer 5a: gaussian-splatting CUDA extensions ---
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
 
+RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
+    && pip install --no-cache-dir --no-build-isolation \
+        /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \
+        /opt/gaussian-splatting/submodules/simple-knn \
+    && pip install --no-cache-dir --no-build-isolation \
+        /opt/gaussian-splatting/submodules/fused-ssim 2>/dev/null || true
+
+# --- Layer 5b: gs2mesh ---
 RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
+    && mkdir -p /opt/gs2mesh/third_party \
+    && ln -s /opt/gaussian-splatting /opt/gs2mesh/third_party/gaussian-splatting \
     && cd /opt/gs2mesh \
-    && pip install --no-cache-dir -r requirements.txt 2>/dev/null || true
+    && pip install --no-cache-dir -r requirements.txt 2>/dev/null; true
 
 # --- Layer 6: Application code ---
 COPY scripts/ /app/scripts/
