@@ -49,10 +49,6 @@
   background: var(--bg-secondary);
 }
 
-.mesh-phase-status.hidden {
-  display: none;
-}
-
 #mesh-phase-status-text {
   font-size: 11px;
   color: var(--text-secondary);

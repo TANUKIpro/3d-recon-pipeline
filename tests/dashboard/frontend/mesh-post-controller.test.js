@@ -6,7 +6,7 @@ import { DEFAULT_TAUBIN_NU, CLASSICAL_PREVIEW_TITLE } from '../../../scripts/das
 // ── DOM builder (local to this test file) ──────────────────────
 function buildMeshPostDOM() {
   document.body.innerHTML = `
-    <div id="mesh-post-toolbar" style="display:none">
+    <div id="mesh-post-toolbar" class="hidden">
       <select id="mesh-post-method">
         <option value="laplacian">Laplacian</option>
         <option value="taubin">Taubin</option>
@@ -55,7 +55,7 @@ describe('MeshPostController', () => {
   describe('init', () => {
     it('sets toolbar hidden', () => {
       ctrl.init();
-      expect(ctrl._toolbar.style.display).toBe('none');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('sets controls disabled', () => {
@@ -93,13 +93,13 @@ describe('MeshPostController', () => {
   describe('setToolbarVisible', () => {
     it('shows toolbar when true', () => {
       ctrl.setToolbarVisible(true);
-      expect(ctrl._toolbar.style.display).toBe('flex');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(false);
     });
 
     it('hides toolbar when false', () => {
       ctrl.setToolbarVisible(true);
       ctrl.setToolbarVisible(false);
-      expect(ctrl._toolbar.style.display).toBe('none');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(true);
     });
   });
 
@@ -219,7 +219,7 @@ describe('MeshPostController', () => {
         stages: { '5': { status: 'complete', progress: 100 } },
       };
       ctrl.syncFromStatus(status);
-      expect(ctrl._toolbar.style.display).toBe('flex');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(false);
     });
 
     it('hides toolbar when stage 5 not done', () => {
@@ -230,7 +230,7 @@ describe('MeshPostController', () => {
         stages: { '5': { status: 'running', progress: 50 } },
       };
       ctrl.syncFromStatus(status);
-      expect(ctrl._toolbar.style.display).toBe('none');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('hides toolbar when object_name missing', () => {
@@ -240,7 +240,7 @@ describe('MeshPostController', () => {
         stages: { '5': { status: 'complete', progress: 100 } },
       };
       ctrl.syncFromStatus(status);
-      expect(ctrl._toolbar.style.display).toBe('none');
+      expect(ctrl._toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('disables controls when pipeline running at non-stage-5', () => {

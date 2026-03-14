@@ -65,10 +65,10 @@ export class OverviewPanel {
     this._grid.innerHTML = '';
 
     if (this._objects.length === 0) {
-      this._empty.style.display = '';
+      this._empty.classList.remove('hidden');
       return;
     }
-    this._empty.style.display = 'none';
+    this._empty.classList.add('hidden');
 
     for (const obj of this._objects) {
       this._grid.appendChild(this._createCard(obj));

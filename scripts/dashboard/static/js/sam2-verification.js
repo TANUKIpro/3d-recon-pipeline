@@ -52,14 +52,14 @@ export class SAM2Verification {
       this._strip.appendChild(frame);
     }
 
-    this._container.style.display = 'block';
+    this._container.classList.remove('hidden');
     this._approveBtn.disabled = false;
     this._redoBtn.disabled = false;
     this._visible = true;
   }
 
   hide() {
-    this._container.style.display = 'none';
+    this._container.classList.add('hidden');
     this._strip.innerHTML = '';
     this._visible = false;
   }

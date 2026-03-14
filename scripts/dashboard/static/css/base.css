@@ -73,6 +73,10 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 /* ── Light Theme Override ─────────────────────────────────── */
+/* ── Utility ──────────────────────────────────────────────── */
+.hidden { display: none !important; }
+
+/* ── Light Theme Override ─────────────────────────────────── */
 [data-theme="light"] {
   --bg-primary: #f5f5f8;
   --bg-secondary: #ffffff;

@@ -76,22 +76,22 @@ describe('SAM2Verification', () => {
       expect(imgs[9].src).toContain('/api/verification/frame/99');
     });
 
-    it('container becomes visible (display:block)', () => {
+    it('container becomes visible (hidden class removed)', () => {
       verification.show(50);
       const container = document.getElementById('sam2-verification');
-      expect(container.style.display).toBe('block');
+      expect(container.classList.contains('hidden')).toBe(false);
     });
   });
 
   // --- hide ---
 
   describe('hide', () => {
-    it('sets display:none and clears strip', () => {
+    it('adds hidden class and clears strip', () => {
       verification.show(50);
       verification.hide();
       const container = document.getElementById('sam2-verification');
       const strip = document.getElementById('sam2-verification-strip');
-      expect(container.style.display).toBe('none');
+      expect(container.classList.contains('hidden')).toBe(true);
       expect(strip.innerHTML).toBe('');
     });
   });

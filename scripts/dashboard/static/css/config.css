@@ -66,6 +66,8 @@
   display: none;
 }
 
+.config-advanced > summary > .btn-small { margin-left: auto; }
+
 .config-advanced > summary::after {
   content: "+";
   float: right;

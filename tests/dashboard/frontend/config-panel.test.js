@@ -168,9 +168,9 @@ describe('ConfigPanel', () => {
       const poissonSummary = document.getElementById('cfg-poisson-summary');
       const diffcdControls = document.getElementById('cfg-diffcd-controls');
       const classicalControls = document.getElementById('cfg-classical-controls');
-      expect(poissonSummary.style.display).toBe('');
-      expect(diffcdControls.style.display).toBe('none');
-      expect(classicalControls.style.display).toBe('');
+      expect(poissonSummary.classList.contains('hidden')).toBe(false);
+      expect(diffcdControls.classList.contains('hidden')).toBe(true);
+      expect(classicalControls.classList.contains('hidden')).toBe(false);
     });
 
     it('diffcd: shows diffcd controls, hides classical', () => {
@@ -178,9 +178,9 @@ describe('ConfigPanel', () => {
       const poissonSummary = document.getElementById('cfg-poisson-summary');
       const diffcdControls = document.getElementById('cfg-diffcd-controls');
       const classicalControls = document.getElementById('cfg-classical-controls');
-      expect(poissonSummary.style.display).toBe('none');
-      expect(diffcdControls.style.display).toBe('');
-      expect(classicalControls.style.display).toBe('none');
+      expect(poissonSummary.classList.contains('hidden')).toBe(true);
+      expect(diffcdControls.classList.contains('hidden')).toBe(false);
+      expect(classicalControls.classList.contains('hidden')).toBe(true);
     });
   });
 

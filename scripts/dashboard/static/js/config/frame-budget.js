@@ -119,11 +119,11 @@ export function _updatePi3xFrameTargetMarker() {
   const min = parseFloat(input.min) || 2;
   const max = parseFloat(input.max) || 50;
   if (recommended == null || max <= min || recommended >= max) {
-    this._pi3xFrameTargetMarker.style.display = 'none';
+    this._pi3xFrameTargetMarker.classList.add('hidden');
     return;
   }
   const pct = ((recommended - min) / (max - min)) * 100;
-  this._pi3xFrameTargetMarker.style.display = '';
+  this._pi3xFrameTargetMarker.classList.remove('hidden');
   this._pi3xFrameTargetMarker.style.left = `${pct}%`;
 }
 

@@ -124,6 +124,6 @@ describe('OverviewPanel', () => {
     await panel.refresh();
 
     const empty = document.getElementById('overview-empty');
-    expect(empty.style.display).not.toBe('none');
+    expect(empty.classList.contains('hidden')).toBe(false);
   });
 });

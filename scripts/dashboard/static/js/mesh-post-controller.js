@@ -62,7 +62,7 @@ export class MeshPostController {
 
   setToolbarVisible(visible) {
     if (!this._toolbar) return;
-    this._toolbar.style.display = visible ? 'flex' : 'none';
+    this._toolbar.classList.toggle('hidden', !visible);
   }
 
   setEnabled(enabled) {

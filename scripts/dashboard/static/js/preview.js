@@ -105,7 +105,7 @@ export class PreviewPanel {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
       if (empty) empty.classList.remove('hidden');
       const headerEl = document.getElementById('frame-count-header');
-      if (headerEl) headerEl.style.display = 'none';
+      if (headerEl) headerEl.classList.add('hidden');
       if (this._galleryGrid) this._galleryGrid.innerHTML = '';
     }
 
@@ -114,7 +114,7 @@ export class PreviewPanel {
       const empty = document.getElementById('stage-2-empty');
       if (empty) empty.classList.remove('hidden');
       const toolbar = document.getElementById('pi3x-toolbar');
-      if (toolbar) toolbar.style.display = 'none';
+      if (toolbar) toolbar.classList.add('hidden');
       const pointCount = document.getElementById('pi3x-point-count');
       if (pointCount) pointCount.textContent = '';
       const cameraCount = document.getElementById('pi3x-camera-count');
@@ -437,7 +437,7 @@ export class PreviewPanel {
 
     const empty = document.getElementById('stage-2-empty');
     const toolbar = document.getElementById('pi3x-toolbar');
-    if (toolbar) toolbar.style.display = 'none';
+    if (toolbar) toolbar.classList.add('hidden');
 
     const stage = this._stages[2];
     if (!stage) return;
@@ -454,7 +454,7 @@ export class PreviewPanel {
       if (pointCountEl) pointCountEl.textContent = '';
     } else {
       if (empty) empty.classList.add('hidden');
-      if (toolbar) toolbar.style.display = 'flex';
+      if (toolbar) toolbar.classList.remove('hidden');
       if (stage.currentObject?.geometry) {
         const count = stage.currentObject.geometry.attributes.position?.count || 0;
         const el = document.getElementById('pi3x-point-count');
@@ -524,7 +524,7 @@ export class PreviewPanel {
           toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
         if (empty) empty.classList.add('hidden');
-        if (toolbar) toolbar.style.display = 'flex';
+        if (toolbar) toolbar.classList.remove('hidden');
       } else {
         cameraOverlay.remove();
       }
@@ -539,7 +539,7 @@ export class PreviewPanel {
     }
     if (!loaded && !cameraLoaded) {
       if (empty) empty.classList.remove('hidden');
-      if (toolbar) toolbar.style.display = 'none';
+      if (toolbar) toolbar.classList.add('hidden');
       stage.container?.classList.remove('visible');
     }
   }
@@ -856,7 +856,7 @@ export class PreviewPanel {
       const textEl = document.getElementById('frame-count-text');
       if (headerEl && textEl) {
         textEl.textContent = `Extracted ${totalCount} frames`;
-        headerEl.style.display = '';
+        headerEl.classList.remove('hidden');
       }
 
       // Select up to 10 representative frames (evenly spaced)

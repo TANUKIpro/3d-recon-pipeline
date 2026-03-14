@@ -343,8 +343,6 @@
   text-align: center;
   padding: 20px;
 }
-.stage-panel-empty.hidden { display: none; }
-
 /* Stage pill clickable + selected indicator */
 .stage-pill { cursor: pointer; user-select: none; }
 .stage-pill.selected { box-shadow: 0 0 0 1px var(--accent); }

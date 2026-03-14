@@ -215,13 +215,13 @@ export class ConfigPanel {
         : 'Classical Mesh pipeline is active.';
     }
     if (this._poissonSummary) {
-      this._poissonSummary.style.display = isDiffcd ? 'none' : '';
+      this._poissonSummary.classList.toggle('hidden', isDiffcd);
     }
     if (this._diffcdControls) {
-      this._diffcdControls.style.display = isDiffcd ? '' : 'none';
+      this._diffcdControls.classList.toggle('hidden', !isDiffcd);
     }
     if (this._classicalControls) {
-      this._classicalControls.style.display = isDiffcd ? 'none' : '';
+      this._classicalControls.classList.toggle('hidden', isDiffcd);
     }
   }
 
@@ -1040,10 +1040,10 @@ export class ConfigPanel {
     const method = this._inputs.meshwrap_method?.value || 'poisson_iterative';
     const isAlpha = method === 'alpha_wrap';
     if (this._meshwrapPoissonGroup) {
-      this._meshwrapPoissonGroup.style.display = isAlpha ? 'none' : '';
+      this._meshwrapPoissonGroup.classList.toggle('hidden', isAlpha);
     }
     if (this._meshwrapAlphaGroup) {
-      this._meshwrapAlphaGroup.style.display = isAlpha ? '' : 'none';
+      this._meshwrapAlphaGroup.classList.toggle('hidden', !isAlpha);
     }
   }
 

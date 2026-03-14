@@ -167,7 +167,7 @@ describe('app.js integration', () => {
     await flush();
 
     const verif = document.getElementById('sam2-verification');
-    expect(verif.style.display).not.toBe('none');
+    expect(verif.classList.contains('hidden')).toBe(false);
   });
 
   // 31.6 — ws mesh_repair_ready → UI
