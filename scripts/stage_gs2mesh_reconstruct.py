@@ -51,6 +51,15 @@ def run_gs2mesh(
     if recon_dir is None:
         raise RuntimeError("No valid COLMAP reconstruction found in " + colmap_sparse_dir)
 
+    # Undistort images: 3DGS only supports PINHOLE/SIMPLE_PINHOLE cameras,
+    # but COLMAP defaults to SIMPLE_RADIAL.
+    _report(2.0, "Undistorting images for 3DGS")
+    undistorted_dir = gs2mesh_workdir / "undistorted"
+    _run_undistort(
+        frames_dir, recon_dir, undistorted_dir,
+        register_process, unregister_process,
+    )
+
     # Step 1: Train 3D Gaussian Splatting model
     _report(5.0, "Training 3D Gaussian Splatting model")
     gs_model_dir = gs2mesh_workdir / "gs_model"
@@ -64,8 +73,8 @@ def run_gs2mesh(
     ]
 
     # Prepare COLMAP-compatible directory structure for gaussian-splatting
-    # gs expects: source_path/sparse/0/ with COLMAP files and source_path/images/
-    _prepare_gs_input(out, Path(frames_dir), recon_dir)
+    # using undistorted images and PINHOLE camera model
+    _prepare_gs_input(out, undistorted_dir / "images", undistorted_dir / "sparse" / "0")
 
     proc = subprocess.Popen(
         train_args,
@@ -106,7 +115,7 @@ def run_gs2mesh(
     gs2mesh_args = [
         "python3", "-u", "/opt/gs2mesh/run.py",
         "--gs_model_path", str(gs_model_dir),
-        "--colmap_path", str(recon_dir.parent),
+        "--colmap_path", str(undistorted_dir / "sparse"),
         "--output_path", str(gs2mesh_workdir / "mesh_output"),
         "--stereo_model", stereo_model,
         "--tsdf_voxel_size", str(tsdf_voxel_size),
@@ -172,14 +181,70 @@ def _prepare_gs_input(output_dir: Path, frames_dir: Path, recon_dir: Path) -> No
     sparse_target.mkdir(parents=True, exist_ok=True)
     for f in recon_dir.iterdir():
         if f.is_file():
-            dest = sparse_target / f.name
-            if not dest.exists():
-                shutil.copy2(str(f), str(dest))
+            shutil.copy2(str(f), str(sparse_target / f.name))
 
     # Create images/ symlink to frames directory
     images_link = output_dir / "images"
+    if images_link.is_symlink():
+        images_link.unlink()
     if not images_link.exists():
         images_link.symlink_to(frames_dir.resolve())
+
+
+def _run_undistort(
+    frames_dir: str,
+    recon_dir: Path,
+    output_dir: Path,
+    register_process=None,
+    unregister_process=None,
+) -> None:
+    """Run COLMAP image_undistorter to convert camera model to PINHOLE.
+
+    3DGS only supports PINHOLE/SIMPLE_PINHOLE cameras. COLMAP defaults to
+    SIMPLE_RADIAL, so we undistort images and convert the camera model.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "colmap", "image_undistorter",
+        "--image_path", str(frames_dir),
+        "--input_path", str(recon_dir),
+        "--output_path", str(output_dir),
+        "--output_type", "COLMAP",
+    ]
+    print(f"COLMAP image_undistorter: {' '.join(cmd)}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        preexec_fn=os.setsid,
+    )
+    if register_process:
+        register_process(proc)
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if line:
+                print(f"  [COLMAP] {line}")
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"COLMAP image_undistorter failed (exit {proc.returncode})"
+            )
+    finally:
+        if unregister_process:
+            unregister_process(proc)
+
+    # Restructure sparse/ → sparse/0/ to match COLMAP convention.
+    # The undistorter outputs files directly in sparse/, but 3DGS and
+    # gs2mesh expect the sparse/0/ subdirectory structure.
+    sparse_dir = output_dir / "sparse"
+    if sparse_dir.is_dir() and not (sparse_dir / "0").is_dir():
+        tmp = output_dir / "_sparse_tmp"
+        sparse_dir.rename(tmp)
+        sparse_dir.mkdir()
+        tmp.rename(sparse_dir / "0")
 
 
 def _find_output_mesh(mesh_dir: Path) -> Path | None:
