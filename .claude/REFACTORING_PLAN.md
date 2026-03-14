@@ -215,32 +215,55 @@
 
 ---
 
-## Phase 5: `config_defaults.py` の定数整理
+## Phase 5: `config_defaults.py` 定数命名の一貫性修正 ✅
 
-**目標**: public 定数と internal 定数の命名を一貫させ、構造化する
+**目標**: `_` prefix（internal）と prefix なし（public/UI-facing）の区別が実態と一致しない定数を修正する
 
-### 5-1. 定数のグルーピング
-> **事前確認**: `scripts/config_defaults.py` を全体読み取り、定数を分類
+コミット: `b770e13 refactor: remove _ prefix from 3 public constants in config_defaults.py`
 
-- [ ] ファイルを読んでセクションごとの定数一覧を作成
-- [ ] `_` prefix 付き定数（internal）と prefix なし定数（public/user-configurable）の区別が正しいか確認
-- [ ] 一貫性のない命名があれば修正案を作成
-- [ ] 外部からの利用箇所を `grep` で全列挙してから名前変更を実行
-- [ ] Dockerで全テスト実行して確認
+### 5-1. `_MESHWRAP_METHOD` → `MESHWRAP_METHOD`
+- [x] `config_defaults.py`: INTERNAL → USER-CONFIGURABLE Stage 6 セクションへ移動、`_` prefix 除去
+- [x] 元の位置に後方互換エイリアス `_MESHWRAP_METHOD = MESHWRAP_METHOD` を残す
+- [x] `dashboard/state.py`: import 名と `PipelineConfig.meshwrap_method` のデフォルト値を更新
+- [x] `dashboard/configuration.py`: import 名と `parse_choice()` 呼び出しの参照を更新
+- [x] `stage_mesh_wrap.py`: `MESHWRAP_METHOD as _DEFAULT_WRAP_METHOD` に変更
+
+### 5-2. `_MESHWRAP_METHODS` → `MESHWRAP_METHODS`
+- [x] `config_defaults.py`: `MESHWRAP_METHOD` と同じ位置へ移動、後方互換エイリアス追加
+- [x] `dashboard/configuration.py`: import 名と `parse_choice()` 呼び出しの参照を更新
+- [x] `stage_mesh_wrap.py`: `MESHWRAP_METHODS as _VALID_METHODS` に変更
+
+### 5-3. `_OUTPUT_DIR_DEFAULT` → `OUTPUT_DIR_DEFAULT`
+- [x] `config_defaults.py`: INTERNAL Infrastructure → USER-CONFIGURABLE セクション末尾へ移動、後方互換エイリアス追加
+- [x] `dashboard/state.py`: import 名と `PipelineConfig.output_dir` のデフォルト値を更新
+
+### スコープ外（実施しない）
+- Import エイリアスの統一（4ファイル×44+箇所）: 各ファイル内で一貫しており、リスク/ベネフィット比が合わない
+- `_REPAIR_MIN_LOOP_VERTICES` の削除: `repair/boundary.py` と `repair/pipeline.py` で使用中
+
+- [x] 全462 Pythonテストパス確認（E2E 1件は Pi3X 依存で pre-existing failure）
 
 ---
 
-## Phase 6: `stage_wrappers.py` の遅延 import パターン統一
+## Phase 6: `stage_wrappers.py` の遅延 import パターン統一 ✅
 
-**目標**: 各ラッパー関数内に散らばる遅延 import を統一パターンにする
+**目標**: 各ラッパー関数内の遅延 import と呼び出しの間にある不要な空行を除去し、パターンを統一する
+
+コミット: `refactor: unify lazy import pattern in stage_wrappers.py`
 
 ### 6-1. パターンの確認と統一
-> **事前確認**: `scripts/dashboard/stage_wrappers.py` を読み、各関数内の import パターンを確認
 
-- [ ] 現状の遅延 import パターンを全列挙
-- [ ] 統一パターンを決定（例: 各関数冒頭で import、エラーハンドリング統一）
-- [ ] ステージラッパー間で重複している import を整理
-- [ ] Dockerで全テスト実行して確認
+統一パターン: import 文の直後に空行なしで呼び出し（or `with` ブロック）。
+
+- [x] 6 関数の import 後の不要な空行を除去:
+  - `_stage_classical_mesh`
+  - `_stage_mesh_wrap`
+  - `_stage_mesh_repair`
+  - `_stage_mesh_repair_analyze`
+  - `_stage_mesh_repair_selected`
+  - `_stage_extract_ground_plane`
+- [x] 重複 import（`cleanup_pytorch_vram` が 2 関数で import）は遅延 import の正常な設計のため維持
+- [x] Docker 全テスト実行して確認（469 passed）
 
 ---
 
@@ -352,5 +375,6 @@
 | **高** | Phase 2 (命名修正) | ✅ 完了 |
 | **高** | Phase 3 (ファイル分割) | ✅ 完了 |
 | **中** | Phase 4 (状態管理) | ✅ 完了 |
-| **中** | Phase 5 (定数整理) | 未着手 |
-| **低** | Phase 6-10 | 未着手 |
+| **中** | Phase 5 (定数命名修正) | ✅ 完了 |
+| **低** | Phase 6 (遅延 import 統一) | ✅ 完了 |
+| **低** | Phase 7-10 | 未着手 |

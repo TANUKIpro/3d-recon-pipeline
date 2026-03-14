@@ -156,7 +156,6 @@ def _stage_classical_mesh(
 ) -> None:
     del cancel_cb, register_process, unregister_process
     from scripts.stage_classical_mesh import run_classical_mesh
-
     run_classical_mesh(
         denoised_ply,
         output_dir,
@@ -194,7 +193,6 @@ def _stage_mesh_wrap(
 ) -> None:
     del cancel_cb, register_process, unregister_process
     from scripts.stage_mesh_wrap import run_mesh_wrap
-
     run_mesh_wrap(
         mesh_ply,
         output_dir,
@@ -230,7 +228,6 @@ def _stage_mesh_repair(
 ) -> None:
     del register_process, unregister_process
     from scripts.stage_contact_hole_repair import run_contact_hole_repair
-
     run_contact_hole_repair(
         mesh_ply,
         output_dir,
@@ -250,7 +247,6 @@ def _stage_mesh_repair_analyze(
     cancel_cb=None,
 ) -> dict:
     from scripts.stage_contact_hole_repair import analyze_contact_hole_candidates
-
     with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
         analysis = analyze_contact_hole_candidates(
             mesh_ply,
@@ -273,7 +269,6 @@ def _stage_mesh_repair_selected(
     ground_plane: dict | None = None,
 ) -> None:
     from scripts.stage_contact_hole_repair import run_selected_contact_hole_repair
-
     with stage_log_scope(int(PipelineStage.MESH_REPAIR)):
         run_selected_contact_hole_repair(
             mesh_ply,
@@ -296,7 +291,6 @@ def _stage_extract_ground_plane(
     object_mask_dir: str | None = None,
 ) -> dict | None:
     from scripts.stage_pi3x_reconstruct import extract_ground_plane
-
     with stage_log_scope(int(PipelineStage.SAM2_SEGMENT)):
         return extract_ground_plane(
             cache_path,
