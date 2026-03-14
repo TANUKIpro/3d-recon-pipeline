@@ -63,7 +63,7 @@ RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.
 
 # --- Layer 5b: gs2mesh + DLNR stereo weights ---
 RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
-    && mkdir -p /opt/gs2mesh/third_party \
+    && rm -rf /opt/gs2mesh/third_party/gaussian-splatting \
     && ln -s /opt/gaussian-splatting /opt/gs2mesh/third_party/gaussian-splatting \
     && cd /opt/gs2mesh \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null; true
