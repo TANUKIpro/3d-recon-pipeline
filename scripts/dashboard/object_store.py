@@ -84,7 +84,7 @@ def _utc_iso(ts: float | None = None) -> str:
     return dt.isoformat(timespec="seconds")
 
 
-def _safe_json_load(path: Path) -> dict[str, Any]:
+def safe_json_load(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
     try:
@@ -97,7 +97,7 @@ def _safe_json_load(path: Path) -> dict[str, Any]:
     return {}
 
 
-def _sanitize_object_name(name: str) -> str:
+def sanitize_object_name(name: str) -> str:
     candidate = str(name or "").strip().replace("/", "-").replace("\\", "-")
     candidate = re.sub(r"\s+", "-", candidate)
     candidate = re.sub(r"[^\w.-]", "-", candidate, flags=re.UNICODE)
@@ -107,28 +107,28 @@ def _sanitize_object_name(name: str) -> str:
     return candidate[:80]
 
 
-def _validate_object_name(name: str) -> str:
+def validate_object_name(name: str) -> str:
     candidate = str(name or "").strip()
     if not candidate:
         raise ValueError("object name is required")
     if candidate in {".", ".."} or "/" in candidate or "\\" in candidate:
         raise ValueError("invalid object name")
-    if candidate != _sanitize_object_name(candidate):
+    if candidate != sanitize_object_name(candidate):
         raise ValueError("invalid object name")
     return candidate
 
 
-def _suggest_object_name(video_path: str) -> str:
+def suggest_object_name(video_path: str) -> str:
     stem = Path(video_path).stem.strip() if video_path else "object"
     if not stem:
         stem = "object"
     try:
-        return _sanitize_object_name(stem)
+        return sanitize_object_name(stem)
     except ValueError:
         return f"object-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
 
 
-def _resolve_output_root(root: str | None) -> Path:
+def resolve_output_root(root: str | None) -> Path:
     out = Path(root) if root else Path(".")
     out.mkdir(parents=True, exist_ok=True)
     return out
@@ -140,11 +140,11 @@ def _objects_root(base_output: Path) -> Path:
     return root
 
 
-def _object_dir(object_name: str, base_output: Path) -> Path:
+def object_dir(object_name: str, base_output: Path) -> Path:
     return _objects_root(base_output) / object_name
 
 
-def _list_preview_files(out: Path) -> list[dict[str, Any]]:
+def list_preview_files(out: Path) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     if not out.is_dir():
         return files
@@ -186,11 +186,11 @@ def _latest_update_ts(out: Path, fallback: str | None) -> str | None:
     return fallback
 
 
-def _prepare_object_output_dir(out: Path) -> None:
-    _reset_outputs_from_stage(out, int(PipelineStage.EXTRACT_FRAMES))
+def prepare_object_output_dir(out: Path) -> None:
+    reset_outputs_from_stage(out, int(PipelineStage.EXTRACT_FRAMES))
 
 
-def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
+def reset_outputs_from_stage(out: Path, start_stage: int) -> None:
     out.mkdir(parents=True, exist_ok=True)
     for stage in range(max(1, start_stage), int(PipelineStage.TEXTURE_BAKE) + 1):
         plan = STAGE_RESET_PATHS.get(stage, {})
@@ -204,7 +204,7 @@ def _reset_outputs_from_stage(out: Path, start_stage: int) -> None:
                 target.unlink()
 
 
-def _infer_resume_stage(out: Path) -> int:
+def infer_resume_stage(out: Path) -> int:
     stage_complete, _, _ = detect_stage_outputs(out)
     for stage in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
         if not stage_complete.get(stage, False):
@@ -212,7 +212,7 @@ def _infer_resume_stage(out: Path) -> int:
     return int(PipelineStage.TEXTURE_BAKE)
 
 
-def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
+def validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
     issues: list[str] = []
     req = RESUME_PREREQUISITES.get(start_stage)
     if not req:
@@ -232,7 +232,7 @@ def _validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
     return issues
 
 
-def _write_object_meta(
+def write_object_meta(
     object_name: str,
     object_dir: Path,
     video_path: str,
@@ -240,7 +240,7 @@ def _write_object_meta(
     config: dict[str, Any] | None = None,
 ) -> None:
     meta_path = object_dir / OBJECT_META_FILE
-    existing = _safe_json_load(meta_path)
+    existing = safe_json_load(meta_path)
     now = _utc_iso()
     payload = {
         "object_name": object_name,
@@ -254,13 +254,13 @@ def _write_object_meta(
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def _summarize_object(
+def summarize_object(
     object_name: str,
     object_dir: Path,
     include_files: bool = False,
 ) -> dict[str, Any]:
-    meta = _safe_json_load(object_dir / OBJECT_META_FILE)
-    files = _list_preview_files(object_dir)
+    meta = safe_json_load(object_dir / OBJECT_META_FILE)
+    files = list_preview_files(object_dir)
     file_map = {f["path"]: f for f in files}
     primary_files = [file_map[p] for p in PRIMARY_ARTIFACT_PATHS if p in file_map]
     stages, frame_count, mask_count = _stage_completion_flags(object_dir)
@@ -281,7 +281,7 @@ def _summarize_object(
         "file_count": len(files),
         "size_mb": round(total_bytes / 1024 / 1024, 2),
         "artifacts": primary_files,
-        "resume_from_stage": _infer_resume_stage(object_dir),
+        "resume_from_stage": infer_resume_stage(object_dir),
     }
     if include_files:
         item["files"] = files
@@ -296,12 +296,12 @@ def _summarize_object(
     return item
 
 
-def _list_objects(base_output: Path) -> list[dict[str, Any]]:
+def list_objects(base_output: Path) -> list[dict[str, Any]]:
     objects: list[dict[str, Any]] = []
     root = _objects_root(base_output)
     for d in root.iterdir():
         if not d.is_dir():
             continue
-        objects.append(_summarize_object(d.name, d, include_files=False))
+        objects.append(summarize_object(d.name, d, include_files=False))
     objects.sort(key=lambda o: o.get("updated_at") or "", reverse=True)
     return objects

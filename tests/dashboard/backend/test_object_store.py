@@ -15,17 +15,17 @@ from tempfile import TemporaryDirectory
 from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
     STAGE_RESET_PATHS,
-    _infer_resume_stage,
-    _list_objects,
-    _reset_outputs_from_stage,
-    _summarize_object,
-    _validate_resume_prerequisites,
-    _write_object_meta,
+    infer_resume_stage,
+    list_objects,
+    reset_outputs_from_stage,
+    summarize_object,
+    validate_resume_prerequisites,
+    write_object_meta,
 )
 
 
 class TestResetOutputsFromStage(unittest.TestCase):
-    """7.2.3 — _reset_outputs_from_stage keeps earlier stages intact."""
+    """7.2.3 — reset_outputs_from_stage keeps earlier stages intact."""
 
     def test_reset_from_stage_3_preserves_1_and_2(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -44,7 +44,7 @@ class TestResetOutputsFromStage(unittest.TestCase):
             # Create stage 4 output
             (out / "object_denoised.ply").write_text("ply\n")
 
-            _reset_outputs_from_stage(out, 3)
+            reset_outputs_from_stage(out, 3)
 
             # Stages 1-2 intact
             self.assertTrue((out / "frames" / "00000.jpg").is_file())
@@ -58,7 +58,7 @@ class TestResetOutputsFromStage(unittest.TestCase):
 
 
 class TestInferResumeStage(unittest.TestCase):
-    """7.2.4 — _infer_resume_stage returns the first incomplete stage."""
+    """7.2.4 — infer_resume_stage returns the first incomplete stage."""
 
     def test_stages_1_2_complete_returns_3(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -71,23 +71,23 @@ class TestInferResumeStage(unittest.TestCase):
             (out / "pi3x_cache.npz").write_bytes(b"npz")
             (out / "camera_poses.json").write_text("{}")
 
-            result = _infer_resume_stage(out)
+            result = infer_resume_stage(out)
             self.assertEqual(result, 3)
 
     def test_empty_dir_returns_1(self) -> None:
         with TemporaryDirectory() as tmp:
-            result = _infer_resume_stage(Path(tmp))
+            result = infer_resume_stage(Path(tmp))
             self.assertEqual(result, 1)
 
 
 class TestValidateResumePrerequisites(unittest.TestCase):
-    """7.2.5 — _validate_resume_prerequisites detects missing files."""
+    """7.2.5 — validate_resume_prerequisites detects missing files."""
 
     def test_missing_files_returns_issues(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             # Stage 3 requires frames dir, object_full.ply, camera_poses.json, pi3x_cache.npz
-            issues = _validate_resume_prerequisites(out, 3)
+            issues = validate_resume_prerequisites(out, 3)
             self.assertGreater(len(issues), 0)
 
     def test_all_present_returns_empty(self) -> None:
@@ -96,22 +96,22 @@ class TestValidateResumePrerequisites(unittest.TestCase):
             # Set up prerequisites for stage 4 (needs object.ply)
             (out / "object.ply").write_text("ply\n")
 
-            issues = _validate_resume_prerequisites(out, 4)
+            issues = validate_resume_prerequisites(out, 4)
             self.assertEqual(issues, [])
 
     def test_stage_1_no_prerequisites(self) -> None:
         with TemporaryDirectory() as tmp:
-            issues = _validate_resume_prerequisites(Path(tmp), 1)
+            issues = validate_resume_prerequisites(Path(tmp), 1)
             self.assertEqual(issues, [])
 
 
 class TestWriteObjectMeta(unittest.TestCase):
-    """7.2.6 — _write_object_meta creates/updates metadata file."""
+    """7.2.6 — write_object_meta creates/updates metadata file."""
 
     def test_first_write_creates_meta(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            _write_object_meta("test-obj", out, "/data/input/video.mp4")
+            write_object_meta("test-obj", out, "/data/input/video.mp4")
 
             meta_path = out / OBJECT_META_FILE
             self.assertTrue(meta_path.is_file())
@@ -124,12 +124,12 @@ class TestWriteObjectMeta(unittest.TestCase):
     def test_second_write_preserves_created_at(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            _write_object_meta("test-obj", out, "/data/input/video.mp4")
+            write_object_meta("test-obj", out, "/data/input/video.mp4")
             meta1 = json.loads((out / OBJECT_META_FILE).read_text())
             created_at = meta1["created_at"]
 
             time.sleep(0.05)
-            _write_object_meta("test-obj", out, "/data/input/video2.mp4")
+            write_object_meta("test-obj", out, "/data/input/video2.mp4")
             meta2 = json.loads((out / OBJECT_META_FILE).read_text())
 
             self.assertEqual(meta2["created_at"], created_at)
@@ -137,14 +137,14 @@ class TestWriteObjectMeta(unittest.TestCase):
 
 
 class TestSummarizeObject(unittest.TestCase):
-    """7.2.7 — _summarize_object returns dict with expected keys."""
+    """7.2.7 — summarize_object returns dict with expected keys."""
 
     def test_minimal_object_dir(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            _write_object_meta("test-obj", out, "/data/input/v.mp4")
+            write_object_meta("test-obj", out, "/data/input/v.mp4")
 
-            result = _summarize_object("test-obj", out)
+            result = summarize_object("test-obj", out)
 
             self.assertEqual(result["name"], "test-obj")
             self.assertIn("video_path", result)
@@ -156,7 +156,7 @@ class TestSummarizeObject(unittest.TestCase):
 
 
 class TestListObjects(unittest.TestCase):
-    """7.2.8 — _list_objects returns sorted list."""
+    """7.2.8 — list_objects returns sorted list."""
 
     def test_multiple_objects_sorted_by_updated_at_desc(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -173,14 +173,14 @@ class TestListObjects(unittest.TestCase):
             for i, name in enumerate(names):
                 obj_dir = objects_dir / name
                 obj_dir.mkdir()
-                _write_object_meta(name, obj_dir, f"/data/input/{name}.mp4")
+                write_object_meta(name, obj_dir, f"/data/input/{name}.mp4")
                 # Force mtime: alpha=1000, beta=2000, gamma=3000
                 ts = 1000.0 + i * 1000.0
                 meta_path = obj_dir / OBJECT_META_FILE
                 os.utime(meta_path, (ts, ts))
                 os.utime(obj_dir, (ts, ts))
 
-            result = _list_objects(base)
+            result = list_objects(base)
 
             self.assertEqual(len(result), 3)
             # Most recently updated first
@@ -189,7 +189,7 @@ class TestListObjects(unittest.TestCase):
 
     def test_empty_objects_dir(self) -> None:
         with TemporaryDirectory() as tmp:
-            result = _list_objects(Path(tmp))
+            result = list_objects(Path(tmp))
             self.assertEqual(result, [])
 
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useFetchMock } from './helpers/fetch-mock.js';
+import { buildMeshRepairDOM } from './helpers/dom-factory.js';
 import { MeshRepairController } from '../../../scripts/dashboard/static/js/mesh-repair-controller.js';
 import { MESH_REPAIR_THRESHOLD_DEFAULT } from '../../../scripts/dashboard/static/js/constants.js';
 import { formatMeshRepairThreshold } from '../../../scripts/dashboard/static/js/utils.js';
@@ -14,18 +15,6 @@ beforeEach(() => {
 afterEach(() => {
   restoreFetch();
 });
-
-function buildMeshRepairDOM() {
-  document.body.innerHTML = `
-    <div id="mesh-repair-toolbar" style="display:none">
-      <span id="mesh-repair-status"></span>
-      <input type="range" id="mesh-repair-threshold" min="-1" max="0" step="0.01" value="-0.25">
-      <span id="mesh-repair-threshold-value"></span>
-      <button id="mesh-repair-clear">Clear</button>
-      <button id="mesh-repair-apply">Apply</button>
-    </div>
-  `;
-}
 
 function createMockPreview() {
   return {
@@ -57,7 +46,7 @@ describe('MeshRepairController', () => {
     it('sets toolbar hidden', () => {
       controller.init();
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('none');
+      expect(toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('sets controls disabled', () => {
@@ -74,14 +63,14 @@ describe('MeshRepairController', () => {
     it('shows toolbar when passed true', () => {
       controller.setToolbarVisible(true);
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('flex');
+      expect(toolbar.classList.contains('hidden')).toBe(false);
     });
 
     it('hides toolbar when passed false', () => {
       controller.setToolbarVisible(true);
       controller.setToolbarVisible(false);
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('none');
+      expect(toolbar.classList.contains('hidden')).toBe(true);
     });
   });
 
@@ -328,7 +317,7 @@ describe('MeshRepairController', () => {
       await controller.activateFromApi();
 
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('flex');
+      expect(toolbar.classList.contains('hidden')).toBe(false);
       expect(document.getElementById('mesh-repair-threshold').disabled).toBe(false);
       expect(document.getElementById('mesh-repair-apply').disabled).toBe(false);
     });
@@ -447,28 +436,28 @@ describe('MeshRepairController', () => {
     it('shows toolbar when stage 7 is interactive and mesh_repair.ready is true', () => {
       controller.syncFromStatus(makeStatusMsg());
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('flex');
+      expect(toolbar.classList.contains('hidden')).toBe(false);
     });
 
     it('hides toolbar when not running', () => {
       controller.setToolbarVisible(true);
       controller.syncFromStatus(makeStatusMsg({ running: false }));
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('none');
+      expect(toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('hides toolbar when stage 7 is not interactive', () => {
       controller.setToolbarVisible(true);
       controller.syncFromStatus(makeStatusMsg({ stageStatus: 'running' }));
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('none');
+      expect(toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('hides toolbar when mesh_repair.ready is false', () => {
       controller.setToolbarVisible(true);
       controller.syncFromStatus(makeStatusMsg({ ready: false }));
       const toolbar = document.getElementById('mesh-repair-toolbar');
-      expect(toolbar.style.display).toBe('none');
+      expect(toolbar.classList.contains('hidden')).toBe(true);
     });
 
     it('respects inFlight and does not hide toolbar when ready becomes false', () => {
@@ -480,7 +469,7 @@ describe('MeshRepairController', () => {
 
       const toolbar = document.getElementById('mesh-repair-toolbar');
       // Toolbar remains visible because inFlight prevents hiding
-      expect(toolbar.style.display).toBe('flex');
+      expect(toolbar.classList.contains('hidden')).toBe(false);
       expect(document.getElementById('mesh-repair-status').textContent).toBe('Confirming...');
     });
 

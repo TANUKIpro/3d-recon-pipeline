@@ -5,59 +5,20 @@
  * Stage 2 has a dedicated scene for camera overlay support.
  */
 
-import { clampMeshRepairThreshold } from './utils.js';
 import {
-  MESH_REPAIR_THRESHOLD_MIN,
-  MESH_REPAIR_THRESHOLD_MAX,
   MESH_REPAIR_THRESHOLD_DEFAULT,
 } from './constants.js';
+
+import { FIRST_MESH_PREVIEW_FILES, SCENE_THEMES } from './preview/constants.js';
+import * as PoseUtils from './preview/pose-utils.js';
+import * as MeshRepairOverlay from './preview/mesh-repair-overlay.js';
+import * as SceneHelpers from './preview/scene-helpers.js';
 
 let THREE;
 let OrbitControls;
 let PLYLoader;
 let OBJLoader;
 let MTLLoader;
-
-const FIRST_MESH_PREVIEW_FILES = new Set([
-  'object_mesh_raw.ply',
-  'object_mesh_preview.ply',
-  'object_mesh_poisson_raw.ply',
-  'object_mesh_wrapped.ply',
-  'object_mesh_repaired.ply',
-]);
-
-const SCENE_THEMES = {
-  dark: {
-    background:    0x0a0a14,
-    gridPrimary:   0x333355,
-    gridSecondary: 0x222244,
-    meshColor:     0xb3b3b3,
-    edgeColor:     0x101820,
-    edgeOpacity:   0.35,
-    pointColor:    0x4a9eff,
-    shadowColor:   0x000000,
-    shadowOpacity: 0.28,
-    ambientInt:    0.6,
-    dirInt:        0.8,
-    shadowAmbientInt: 0.36,
-    shadowDirInt:     1.05,
-  },
-  light: {
-    background:    0xe8e8ef,
-    gridPrimary:   0xc0c0d0,
-    gridSecondary: 0xd5d5e0,
-    meshColor:     0x6a6a7a,
-    edgeColor:     0x888899,
-    edgeOpacity:   0.25,
-    pointColor:    0x2d7cd6,
-    shadowColor:   0x444466,
-    shadowOpacity: 0.15,
-    ambientInt:    0.7,
-    dirInt:        0.7,
-    shadowAmbientInt: 0.5,
-    shadowDirInt:     0.9,
-  },
-};
 
 export class PreviewPanel {
   constructor() {
@@ -144,7 +105,7 @@ export class PreviewPanel {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
       if (empty) empty.classList.remove('hidden');
       const headerEl = document.getElementById('frame-count-header');
-      if (headerEl) headerEl.style.display = 'none';
+      if (headerEl) headerEl.classList.add('hidden');
       if (this._galleryGrid) this._galleryGrid.innerHTML = '';
     }
 
@@ -153,7 +114,7 @@ export class PreviewPanel {
       const empty = document.getElementById('stage-2-empty');
       if (empty) empty.classList.remove('hidden');
       const toolbar = document.getElementById('pi3x-toolbar');
-      if (toolbar) toolbar.style.display = 'none';
+      if (toolbar) toolbar.classList.add('hidden');
       const pointCount = document.getElementById('pi3x-point-count');
       if (pointCount) pointCount.textContent = '';
       const cameraCount = document.getElementById('pi3x-camera-count');
@@ -208,6 +169,10 @@ export class PreviewPanel {
       PLYLoader = addons[1].PLYLoader;
       OBJLoader = addons[2].OBJLoader;
       MTLLoader = addons[3].MTLLoader;
+      // Initialize THREE in submodules
+      PoseUtils.initThree(THREE);
+      MeshRepairOverlay.initThree(THREE);
+      SceneHelpers.initThree(THREE);
       if (!this._meshRepair.raycaster) {
         this._meshRepair.raycaster = new THREE.Raycaster();
       }
@@ -400,400 +365,6 @@ export class PreviewPanel {
     return stageNum === 2;
   }
 
-  _disposeObject(object3d) {
-    if (!object3d) return;
-    object3d.traverse((node) => {
-      if (node.geometry && typeof node.geometry.dispose === 'function') {
-        node.geometry.dispose();
-      }
-      if (!node.material) return;
-      if (Array.isArray(node.material)) {
-        for (const material of node.material) {
-          if (material && typeof material.dispose === 'function') material.dispose();
-        }
-        return;
-      }
-      if (typeof node.material.dispose === 'function') node.material.dispose();
-    });
-  }
-
-  _cleanupCurrentObject(stage) {
-    if (stage.currentObject) {
-      this._disposeObject(stage.currentObject);
-      stage.sceneRoot.remove(stage.currentObject);
-      stage.currentObject = null;
-    }
-  }
-
-  _setMeshRepairClickEnabled(enabled) {
-    const stage = this._stages[7];
-    const container = stage?.container;
-    if (!container) return;
-    if (enabled) {
-      if (!this._meshRepair.clickBound) {
-        container.addEventListener('click', this._meshRepair.clickHandler);
-        this._meshRepair.clickBound = true;
-      }
-      return;
-    }
-    if (this._meshRepair.clickBound) {
-      container.removeEventListener('click', this._meshRepair.clickHandler);
-      this._meshRepair.clickBound = false;
-    }
-  }
-
-  _handleMeshRepairClick(event) {
-    if (!this._meshRepair.active || this._meshRepair.confirmed) return;
-    if (this._activeStage !== 7) return;
-
-    const stage = this._stages[7];
-    if (!stage || !this._meshRepair.raycaster || !this._meshRepair.pointer) return;
-    const objects = Array.from(this._meshRepair.loopObjects.values())
-      .filter((obj) => obj?.visible !== false);
-    if (objects.length === 0) return;
-
-    const rect = stage.container.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return;
-
-    this._meshRepair.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this._meshRepair.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    this._meshRepair.raycaster.params.Line = this._meshRepair.raycaster.params.Line || {};
-    this._meshRepair.raycaster.params.Line.threshold = 0.03;
-    this._meshRepair.raycaster.setFromCamera(this._meshRepair.pointer, stage.camera);
-    const hit = this._meshRepair.raycaster.intersectObjects(objects, false)
-      .find((item) => item?.object?.userData?.loopId != null);
-    if (!hit) return;
-
-    const loopId = Number(hit.object.userData.loopId);
-    if (!Number.isFinite(loopId)) return;
-    if (this._meshRepair.selected.has(loopId)) {
-      this._meshRepair.selected.delete(loopId);
-    } else {
-      this._meshRepair.selected.add(loopId);
-    }
-    this._applyMeshRepairVisibility();
-    this._updateMeshRepairColors();
-    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
-  }
-
-  _isMeshRepairLoopVisible(loopId) {
-    if (this._meshRepair.selected.has(loopId)) return true;
-    const meta = this._meshRepair.loopMeta.get(loopId);
-    const normalY = Number(meta?.normalY);
-    if (!Number.isFinite(normalY)) return true;
-    return normalY <= this._meshRepair.threshold;
-  }
-
-  _applyMeshRepairVisibility() {
-    let visible = 0;
-    for (const [loopId, obj] of this._meshRepair.loopObjects.entries()) {
-      if (!obj) continue;
-      const isVisible = this._isMeshRepairLoopVisible(loopId);
-      obj.visible = isVisible;
-      if (isVisible) visible += 1;
-    }
-    return visible;
-  }
-
-  _updateMeshRepairColors() {
-    for (const [loopId, obj] of this._meshRepair.loopObjects.entries()) {
-      if (!obj?.material) continue;
-      let colorHex = this._meshRepair.colors.candidate;
-      if (this._meshRepair.selected.has(loopId)) {
-        colorHex = this._meshRepair.confirmed
-          ? this._meshRepair.colors.confirmed
-          : this._meshRepair.colors.selected;
-      }
-      obj.material.color.setHex(colorHex);
-      obj.material.opacity = this._meshRepair.selected.has(loopId) ? 1.0 : 0.9;
-    }
-  }
-
-  _clearMeshRepairOverlay() {
-    this._setMeshRepairClickEnabled(false);
-    if (this._meshRepair.group) {
-      this._meshRepair.group.traverse((node) => {
-        if (node?.geometry?.dispose) node.geometry.dispose();
-        if (!node?.material) return;
-        if (Array.isArray(node.material)) {
-          for (const mat of node.material) {
-            if (mat?.dispose) mat.dispose();
-          }
-          return;
-        }
-        if (node.material.dispose) node.material.dispose();
-      });
-      const stage = this._stages[7];
-      if (stage?.sceneRoot) {
-        stage.sceneRoot.remove(this._meshRepair.group);
-      }
-    }
-
-    this._meshRepair.group = null;
-    this._meshRepair.loopObjects = new Map();
-    this._meshRepair.loopMeta = new Map();
-    this._meshRepair.selected = new Set();
-    this._meshRepair.active = false;
-    this._meshRepair.confirmed = false;
-    this.onMeshRepairSelectionChanged?.([]);
-  }
-
-  clearMeshRepairSelection() {
-    if (!this._meshRepair.active) return;
-    this._meshRepair.confirmed = false;
-    this._meshRepair.selected.clear();
-    this._applyMeshRepairVisibility();
-    this._updateMeshRepairColors();
-    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
-  }
-
-  setMeshRepairConfirmed() {
-    if (!this._meshRepair.active) return;
-    this._meshRepair.confirmed = true;
-    this._updateMeshRepairColors();
-    this._setMeshRepairClickEnabled(false);
-    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
-  }
-
-  getMeshRepairSelectedLoopIds() {
-    return Array.from(this._meshRepair.selected).sort((a, b) => a - b);
-  }
-
-  getMeshRepairVisibleLoopCount() {
-    let visible = 0;
-    for (const obj of this._meshRepair.loopObjects.values()) {
-      if (obj?.visible !== false) visible += 1;
-    }
-    return visible;
-  }
-
-  getMeshRepairTotalLoopCount() {
-    return this._meshRepair.loopObjects.size;
-  }
-
-  getMeshRepairThreshold() {
-    return this._meshRepair.threshold;
-  }
-
-  setMeshRepairThreshold(value) {
-    this._meshRepair.threshold = clampMeshRepairThreshold(value);
-    if (!this._meshRepair.active) return;
-    this._applyMeshRepairVisibility();
-    this._updateMeshRepairColors();
-    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
-  }
-
-  /**
-   * Show crop bounding box overlay on Stage 6 scene.
-   * Loads Stage 5 output mesh into Stage 6 and draws an OBB wireframe.
-   */
-  async showCropBbox(cropScale, opts = {}) {
-    const preferPreview = opts.preferPreview === true;
-    const preferredFile = preferPreview ? 'object_mesh_preview.ply' : 'object_mesh.ply';
-    let loaded = await this.loadStageResult(6, {
-      file: preferredFile,
-      renderMode: 'mesh',
-      stripVertexColors: true,
-      enableShadows: true,
-    });
-    if (!loaded && preferPreview) {
-      loaded = await this.loadStageResult(6, {
-        file: 'object_mesh.ply',
-        renderMode: 'mesh',
-        stripVertexColors: true,
-        enableShadows: true,
-      });
-    }
-    if (!loaded) return;
-
-    const stage = this._stages[6];
-    if (!stage?.currentObject) return;
-
-    // Fetch OBB data from backend
-    try {
-      const resp = await fetch('/api/preview/crop-obb');
-      if (!resp.ok) return;
-      const obb = await resp.json();
-
-      // Adjust OBB center by the stage centering offset
-      const adjusted = this._applyStageCenterOffset(stage, obb.center);
-      obb.adjustedCenter = adjusted || [0, 0, 0];
-      this._cropBbox.obbData = obb;
-    } catch (_) {
-      return;
-    }
-
-    this._createCropBboxHelper(cropScale);
-
-    const empty = document.getElementById('stage-6-empty');
-    if (empty) empty.classList.add('hidden');
-  }
-
-  _createCropBboxHelper(cropScale) {
-    const stage = this._stages[6];
-    const obb = this._cropBbox.obbData;
-    if (!stage?.sceneRoot || !obb) return;
-
-    // Remove stale helper if exists
-    if (this._cropBbox.helper) {
-      stage.sceneRoot.remove(this._cropBbox.helper);
-      this._disposeObject(this._cropBbox.helper);
-      this._cropBbox.helper = null;
-    }
-
-    const scale = Math.max(0.01, Number(cropScale) || 1.0);
-    const [ex, ey, ez] = obb.extent;
-
-    // EdgesGeometry for clean wireframe box
-    const boxGeom = new THREE.BoxGeometry(ex * scale, ey * scale, ez * scale);
-    const edges = new THREE.EdgesGeometry(boxGeom);
-    boxGeom.dispose();  // no longer needed after EdgesGeometry is built
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x00ccff, transparent: true, opacity: 0.7,
-    });
-    const helper = new THREE.LineSegments(edges, mat);
-
-    // Apply OBB position (adjusted for stage centering)
-    helper.position.set(...obb.adjustedCenter);
-
-    // 3x3 rotation matrix -> THREE.Matrix4 -> quaternion
-    const R = obb.rotation;
-    const m4 = new THREE.Matrix4().set(
-      R[0][0], R[0][1], R[0][2], 0,
-      R[1][0], R[1][1], R[1][2], 0,
-      R[2][0], R[2][1], R[2][2], 0,
-      0,       0,       0,       1,
-    );
-    helper.quaternion.setFromRotationMatrix(m4);
-
-    stage.sceneRoot.add(helper);
-    this._cropBbox.helper = helper;
-  }
-
-  updateCropBbox(cropScale) {
-    if (!this._cropBbox.obbData) return;
-
-    const stage = this._stages[6];
-    if (!stage?.sceneRoot) return;
-
-    // Remove old helper
-    if (this._cropBbox.helper) {
-      stage.sceneRoot.remove(this._cropBbox.helper);
-      this._disposeObject(this._cropBbox.helper);
-      this._cropBbox.helper = null;
-    }
-
-    this._createCropBboxHelper(cropScale);
-  }
-
-  clearCropBbox() {
-    const stage = this._stages[6];
-    if (this._cropBbox.helper) {
-      if (stage?.sceneRoot) {
-        stage.sceneRoot.remove(this._cropBbox.helper);
-      }
-      this._disposeObject(this._cropBbox.helper);
-      this._cropBbox.helper = null;
-    }
-    this._cropBbox.obbData = null;
-  }
-
-  _applyStageCenterOffset(stage, point3) {
-    if (!Array.isArray(point3) || point3.length < 3) return null;
-    const x = Number(point3[0]);
-    const y = Number(point3[1]);
-    const z = Number(point3[2]);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-
-    const offset = stage?.centerOffset;
-    if (!offset) return [x, y, z];
-    return [x - offset.x, y - offset.y, z - offset.z];
-  }
-
-  async beginMeshRepairSelection(payload = {}) {
-    const loops = Array.isArray(payload?.loops) ? payload.loops : [];
-    if (loops.length === 0) {
-      throw new Error('No mesh-repair loop candidates');
-    }
-
-    await this.initSceneForStage(7);
-    await this._ensureSceneFlipForStage(7);
-    this.activateStage(7);
-
-    const sourceFile = String(payload?.source_mesh_relpath || '').trim()
-      || String(payload?.source_mesh_path || '').trim().split('/').pop()
-      || 'object_mesh_wrapped.ply';
-    const loaded = await this.loadStageResult(7, {
-      file: sourceFile,
-      renderMode: 'mesh',
-      stripVertexColors: true,
-      enableShadows: true,
-    });
-    if (!loaded) {
-      throw new Error(`Failed to load source mesh for repair selection: ${sourceFile}`);
-    }
-
-    this._clearMeshRepairOverlay();
-    const stage = this._stages[7];
-    if (!stage?.sceneRoot) {
-      throw new Error('Stage 7 scene is not available');
-    }
-
-    const group = new THREE.Group();
-    stage.sceneRoot.add(group);
-
-    let valid = 0;
-    for (const loop of loops) {
-      const loopId = Number(loop?.loop_id);
-      const normalY = Number(loop?.normal_y);
-      const points = Array.isArray(loop?.points) ? loop.points : [];
-      if (!Number.isFinite(loopId) || points.length < 3) continue;
-
-      const positions = [];
-      for (let i = 0; i < points.length; i++) {
-        const a = points[i];
-        const b = points[(i + 1) % points.length];
-        const p0 = this._applyStageCenterOffset(stage, a);
-        const p1 = this._applyStageCenterOffset(stage, b);
-        if (!p0 || !p1) continue;
-        positions.push(p0[0], p0[1], p0[2]);
-        positions.push(p1[0], p1[1], p1[2]);
-      }
-      if (positions.length < 6) continue;
-
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      const mat = new THREE.LineBasicMaterial({
-        color: this._meshRepair.colors.candidate,
-        transparent: true,
-        opacity: 0.9,
-      });
-      const line = new THREE.LineSegments(geom, mat);
-      line.userData.loopId = loopId;
-      group.add(line);
-      this._meshRepair.loopObjects.set(loopId, line);
-      this._meshRepair.loopMeta.set(loopId, {
-        normalY: Number.isFinite(normalY) ? normalY : null,
-      });
-      valid += 1;
-    }
-
-    if (valid === 0) {
-      stage.sceneRoot.remove(group);
-      this._clearMeshRepairOverlay();
-      throw new Error('No valid mesh-repair loops to render');
-    }
-
-    this._meshRepair.group = group;
-    this._meshRepair.active = true;
-    this._meshRepair.confirmed = false;
-    this._meshRepair.selected.clear();
-    this._applyMeshRepairVisibility();
-    this._updateMeshRepairColors();
-    this._setMeshRepairClickEnabled(true);
-    this.onMeshRepairSelectionChanged?.(this.getMeshRepairSelectedLoopIds());
-  }
-
   /**
    * Apply a colour theme (light/dark) to all initialized 3D scenes.
    * Updates background, grid, lights, shadow floor, and object materials
@@ -866,7 +437,7 @@ export class PreviewPanel {
 
     const empty = document.getElementById('stage-2-empty');
     const toolbar = document.getElementById('pi3x-toolbar');
-    if (toolbar) toolbar.style.display = 'none';
+    if (toolbar) toolbar.classList.add('hidden');
 
     const stage = this._stages[2];
     if (!stage) return;
@@ -883,7 +454,7 @@ export class PreviewPanel {
       if (pointCountEl) pointCountEl.textContent = '';
     } else {
       if (empty) empty.classList.add('hidden');
-      if (toolbar) toolbar.style.display = 'flex';
+      if (toolbar) toolbar.classList.remove('hidden');
       if (stage.currentObject?.geometry) {
         const count = stage.currentObject.geometry.attributes.position?.count || 0;
         const el = document.getElementById('pi3x-point-count');
@@ -953,7 +524,7 @@ export class PreviewPanel {
           toggle.onchange = () => cameraOverlay.setVisible(toggle.checked);
         }
         if (empty) empty.classList.add('hidden');
-        if (toolbar) toolbar.style.display = 'flex';
+        if (toolbar) toolbar.classList.remove('hidden');
       } else {
         cameraOverlay.remove();
       }
@@ -968,217 +539,12 @@ export class PreviewPanel {
     }
     if (!loaded && !cameraLoaded) {
       if (empty) empty.classList.remove('hidden');
-      if (toolbar) toolbar.style.display = 'none';
+      if (toolbar) toolbar.classList.add('hidden');
       stage.container?.classList.remove('visible');
     }
   }
 
-  _poseJsonToArray(data) {
-    const poses = Array.isArray(data?.poses) ? data.poses : [];
-    const frameIndices = Array.isArray(data?.frame_indices) ? data.frame_indices : [];
-    return poses.map((mat4x4, i) => {
-      // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
-      const flat = new Array(16);
-      for (let r = 0; r < 4; r++)
-        for (let c = 0; c < 4; c++)
-          flat[c * 4 + r] = mat4x4[r][c];
-      return { matrix: flat, frame_index: frameIndices[i] ?? i };
-    });
-  }
-
-  _applySceneFlipToLoadedStages(sceneFlipX) {
-    const rotationX = sceneFlipX ? Math.PI : 0;
-    for (const stageNum of [2, 4, 5, 6, 7, 8]) {
-      const stage = this._stages[stageNum];
-      if (stage?.sceneRoot) stage.sceneRoot.rotation.x = rotationX;
-    }
-  }
-
-  async _ensureSceneFlipForStage(stageNum, cacheToken = null) {
-    if (stageNum < 4 || stageNum > 8) return;
-    if (this._sceneFlipX == null) {
-      this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses(cacheToken);
-    }
-    const stage = this._stages[stageNum];
-    if (stage?.sceneRoot) {
-      stage.sceneRoot.rotation.x = this._sceneFlipX ? Math.PI : 0;
-    }
-  }
-
-  async _resolveSceneFlipFromCameraPoses(cacheToken = null) {
-    try {
-      const res = await fetch(this._buildPreviewFileUrl('camera_poses.json', cacheToken));
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      const rawPoseArray = this._poseJsonToArray(data);
-      const normalized = this._normalizePoseConvention(rawPoseArray);
-      return this._shouldApplySceneFlipX(normalized.poseArray, data.alignment);
-    } catch (e) {
-      console.warn('Failed to infer scene flip from camera poses:', e);
-      return false;
-    }
-  }
-
-  _forwardSignFromAlignment(alignment) {
-    if (!alignment || typeof alignment !== 'object') return null;
-    const axis = String(alignment.inferred_forward_axis || '').toLowerCase();
-    if (axis.includes('-z') || axis.includes('-col 2')) return -1;
-    if (axis.includes('+z') || axis.includes('+col 2') || axis.includes('col 2')) return 1;
-    return null;
-  }
-
-  _normalizePoseConvention(poseArray) {
-    if (!poseArray || poseArray.length === 0) {
-      return {
-        poseArray: [],
-        convention: 'c2w',
-        forwardSign: 1,
-        confidence: 0,
-        used: 0,
-      };
-    }
-
-    const c2wEval = this._evaluateForwardFromOrbitCenter(poseArray);
-    const w2cAsC2w = this._invertPoseArray(poseArray);
-    const w2cEval = this._evaluateForwardFromOrbitCenter(w2cAsC2w);
-
-    // Prefer c2w unless w2c interpretation is meaningfully more consistent.
-    const chooseW2C = (w2cEval.confidence - c2wEval.confidence) > 0.05;
-    if (chooseW2C) {
-      return {
-        poseArray: w2cAsC2w,
-        convention: 'w2c->c2w',
-        forwardSign: w2cEval.forwardSign,
-        confidence: w2cEval.confidence,
-        used: w2cEval.used,
-      };
-    }
-
-    return {
-      poseArray,
-      convention: 'c2w',
-      forwardSign: c2wEval.forwardSign,
-      confidence: c2wEval.confidence,
-      used: c2wEval.used,
-    };
-  }
-
-  _shouldApplySceneFlipX(poseArray, alignment) {
-    const meanDownY = this._meanCameraDownY(poseArray);
-    if (meanDownY != null && Math.abs(meanDownY) >= 0.15) {
-      // If camera-down is +Y, data is likely in OpenCV Y-down world => flip.
-      return meanDownY > 0;
-    }
-    if (alignment && alignment.applied === true) {
-      // Aligned outputs are expected to already use +Y as up.
-      return false;
-    }
-    return true;
-  }
-
-  _meanCameraDownY(poseArray) {
-    if (!poseArray || poseArray.length === 0) return null;
-    const mat = new THREE.Matrix4();
-    const basisX = new THREE.Vector3();
-    const basisY = new THREE.Vector3();
-    const basisZ = new THREE.Vector3();
-    let sumY = 0;
-    let used = 0;
-
-    for (const pose of poseArray) {
-      mat.fromArray(pose.matrix);
-      mat.extractBasis(basisX, basisY, basisZ);
-      basisY.normalize(); // camera +Y (down)
-      sumY += basisY.y;
-      used += 1;
-    }
-
-    if (used === 0) return null;
-    return sumY / used;
-  }
-
-  _invertPoseArray(poseArray) {
-    const mat = new THREE.Matrix4();
-    const inv = new THREE.Matrix4();
-    return poseArray.map((pose) => {
-      mat.fromArray(pose.matrix);
-      inv.copy(mat).invert();
-      return { matrix: inv.toArray(), frame_index: pose.frame_index };
-    });
-  }
-
-  _evaluateForwardFromOrbitCenter(poseArray) {
-    const center = this._computePoseCentroid(poseArray);
-    if (!center) {
-      return { forwardSign: 1, confidence: 0, used: 0 };
-    }
-    return this._scoreForwardTowardTarget(poseArray, center);
-  }
-
-  _computePoseCentroid(poseArray) {
-    if (!poseArray || poseArray.length === 0) return null;
-    const mat = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const center = new THREE.Vector3();
-    let used = 0;
-
-    for (const pose of poseArray) {
-      mat.fromArray(pose.matrix);
-      position.setFromMatrixPosition(mat);
-      center.add(position);
-      used += 1;
-    }
-
-    if (used === 0) return null;
-    return center.divideScalar(used);
-  }
-
-  _scoreForwardTowardTarget(poseArray, targetCenter) {
-    if (!poseArray || poseArray.length === 0) {
-      return { forwardSign: 1, confidence: 0, used: 0 };
-    }
-
-    const mat = new THREE.Matrix4();
-    const position = new THREE.Vector3();
-    const basisX = new THREE.Vector3();
-    const basisY = new THREE.Vector3();
-    const basisZ = new THREE.Vector3();
-    const toTarget = new THREE.Vector3();
-    const center = targetCenter ? targetCenter.clone() : new THREE.Vector3(0, 0, 0);
-
-    let score = 0;
-    let used = 0;
-    for (const pose of poseArray) {
-      mat.fromArray(pose.matrix);
-      position.setFromMatrixPosition(mat);
-      toTarget.copy(center).sub(position);
-      const len = toTarget.length();
-      if (len < 1e-6) continue;
-      toTarget.divideScalar(len);
-
-      mat.extractBasis(basisX, basisY, basisZ);
-      basisZ.normalize();
-      score += basisZ.dot(toTarget);
-      used += 1;
-    }
-
-    if (used === 0) {
-      return { forwardSign: 1, confidence: 0, used: 0 };
-    }
-
-    const avg = score / used;
-    return {
-      forwardSign: avg < 0 ? -1 : 1,
-      confidence: Math.abs(avg),
-      used,
-    };
-  }
-
-  _inferForwardSignFromTarget(poseArray, targetCenter) {
-    return this._scoreForwardTowardTarget(poseArray, targetCenter).forwardSign;
-  }
+  // ── Preview revision & URL helpers ────────────────────────────────
 
   _nextPreviewRevision() {
     this._previewAssetRevision += 1;
@@ -1191,16 +557,7 @@ export class PreviewPanel {
     return `${base}?rev=${encodeURIComponent(String(cacheToken))}`;
   }
 
-  _classicalPhaseDescriptor(step) {
-    const key = String(step || '').toLowerCase();
-    const map = {
-      preprocess: { file: 'object_mesh_input.ply', renderMode: 'points' },
-      main: { file: 'object_mesh_raw.ply', renderMode: 'mesh' },
-      postprocess: { file: 'object_mesh_postprocessed.ply', renderMode: 'mesh' },
-      downsample: { file: 'object_mesh.ply', renderMode: 'mesh' },
-    };
-    return map[key] || null;
-  }
+  // ── Stage result loading ──────────────────────────────────────────
 
   async loadClassicalPhase(step, opts = {}) {
     const descriptor = this._classicalPhaseDescriptor(step);
@@ -1272,167 +629,7 @@ export class PreviewPanel {
     return loaded;
   }
 
-  async showGroundPlane(stageNum) {
-    const stage = this._stages[stageNum];
-    if (!stage) return;
-
-    if (!this._groundPlane.data) {
-      try {
-        const resp = await fetch(`/api/preview/file/ground_plane.json?_t=${Date.now()}`);
-        if (!resp.ok) return;
-        this._groundPlane.data = await resp.json();
-      } catch { return; }
-    }
-
-    this._createGroundPlaneMesh(stageNum);
-  }
-
-  _createGroundPlaneMesh(stageNum) {
-    const stage = this._stages[stageNum];
-    const data = this._groundPlane.data;
-    if (!stage || !data || !THREE) return;
-
-    // Remove existing mesh for this stage if any
-    this._removeGroundPlane(stageNum);
-
-    const extent = data.extent || [1, 1, 1];
-    const planeSize = Math.max(...extent) * 1.5;
-
-    const geometry = new THREE.PlaneGeometry(planeSize, planeSize);
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x2ecc71,
-      transparent: true,
-      opacity: 0.25,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-
-    // Orient plane: rotate from default Z-up to match the ground normal
-    const normal = data.normal || [0, 0, 1];
-    const from = new THREE.Vector3(0, 0, 1);
-    const to = new THREE.Vector3(normal[0], normal[1], normal[2]).normalize();
-    const quat = new THREE.Quaternion().setFromUnitVectors(from, to);
-    mesh.quaternion.copy(quat);
-
-    // Position: project the model center (origin in display space) onto the
-    // ground plane so the plane always appears directly under the model,
-    // regardless of how far the ground centroid is from the object.
-    const offset = stage?.centerOffset;
-    if (offset) {
-      const nx = normal[0], ny = normal[1], nz = normal[2];
-      const d = Number(data.d) || 0;
-      // Plane in display coords: n·p + (n·offset + d) = 0
-      const dAdj = nx * offset.x + ny * offset.y + nz * offset.z + d;
-      // Closest point on plane to origin: -dAdj * n  (n is unit length)
-      mesh.position.set(-dAdj * nx, -dAdj * ny, -dAdj * nz);
-    } else {
-      // No centering offset — fall back to raw ground center
-      const c = data.center || [0, 0, 0];
-      mesh.position.set(c[0], c[1], c[2]);
-    }
-
-    mesh.renderOrder = -1;
-    mesh.visible = this._groundPlane.visible;
-    stage.sceneRoot.add(mesh);
-    this._groundPlane.meshByStage[stageNum] = mesh;
-  }
-
-  _removeGroundPlane(stageNum) {
-    const mesh = this._groundPlane.meshByStage[stageNum];
-    if (!mesh) return;
-    mesh.parent?.remove(mesh);
-    mesh.geometry?.dispose();
-    mesh.material?.dispose();
-    delete this._groundPlane.meshByStage[stageNum];
-  }
-
-  toggleGroundPlane(visible) {
-    this._groundPlane.visible = visible;
-    for (const mesh of Object.values(this._groundPlane.meshByStage)) {
-      if (mesh) mesh.visible = visible;
-    }
-  }
-
-  _clearSectionLoop() {
-    const grp = this._sectionLoop.group;
-    if (!grp) return;
-    grp.traverse((node) => {
-      if (node?.geometry?.dispose) node.geometry.dispose();
-      if (node?.material?.dispose) node.material.dispose();
-    });
-    grp.parent?.remove(grp);
-    this._sectionLoop.group = null;
-  }
-
-  async _showSectionLoop() {
-    this._clearSectionLoop();
-    const stage = this._stages[7];
-    if (!stage) return;
-
-    let data;
-    try {
-      const resp = await fetch(
-        `/api/preview/file/contact_hole_repair/section_loop.json?_t=${Date.now()}`
-      );
-      if (!resp.ok) return;
-      data = await resp.json();
-    } catch { return; }
-
-    const samples = data.samples;
-    if (!samples || !samples.length) return;
-
-    const selectedShift = data.selected_shift;
-    const offset = stage.centerOffset;
-    const group = new THREE.Group();
-
-    for (const sample of samples) {
-      const loops = sample.loops;
-      if (!loops || !loops.length) continue;
-
-      const isSelected = Math.abs(sample.shift - selectedShift) < 1e-6;
-      // Below selected = removed region (cyan); at selected = yellow;
-      // above selected = kept region (dim green)
-      let color, opacity;
-      if (isSelected) {
-        color = 0xffee00; opacity = 1.0;
-      } else if (sample.shift < selectedShift) {
-        color = 0x00ddff; opacity = 0.6;
-      } else {
-        color = 0x44cc44; opacity = 0.3;
-      }
-
-      for (let li = 0; li < loops.length; li++) {
-        const pts = loops[li].points;
-        if (!pts || pts.length < 2) continue;
-
-        const positions = new Float32Array(pts.length * 3);
-        for (let i = 0; i < pts.length; i++) {
-          positions[i * 3]     = pts[i][0] - (offset?.x ?? 0);
-          positions[i * 3 + 1] = pts[i][1] - (offset?.y ?? 0);
-          positions[i * 3 + 2] = pts[i][2] - (offset?.z ?? 0);
-        }
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-        // Secondary loops within same sample are dimmer
-        const loopOpacity = li === 0 ? opacity : opacity * 0.4;
-        const mat = new THREE.LineBasicMaterial({
-          color,
-          linewidth: 2,
-          depthTest: false,
-          transparent: true,
-          opacity: loopOpacity,
-        });
-        const line = new THREE.LineLoop(geo, mat);
-        line.renderOrder = 999;
-        group.add(line);
-      }
-    }
-
-    stage.sceneRoot.add(group);
-    this._sectionLoop.group = group;
-  }
+  // ── Asset loaders ─────────────────────────────────────────────────
 
   async _loadPreviewAssetForStage(stageNum, file, opts = {}) {
     const ext = String(opts.ext || file.split('.').pop() || '').toLowerCase();
@@ -1637,55 +834,6 @@ export class PreviewPanel {
   }
 
   /**
-   * Configure optional shadow-focused lighting profile for mesh previews.
-   */
-  _setMeshShadowProfile(stage, box, enabled) {
-    if (!stage) return;
-    const p = SCENE_THEMES[this._currentTheme];
-    if (stage.ambientLight) {
-      stage.ambientLight.intensity = enabled ? p.shadowAmbientInt : p.ambientInt;
-    }
-    if (stage.keyLight) {
-      stage.keyLight.intensity = enabled ? p.shadowDirInt : p.dirInt;
-    }
-
-    const floor = stage.shadowFloor;
-    if (!floor) return;
-    if (!enabled || !box) {
-      floor.visible = false;
-      return;
-    }
-
-    const size = box.getSize(new THREE.Vector3());
-    const extent = Math.max(1.2, Math.max(size.x, size.y, size.z) * 1.6);
-    floor.scale.set(extent, extent, 1);
-    floor.position.y = box.min.y - Math.max(size.y * 0.02, 0.002);
-    floor.visible = true;
-
-    if (stage.keyLight?.shadow?.camera) {
-      const shadowExtent = Math.max(2.0, extent);
-      stage.keyLight.shadow.camera.left = -shadowExtent;
-      stage.keyLight.shadow.camera.right = shadowExtent;
-      stage.keyLight.shadow.camera.top = shadowExtent;
-      stage.keyLight.shadow.camera.bottom = -shadowExtent;
-      stage.keyLight.shadow.camera.far = Math.max(20, shadowExtent * 4);
-      stage.keyLight.shadow.needsUpdate = true;
-    }
-  }
-
-  /**
-   * Fit camera to bounding box for a specific stage.
-   */
-  _fitCamera(stage, box) {
-    const size = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z, 1e-3);
-    const dist = maxDim * 1.5;
-    stage.camera.position.set(dist * 0.5, dist * 0.5, dist);
-    stage.controls.target.set(0, 0, 0);
-    stage.controls.update();
-  }
-
-  /**
    * Load extracted frames into Stage 1 gallery (representative 10 frames).
    * @param {number} frameCount - total extracted frame count from backend
    */
@@ -1708,7 +856,7 @@ export class PreviewPanel {
       const textEl = document.getElementById('frame-count-text');
       if (headerEl && textEl) {
         textEl.textContent = `Extracted ${totalCount} frames`;
-        headerEl.style.display = '';
+        headerEl.classList.remove('hidden');
       }
 
       // Select up to 10 representative frames (evenly spaced)
@@ -1739,3 +887,58 @@ export class PreviewPanel {
     }
   }
 }
+
+// ── Mixin: pose utilities (from preview/pose-utils.js) ────────────
+Object.assign(PreviewPanel.prototype, {
+  _poseJsonToArray: PoseUtils._poseJsonToArray,
+  _applySceneFlipToLoadedStages: PoseUtils._applySceneFlipToLoadedStages,
+  _ensureSceneFlipForStage: PoseUtils._ensureSceneFlipForStage,
+  _resolveSceneFlipFromCameraPoses: PoseUtils._resolveSceneFlipFromCameraPoses,
+  _forwardSignFromAlignment: PoseUtils._forwardSignFromAlignment,
+  _normalizePoseConvention: PoseUtils._normalizePoseConvention,
+  _shouldApplySceneFlipX: PoseUtils._shouldApplySceneFlipX,
+  _meanCameraDownY: PoseUtils._meanCameraDownY,
+  _invertPoseArray: PoseUtils._invertPoseArray,
+  _evaluateForwardFromOrbitCenter: PoseUtils._evaluateForwardFromOrbitCenter,
+  _computePoseCentroid: PoseUtils._computePoseCentroid,
+  _scoreForwardTowardTarget: PoseUtils._scoreForwardTowardTarget,
+  _inferForwardSignFromTarget: PoseUtils._inferForwardSignFromTarget,
+});
+
+// ── Mixin: mesh repair overlay (from preview/mesh-repair-overlay.js)
+Object.assign(PreviewPanel.prototype, {
+  _setMeshRepairClickEnabled: MeshRepairOverlay._setMeshRepairClickEnabled,
+  _handleMeshRepairClick: MeshRepairOverlay._handleMeshRepairClick,
+  _isMeshRepairLoopVisible: MeshRepairOverlay._isMeshRepairLoopVisible,
+  _applyMeshRepairVisibility: MeshRepairOverlay._applyMeshRepairVisibility,
+  _updateMeshRepairColors: MeshRepairOverlay._updateMeshRepairColors,
+  _clearMeshRepairOverlay: MeshRepairOverlay._clearMeshRepairOverlay,
+  clearMeshRepairSelection: MeshRepairOverlay.clearMeshRepairSelection,
+  setMeshRepairConfirmed: MeshRepairOverlay.setMeshRepairConfirmed,
+  getMeshRepairSelectedLoopIds: MeshRepairOverlay.getMeshRepairSelectedLoopIds,
+  getMeshRepairVisibleLoopCount: MeshRepairOverlay.getMeshRepairVisibleLoopCount,
+  getMeshRepairTotalLoopCount: MeshRepairOverlay.getMeshRepairTotalLoopCount,
+  getMeshRepairThreshold: MeshRepairOverlay.getMeshRepairThreshold,
+  setMeshRepairThreshold: MeshRepairOverlay.setMeshRepairThreshold,
+  beginMeshRepairSelection: MeshRepairOverlay.beginMeshRepairSelection,
+});
+
+// ── Mixin: scene helpers (from preview/scene-helpers.js) ──────────
+Object.assign(PreviewPanel.prototype, {
+  _disposeObject: SceneHelpers._disposeObject,
+  _cleanupCurrentObject: SceneHelpers._cleanupCurrentObject,
+  _fitCamera: SceneHelpers._fitCamera,
+  _setMeshShadowProfile: SceneHelpers._setMeshShadowProfile,
+  _classicalPhaseDescriptor: SceneHelpers._classicalPhaseDescriptor,
+  _applyStageCenterOffset: SceneHelpers._applyStageCenterOffset,
+  showCropBbox: SceneHelpers.showCropBbox,
+  _createCropBboxHelper: SceneHelpers._createCropBboxHelper,
+  updateCropBbox: SceneHelpers.updateCropBbox,
+  clearCropBbox: SceneHelpers.clearCropBbox,
+  showGroundPlane: SceneHelpers.showGroundPlane,
+  _createGroundPlaneMesh: SceneHelpers._createGroundPlaneMesh,
+  _removeGroundPlane: SceneHelpers._removeGroundPlane,
+  toggleGroundPlane: SceneHelpers.toggleGroundPlane,
+  _clearSectionLoop: SceneHelpers._clearSectionLoop,
+  _showSectionLoop: SceneHelpers._showSectionLoop,
+});

@@ -42,11 +42,9 @@ RUN pip install --no-cache-dir \
     "pillow>=10.0.0" \
     "tqdm>=4.65.0" \
     tyro optax flax \
-    hydra-core iopath
-
-# --- Layer 3b: Extra deps needed by DiffCD (wandb, scikit-image) ---
-# Must come after numpy is installed (scikit-image build needs it)
-RUN pip install --no-cache-dir wandb scikit-image
+    hydra-core iopath \
+    wandb \
+    && pip install --no-cache-dir scikit-image
 
 # --- Layer 3c: CGAL Python bindings (seagullmesh for alpha wrapping) ---
 # Ubuntu 22.04 ships CGAL 5.4, but alpha_wrap_3 requires CGAL >= 5.5.
@@ -65,7 +63,7 @@ RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
-# --- Layer 5: Pi3 (sys.path usage, pinned for API compat with stage offloading) ---
+# --- Layer 5: Pi3 (pinned for API compat with stage offloading) ---
 ARG PI3_COMMIT=08d7288aaf4b0c08c8498bea7bafedc4672bb006
 RUN git clone https://github.com/yyfz/Pi3.git /opt/pi3 \
     && cd /opt/pi3 \
@@ -95,7 +93,7 @@ COPY tests/ /app/tests/
 RUN pip install --no-cache-dir pytest pytest-asyncio
 
 # Add repos to Python path
-ENV PYTHONPATH="/app/scripts:/opt/pi3:/opt/sam2:${PYTHONPATH}"
+ENV PYTHONPATH="/app:/opt/pi3:/opt/sam2:${PYTHONPATH}"
 
 EXPOSE 7860
 

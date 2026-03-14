@@ -67,7 +67,7 @@ describe('PreviewPanel', () => {
       document.body.innerHTML = `
         <div id="gallery-grid"></div>
         <div id="stage-2-empty" class="hidden"></div>
-        <div id="pi3x-toolbar" style="display:none"></div>
+        <div id="pi3x-toolbar" class="hidden"></div>
         <div id="pi3x-point-count"></div>
         <div id="pi3x-camera-count"></div>
       `;
@@ -135,7 +135,7 @@ describe('PreviewPanel', () => {
       document.body.innerHTML = `
         <div id="gallery-grid"></div>
         <div id="stage-2-empty" class="hidden"></div>
-        <div id="pi3x-toolbar" style="display:none"></div>
+        <div id="pi3x-toolbar" class="hidden"></div>
         <div id="pi3x-point-count"></div>
         <div id="pi3x-camera-count"></div>
       `;

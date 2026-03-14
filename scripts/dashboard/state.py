@@ -54,8 +54,8 @@ from scripts.config_defaults import (
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
-    _MESHWRAP_METHOD,
-    _OUTPUT_DIR_DEFAULT,
+    MESHWRAP_METHOD,
+    OUTPUT_DIR_DEFAULT,
 )
 
 
@@ -131,7 +131,7 @@ class PipelineConfig:
     """All pipeline parameters — defaults match docker-compose env vars."""
 
     video_path: str = ""
-    output_dir: str = _OUTPUT_DIR_DEFAULT
+    output_dir: str = OUTPUT_DIR_DEFAULT
     object_name: str = ""
     frame_interval: int = EXTRACT_FRAME_INTERVAL
     max_frames: int = EXTRACT_MAX_FRAMES
@@ -154,7 +154,7 @@ class PipelineConfig:
     diffcd_batch_size: int = DIFFCD_BATCH_SIZE
     diffcd_n_batches: int = DIFFCD_N_BATCHES
     diffcd_resolution: int = DIFFCD_RESOLUTION
-    meshwrap_method: str = _MESHWRAP_METHOD
+    meshwrap_method: str = MESHWRAP_METHOD
     meshwrap_poisson_depth: int = MESHWRAP_POISSON_DEPTH
     meshwrap_poisson_scale: float = MESHWRAP_POISSON_SCALE
     meshwrap_density_trim_q: float = MESHWRAP_DENSITY_TRIM_Q

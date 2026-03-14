@@ -55,7 +55,7 @@ export class MeshRepairController {
 
   setToolbarVisible(visible) {
     if (!this._toolbar) return;
-    this._toolbar.style.display = visible ? 'flex' : 'none';
+    this._toolbar.classList.toggle('hidden', !visible);
   }
 
   setEnabled(enabled) {
@@ -135,7 +135,7 @@ export class MeshRepairController {
   }
 
   updateStatus(selectedIds = null) {
-    if (!this._toolbar || this._toolbar.style.display === 'none') return;
+    if (!this._toolbar || this._toolbar.classList.contains('hidden')) return;
     const selected = Array.isArray(selectedIds)
       ? selectedIds.length
       : this._preview.getMeshRepairSelectedLoopIds().length;

@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "coffee01"
+
 
 @pytest.fixture
 def fixture_dir() -> Path:
     """Return the path to the shared test fixture directory."""
-    return Path(__file__).parent / "fixtures" / "coffee01"
+    return FIXTURE_DIR
 
 
 @pytest.fixture

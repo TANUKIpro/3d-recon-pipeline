@@ -13,7 +13,7 @@ from plyfile import PlyData, PlyElement
 from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
 
-from config_defaults import (
+from scripts.config_defaults import (
     DENOISE_ALGORITHM_STEPS as ALGORITHM_STEPS,
     DENOISE_PRESET_DEFAULTS as PRESET_DEFAULTS,
 )

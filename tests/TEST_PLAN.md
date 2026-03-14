@@ -481,19 +481,19 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml build test
 
 | # | テスト項目 | 状態 |
 |---|-----------|------|
-| 7.1.1 | `_sanitize_object_name`: 通常名そのまま | [済] |
-| 7.1.2 | `_sanitize_object_name`: スペース → ハイフン | [済] |
-| 7.1.3 | `_sanitize_object_name`: スラッシュ → ハイフン | [済] |
-| 7.1.4 | `_sanitize_object_name`: 特殊文字置換 | [済] |
-| 7.1.5 | `_sanitize_object_name`: 連続ハイフン圧縮 | [済] |
-| 7.1.6 | `_sanitize_object_name`: 空文字列 → ValueError | [済] |
-| 7.1.7 | `_sanitize_object_name`: 80 文字で切り捨て | [済] |
-| 7.1.8 | `_sanitize_object_name`: 先頭末尾のドット/ハイフン除去 | [済] |
-| 7.1.9 | `_validate_object_name`: 正常名パス | [済] |
-| 7.1.10 | `_validate_object_name`: 空/"."/".."/ "/" / "\\" → ValueError | [済] |
-| 7.1.11 | `_suggest_object_name`: ビデオパスから stem 抽出 | [済] |
-| 7.1.12 | `_suggest_object_name`: 空パス → "object" | [済] |
-| 7.1.13 | `_suggest_object_name`: 特殊文字がサニタイズされる | [済] |
+| 7.1.1 | `sanitize_object_name`: 通常名そのまま | [済] |
+| 7.1.2 | `sanitize_object_name`: スペース → ハイフン | [済] |
+| 7.1.3 | `sanitize_object_name`: スラッシュ → ハイフン | [済] |
+| 7.1.4 | `sanitize_object_name`: 特殊文字置換 | [済] |
+| 7.1.5 | `sanitize_object_name`: 連続ハイフン圧縮 | [済] |
+| 7.1.6 | `sanitize_object_name`: 空文字列 → ValueError | [済] |
+| 7.1.7 | `sanitize_object_name`: 80 文字で切り捨て | [済] |
+| 7.1.8 | `sanitize_object_name`: 先頭末尾のドット/ハイフン除去 | [済] |
+| 7.1.9 | `validate_object_name`: 正常名パス | [済] |
+| 7.1.10 | `validate_object_name`: 空/"."/".."/ "/" / "\\" → ValueError | [済] |
+| 7.1.11 | `suggest_object_name`: ビデオパスから stem 抽出 | [済] |
+| 7.1.12 | `suggest_object_name`: 空パス → "object" | [済] |
+| 7.1.13 | `suggest_object_name`: 特殊文字がサニタイズされる | [済] |
 
 ### 7.2 出力管理
 
@@ -501,12 +501,12 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml build test
 |---|-----------|------|
 | 7.2.1 | `STAGE_RESET_PATHS`: Stage 5 リセットに preview mesh が含まれる | [済] |
 | 7.2.2 | `RESUME_PREREQUISITES`: Stage 6/7 に mesh 出力が必要 | [済] |
-| 7.2.3 | `_reset_outputs_from_stage`: 指定ステージ以降のファイル/ディレクトリ削除 | [済] |
-| 7.2.4 | `_infer_resume_stage`: 最初の未完了ステージを返す | [済] |
-| 7.2.5 | `_validate_resume_prerequisites`: 必要ファイルの存在チェック | [済] |
-| 7.2.6 | `_write_object_meta`: JSON 書き込み・created_at 保持 | [済] |
-| 7.2.7 | `_summarize_object`: メタデータ辞書構築 | [済] |
-| 7.2.8 | `_list_objects`: updated_at 降順ソート | [済] |
+| 7.2.3 | `reset_outputs_from_stage`: 指定ステージ以降のファイル/ディレクトリ削除 | [済] |
+| 7.2.4 | `infer_resume_stage`: 最初の未完了ステージを返す | [済] |
+| 7.2.5 | `validate_resume_prerequisites`: 必要ファイルの存在チェック | [済] |
+| 7.2.6 | `write_object_meta`: JSON 書き込み・created_at 保持 | [済] |
+| 7.2.7 | `summarize_object`: メタデータ辞書構築 | [済] |
+| 7.2.8 | `list_objects`: updated_at 降順ソート | [済] |
 
 ### 7.3 safe_json_load
 

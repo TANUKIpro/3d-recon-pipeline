@@ -304,13 +304,13 @@ export class SAM2Canvas {
   _setModeToggleVisible(visible) {
     const container = document.getElementById('sam2-mode-toggle');
     if (container) {
-      container.style.display = visible ? '' : 'none';
+      container.classList.toggle('hidden', !visible);
     }
   }
 
   _setSkipGroundVisible(visible) {
     if (this._skipGroundBtn) {
-      this._skipGroundBtn.style.display = visible ? '' : 'none';
+      this._skipGroundBtn.classList.toggle('hidden', !visible);
       this._skipGroundBtn.disabled = false;
     }
   }

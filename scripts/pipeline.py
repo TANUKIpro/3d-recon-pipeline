@@ -16,15 +16,11 @@ Pipeline stages:
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
-# Add scripts directory to path for local imports
-sys.path.insert(0, str(Path(__file__).parent))
-
-from config_defaults import _VRAM_GATE_MIN_FREE_MB
-from vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
+from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB
+from scripts.vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
 
 
 def main():
@@ -79,7 +75,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 1/8: Frame Extraction")
         print("=" * 60)
-        from stage_extract_frames import extract_frames
+        from scripts.stage_extract_frames import extract_frames
 
         frames_dir = str(extract_frames(args.video_path, output_dir))
         print(f"  → {frames_dir}")
@@ -95,7 +91,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 2/8: Pi3X 3D Reconstruction")
         print("=" * 60)
-        from stage_pi3x_reconstruct import run_pi3x_inference
+        from scripts.stage_pi3x_reconstruct import run_pi3x_inference
 
         _ply_full, poses_path, cache_path = run_pi3x_inference(frames_dir, output_dir)
         cleanup_pytorch_vram()
@@ -114,14 +110,14 @@ Examples:
         print("Stage 3/8: SAM2 Interactive Segmentation")
         print("=" * 60)
         print(">>> Open http://localhost:7860 to select the object <<<")
-        from stage_sam2_ui import run_sam2_interactive
+        from scripts.stage_sam2_ui import run_sam2_interactive
 
         mask_dir = str(run_sam2_interactive(frames_dir, output_dir))
         cleanup_pytorch_vram()
         print(f"  → {mask_dir}")
 
         # Apply SAM2 masks to Pi3X cache
-        from stage_pi3x_reconstruct import apply_sam2_masks
+        from scripts.stage_pi3x_reconstruct import apply_sam2_masks
         ply_path = apply_sam2_masks(str(cache_path), mask_dir, output_dir)
         print(f"  → PLY: {ply_path}")
     else:
@@ -134,7 +130,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 4/8: Point Cloud Denoising")
         print("=" * 60)
-        from stage_denoise import denoise
+        from scripts.stage_denoise import denoise
 
         denoised_ply = denoise(str(ply_path), output_dir)
         print(f"  → {denoised_ply}")
@@ -148,12 +144,12 @@ Examples:
         print("\n" + "=" * 60)
         if mesh_method == "diffcd":
             print("Stage 5/8: Learning Mesh Reconstruction (DiffCD)")
-            from stage_diffcd_mesh import run_diffcd
+            from scripts.stage_diffcd_mesh import run_diffcd
 
             mesh_ply = run_diffcd(str(denoised_ply), output_dir)
         else:
             print("Stage 5/8: Classical Mesh Reconstruction (Normals + Poisson)")
-            from stage_classical_mesh import run_classical_mesh
+            from scripts.stage_classical_mesh import run_classical_mesh
 
             mesh_ply = run_classical_mesh(str(denoised_ply), output_dir)
         print("=" * 60)
@@ -168,7 +164,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 6/8: Mesh Wrap")
         print("=" * 60)
-        from stage_mesh_wrap import run_mesh_wrap
+        from scripts.stage_mesh_wrap import run_mesh_wrap
 
         wrapped_mesh_ply = run_mesh_wrap(str(mesh_ply), output_dir)
         print(f"  → Wrapped: {wrapped_mesh_ply}")
@@ -184,7 +180,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 7/8: Mesh Repair")
         print("=" * 60)
-        from stage_contact_hole_repair import run_contact_hole_repair
+        from scripts.stage_contact_hole_repair import run_contact_hole_repair
 
         if not repair_selection_json:
             raise ValueError(
@@ -221,7 +217,7 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 8/8: Texture Baking")
         print("=" * 60)
-        from stage_texture_bake import bake_texture
+        from scripts.stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
             str(repaired_mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,

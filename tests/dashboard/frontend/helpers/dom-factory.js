@@ -84,7 +84,7 @@ export function buildSettingsPanelDOM() {
 
 export function buildSAM2VerificationDOM() {
   document.body.innerHTML = `
-    <div id="sam2-verification" style="display:none">
+    <div id="sam2-verification" class="hidden">
       <div id="sam2-verification-strip"></div>
       <button id="sam2-approve">Approve & Continue</button>
       <button id="sam2-redo">Redo</button>
@@ -100,6 +100,18 @@ export function buildSAM2CanvasDOM() {
     <button id="sam2-clear" disabled>Clear</button>
     <button id="sam2-confirm" disabled>Confirm & Propagate</button>
     <span id="sam2-click-info">Positive: 0  Negative: 0</span>
+  `;
+}
+
+export function buildMeshRepairDOM() {
+  document.body.innerHTML = `
+    <div id="mesh-repair-toolbar" class="hidden">
+      <span id="mesh-repair-status"></span>
+      <input type="range" id="mesh-repair-threshold" min="-1" max="0" step="0.01" value="-0.25">
+      <span id="mesh-repair-threshold-value"></span>
+      <button id="mesh-repair-clear">Clear</button>
+      <button id="mesh-repair-apply">Apply</button>
+    </div>
   `;
 }
 
@@ -241,7 +253,7 @@ export function buildRouterDOM() {
 export function buildOverviewDOM() {
   document.body.innerHTML = `
     <div id="overview-grid"></div>
-    <div id="overview-empty" style="display:none"></div>
+    <div id="overview-empty" class="hidden"></div>
     <button id="overview-new-btn">New Pipeline</button>
   `;
 }
@@ -429,7 +441,7 @@ export function buildAppDOM() {
     <span id="sam2-click-info">Positive: 0  Negative: 0</span>
 
     <!-- SAM2 verification -->
-    <div id="sam2-verification" style="display:none">
+    <div id="sam2-verification" class="hidden">
       <div id="sam2-verification-strip"></div>
       <button id="sam2-approve">Approve & Continue</button>
       <button id="sam2-redo">Redo</button>
@@ -454,7 +466,7 @@ export function buildAppDOM() {
     <div id="gallery-grid"></div>
     <div id="frame-count-header"></div>
     <div id="frame-count-text"></div>
-    <div id="pi3x-toolbar" style="display:none"></div>
+    <div id="pi3x-toolbar" class="hidden"></div>
     <span id="pi3x-point-count"></span>
     <span id="pi3x-camera-count"></span>
     <button id="pi3x-cameras-toggle"></button>
@@ -463,7 +475,7 @@ export function buildAppDOM() {
     ${confirmBars}
 
     <!-- Mesh repair toolbar -->
-    <div id="mesh-repair-toolbar" style="display:none">
+    <div id="mesh-repair-toolbar" class="hidden">
       <span id="mesh-repair-status"></span>
       <input type="range" id="mesh-repair-threshold" min="-1" max="0" step="0.01" value="-0.25">
       <span id="mesh-repair-threshold-value">-0.25</span>
@@ -472,7 +484,7 @@ export function buildAppDOM() {
     </div>
 
     <!-- Mesh post toolbar -->
-    <div id="mesh-post-toolbar" style="display:none">
+    <div id="mesh-post-toolbar" class="hidden">
       <select id="mesh-post-method"><option value="taubin" selected>Taubin</option></select>
       <input type="number" id="mesh-post-iterations" value="10">
       <input type="number" id="mesh-post-lambda" value="0.5">

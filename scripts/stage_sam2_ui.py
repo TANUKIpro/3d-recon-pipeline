@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import torch
 
-from config_defaults import (
+from scripts.config_defaults import (
     SAM2_MODEL_CONFIGS,
     _SAM2_CIRCLE_OUTLINE_WIDTH,
     _SAM2_CIRCLE_RADIUS,
@@ -21,7 +21,7 @@ from config_defaults import (
     _SAM2_MASK_COLOR,
     _SAM2_MASK_OVERLAY_ALPHA,
 )
-from vram_utils import log_vram
+from scripts.vram_utils import log_vram
 
 _NORM_UPPER = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
 

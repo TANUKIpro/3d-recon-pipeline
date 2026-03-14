@@ -11,11 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import WebSocketDisconnect
 
+from scripts.dashboard.dependencies import get_state
 from scripts.dashboard.object_store import (
-    _safe_json_load,
-    _sanitize_object_name,
-    _suggest_object_name,
-    _validate_object_name,
+    safe_json_load,
+    sanitize_object_name,
+    suggest_object_name,
+    validate_object_name,
 )
 from scripts.dashboard.app import (
     mesh_postprocess,
@@ -65,21 +66,21 @@ def _json_payload(response) -> dict:
     return json.loads(response.body.decode("utf-8"))
 
 
-# ── _sanitize_object_name ─────────────────────────────────────────
+# ── sanitize_object_name ─────────────────────────────────────────
 
 
 class TestSanitizeObjectName(unittest.TestCase):
     def test_normal_name_unchanged(self) -> None:
-        self.assertEqual(_sanitize_object_name("coffee-mug"), "coffee-mug")
+        self.assertEqual(sanitize_object_name("coffee-mug"), "coffee-mug")
 
     def test_spaces_become_hyphens(self) -> None:
-        self.assertEqual(_sanitize_object_name("my cool object"), "my-cool-object")
+        self.assertEqual(sanitize_object_name("my cool object"), "my-cool-object")
 
     def test_slashes_become_hyphens(self) -> None:
-        self.assertEqual(_sanitize_object_name("a/b/c"), "a-b-c")
+        self.assertEqual(sanitize_object_name("a/b/c"), "a-b-c")
 
     def test_special_chars_replaced(self) -> None:
-        result = _sanitize_object_name("hello@world#2024!")
+        result = sanitize_object_name("hello@world#2024!")
         self.assertNotIn("@", result)
         self.assertNotIn("#", result)
         self.assertNotIn("!", result)
@@ -89,78 +90,78 @@ class TestSanitizeObjectName(unittest.TestCase):
         self.assertIn("2024", result)
 
     def test_consecutive_hyphens_collapsed(self) -> None:
-        result = _sanitize_object_name("a---b----c")
+        result = sanitize_object_name("a---b----c")
         self.assertNotIn("--", result)
         self.assertEqual(result, "a-b-c")
 
     def test_empty_string_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            _sanitize_object_name("")
+            sanitize_object_name("")
 
     def test_whitespace_only_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
-            _sanitize_object_name("   ")
+            sanitize_object_name("   ")
 
     def test_truncation_at_80_chars(self) -> None:
         long_name = "a" * 120
-        result = _sanitize_object_name(long_name)
+        result = sanitize_object_name(long_name)
         self.assertEqual(len(result), 80)
 
     def test_leading_trailing_dots_stripped(self) -> None:
-        result = _sanitize_object_name("..hello..")
+        result = sanitize_object_name("..hello..")
         self.assertFalse(result.startswith("."))
         self.assertFalse(result.endswith("."))
         self.assertIn("hello", result)
 
 
-# ── _validate_object_name ─────────────────────────────────────────
+# ── validate_object_name ─────────────────────────────────────────
 
 
 class TestValidateObjectName(unittest.TestCase):
     def test_normal_name_passes(self) -> None:
-        self.assertEqual(_validate_object_name("coffee-mug"), "coffee-mug")
+        self.assertEqual(validate_object_name("coffee-mug"), "coffee-mug")
 
     def test_empty_string_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("")
+            validate_object_name("")
 
     def test_dot_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name(".")
+            validate_object_name(".")
 
     def test_dotdot_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("..")
+            validate_object_name("..")
 
     def test_slash_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("a/b")
+            validate_object_name("a/b")
 
     def test_backslash_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _validate_object_name("a\\b")
+            validate_object_name("a\\b")
 
 
-# ── _suggest_object_name ──────────────────────────────────────────
+# ── suggest_object_name ──────────────────────────────────────────
 
 
 class TestSuggestObjectName(unittest.TestCase):
     def test_stem_extracted_from_video_path(self) -> None:
-        result = _suggest_object_name("/data/input/coffee01.mp4")
+        result = suggest_object_name("/data/input/coffee01.mp4")
         self.assertEqual(result, "coffee01")
 
     def test_empty_path_returns_object(self) -> None:
-        result = _suggest_object_name("")
+        result = suggest_object_name("")
         self.assertEqual(result, "object")
 
     def test_special_chars_sanitized(self) -> None:
-        result = _suggest_object_name("/data/input/hello world!.mp4")
+        result = suggest_object_name("/data/input/hello world!.mp4")
         self.assertNotIn(" ", result)
         self.assertNotIn("!", result)
         self.assertTrue(len(result) > 0)
 
 
-# ── _safe_json_load ───────────────────────────────────────────────
+# ── safe_json_load ───────────────────────────────────────────────
 
 
 class TestSafeJsonLoad(unittest.TestCase):
@@ -168,25 +169,25 @@ class TestSafeJsonLoad(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "data.json"
             p.write_text('{"key": "value"}', encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {"key": "value"})
 
     def test_nonexistent_returns_empty_dict(self) -> None:
-        result = _safe_json_load(Path("/nonexistent/path/data.json"))
+        result = safe_json_load(Path("/nonexistent/path/data.json"))
         self.assertEqual(result, {})
 
     def test_broken_json_returns_empty_dict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "bad.json"
             p.write_text("{not valid json", encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {})
 
     def test_non_dict_returns_empty_dict(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "list.json"
             p.write_text("[1, 2, 3]", encoding="utf-8")
-            result = _safe_json_load(p)
+            result = safe_json_load(p)
             self.assertEqual(result, {})
 
 
@@ -242,7 +243,7 @@ class TestPipelineCancelEndpoint(unittest.IsolatedAsyncioTestCase):
         payload = _json_payload(response)
         self.assertIn("error", payload)
 
-    @patch("scripts.dashboard.app.broadcast", new_callable=AsyncMock)
+    @patch("scripts.dashboard.routes.pipeline.broadcast", new_callable=AsyncMock)
     @patch("asyncio.to_thread", new_callable=AsyncMock, return_value=0)
     async def test_running_sets_cancel_flags(self, mock_to_thread, mock_broadcast) -> None:
         session.running = True
@@ -513,16 +514,15 @@ class TestPreviewFileEndpoint(unittest.IsolatedAsyncioTestCase):
 class TestPreviewObjectFilePathEscape(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch(
-            "scripts.dashboard.app.OUTPUT_DIR", self._tmp.name
-        )
-        self._patcher.start()
+        state = get_state()
+        self._orig_output_dir = state.output_dir
+        state.output_dir = self._tmp.name
         # Create the object directory so the endpoint doesn't 404 early
         obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
         obj_dir.mkdir(parents=True)
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        get_state().output_dir = self._orig_output_dir
         self._tmp.cleanup()
 
     async def test_path_escape_returns_403(self) -> None:
@@ -544,17 +544,16 @@ class TestPreviewObjectFilePathEscape(unittest.IsolatedAsyncioTestCase):
 class TestPipelineVideoInfoPathSecurity(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch(
-            "scripts.dashboard.app.INPUT_DIR", self._tmp.name
-        )
-        self._patcher.start()
+        state = get_state()
+        self._orig_input_dir = state.input_dir
+        state.input_dir = self._tmp.name
         # Create a file *outside* INPUT_DIR to confirm 403, not 404
         self._outside_tmp = tempfile.TemporaryDirectory()
         self._outside_file = Path(self._outside_tmp.name) / "evil.mp4"
         self._outside_file.write_bytes(b"\x00")
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        get_state().input_dir = self._orig_input_dir
         self._tmp.cleanup()
         self._outside_tmp.cleanup()
 
@@ -596,11 +595,12 @@ class _FakeWS:
 class TestPipelineVideosEndpoint(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch("scripts.dashboard.app.INPUT_DIR", self._tmp.name)
-        self._patcher.start()
+        state = get_state()
+        self._orig_input_dir = state.input_dir
+        state.input_dir = self._tmp.name
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        get_state().input_dir = self._orig_input_dir
         self._tmp.cleanup()
 
     async def test_returns_video_list_format(self) -> None:
@@ -637,17 +637,22 @@ class TestPipelineVideosEndpoint(unittest.IsolatedAsyncioTestCase):
 
 
 class TestPipelineObjectsEndpoint(unittest.IsolatedAsyncioTestCase):
-    @patch("scripts.dashboard.app.OUTPUT_DIR", "/tmp/test-out")
-    @patch("scripts.dashboard.app._list_objects", return_value=[
+    @patch("scripts.dashboard.routes.pipeline.list_objects", return_value=[
         {"name": "obj1", "updated_at": "2026-01-01"},
     ])
     async def test_returns_objects_and_active(self, mock_list: MagicMock) -> None:
-        response = await pipeline_objects()
-        self.assertEqual(response.status_code, 200)
-        payload = _json_payload(response)
-        self.assertIn("objects", payload)
-        self.assertIn("active_object", payload)
-        self.assertEqual(len(payload["objects"]), 1)
+        state = get_state()
+        old = state.output_dir
+        state.output_dir = "/tmp/test-out"
+        try:
+            response = await pipeline_objects()
+            self.assertEqual(response.status_code, 200)
+            payload = _json_payload(response)
+            self.assertIn("objects", payload)
+            self.assertIn("active_object", payload)
+            self.assertEqual(len(payload["objects"]), 1)
+        finally:
+            state.output_dir = old
 
 
 # ── Pipeline object-info endpoint (8.1.10–8.1.12) ────────────────
@@ -656,14 +661,15 @@ class TestPipelineObjectsEndpoint(unittest.IsolatedAsyncioTestCase):
 class TestPipelineObjectInfoEndpoint(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
-        self._patcher.start()
+        state = get_state()
+        self._orig_output_dir = state.output_dir
+        state.output_dir = self._tmp.name
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        get_state().output_dir = self._orig_output_dir
         self._tmp.cleanup()
 
-    @patch("scripts.dashboard.app._summarize_object")
+    @patch("scripts.dashboard.routes.pipeline.summarize_object")
     async def test_valid_name_returns_info(self, mock_summarize: MagicMock) -> None:
         obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
         obj_dir.mkdir(parents=True)
@@ -688,8 +694,9 @@ class TestPipelineObjectInfoEndpoint(unittest.IsolatedAsyncioTestCase):
 class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
-        self._patcher.start()
+        state = get_state()
+        self._orig_output_dir = state.output_dir
+        state.output_dir = self._tmp.name
         self._snapshot = {
             "running": session.running,
             "config_object_name": session.config.object_name,
@@ -698,11 +705,11 @@ class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         session.running = self._snapshot["running"]
         session.config.object_name = self._snapshot["config_object_name"]
-        self._patcher.stop()
+        get_state().output_dir = self._orig_output_dir
         self._tmp.cleanup()
 
-    @patch("scripts.dashboard.app.broadcast", new_callable=AsyncMock)
-    @patch("scripts.dashboard.app._load_object_into_session", return_value={"name": "test-obj"})
+    @patch("scripts.dashboard.routes.pipeline.broadcast", new_callable=AsyncMock)
+    @patch("scripts.dashboard.dependencies.AppState.load_object_into_session", return_value={"name": "test-obj"})
     async def test_load_success(self, mock_load: MagicMock, mock_broadcast: AsyncMock) -> None:
         session.running = False
         obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
@@ -724,8 +731,9 @@ class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
 class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch("scripts.dashboard.app.OUTPUT_DIR", self._tmp.name)
-        self._patcher.start()
+        state = get_state()
+        self._orig_output_dir = state.output_dir
+        state.output_dir = self._tmp.name
         self._snapshot = {
             "running": session.running,
             "config": session.config,
@@ -744,7 +752,7 @@ class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
         session.running = self._snapshot["running"]
         session.config = self._snapshot["config"]
         session.resume_from_stage = self._snapshot["resume_from_stage"]
-        self._patcher.stop()
+        get_state().output_dir = self._orig_output_dir
         self._tmp.cleanup()
         import os
         for k, v in self._env_backup.items():
@@ -780,7 +788,7 @@ class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
         payload = _json_payload(response)
         self.assertIn("missing", payload)
 
-    @patch("scripts.dashboard.app.run_pipeline", new_callable=AsyncMock)
+    @patch("scripts.dashboard.routes.pipeline.run_pipeline", new_callable=AsyncMock)
     async def test_start_success(self, mock_run: AsyncMock) -> None:
         session.running = False
         response = await pipeline_start({
@@ -808,11 +816,12 @@ class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
 class TestPipelineVideoInfoSuccess(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self._patcher = patch("scripts.dashboard.app.INPUT_DIR", self._tmp.name)
-        self._patcher.start()
+        state = get_state()
+        self._orig_input_dir = state.input_dir
+        state.input_dir = self._tmp.name
 
     def tearDown(self) -> None:
-        self._patcher.stop()
+        get_state().input_dir = self._orig_input_dir
         self._tmp.cleanup()
 
     @patch("asyncio.to_thread", new_callable=AsyncMock)
@@ -1051,9 +1060,9 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         session.mesh_ply = self._snapshot["mesh_ply"]
         self._tmp.cleanup()
 
-    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("scripts.dashboard.routes.mesh.reset_outputs_from_stage")
     @patch("asyncio.to_thread", new_callable=AsyncMock)
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_postprocess_success(
         self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock, mock_reset: MagicMock,
     ) -> None:
@@ -1073,7 +1082,7 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertIn("iterations", payload)
 
     @patch("asyncio.to_thread", new_callable=AsyncMock)
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_method_validation(
         self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock,
     ) -> None:
@@ -1093,7 +1102,7 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["method"], "laplacian")
 
     @patch("asyncio.to_thread", new_callable=AsyncMock)
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_iterations_clamped(
         self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock,
     ) -> None:
@@ -1120,9 +1129,9 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         payload = _json_payload(response)
         self.assertEqual(payload["iterations"], 0)
 
-    @patch("scripts.dashboard.app._reset_outputs_from_stage")
+    @patch("scripts.dashboard.routes.mesh.reset_outputs_from_stage")
     @patch("asyncio.to_thread", new_callable=AsyncMock)
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_invalidate_texture_resets(
         self, mock_out_dir: MagicMock, mock_to_thread: AsyncMock, mock_reset: MagicMock,
     ) -> None:
@@ -1140,7 +1149,7 @@ class TestMeshPostprocessEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(payload["texture_invalidated"])
         mock_reset.assert_called_once()
 
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_running_non_stage5_returns_409(self, mock_out_dir: MagicMock) -> None:
         session.running = True
         session.next_stage_confirmation_required = False
@@ -1227,8 +1236,8 @@ class TestMeshRepairConfirmDedup(unittest.IsolatedAsyncioTestCase):
 class TestPreviewObjectFileNormal(unittest.IsolatedAsyncioTestCase):
     """8.5.3 — preview_object_file normal file serving."""
 
-    @patch("scripts.dashboard.app._resolve_output_root")
-    @patch("scripts.dashboard.app._validate_object_name", side_effect=lambda n: n)
+    @patch("scripts.dashboard.routes.preview.resolve_output_root")
+    @patch("scripts.dashboard.routes.preview.validate_object_name", side_effect=lambda n: n)
     async def test_serves_existing_file(self, mock_validate, mock_root) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1246,7 +1255,7 @@ class TestPreviewObjectFileNormal(unittest.IsolatedAsyncioTestCase):
 class TestPreviewOutputs(unittest.IsolatedAsyncioTestCase):
     """8.5.5 — preview_outputs returns file list."""
 
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_returns_files(self, mock_dir) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1265,7 +1274,7 @@ class TestPreviewOutputs(unittest.IsolatedAsyncioTestCase):
 class TestPreviewCropOBB(unittest.IsolatedAsyncioTestCase):
     """8.5.6 — preview_crop_obb returns OBB dict."""
 
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_missing_mesh_returns_404(self, mock_dir) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1280,7 +1289,7 @@ class TestPreviewCropOBB(unittest.IsolatedAsyncioTestCase):
 class TestVerificationFrame(unittest.IsolatedAsyncioTestCase):
     """8.5.7 — verification_frame returns composited JPEG."""
 
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_missing_frame_returns_404(self, mock_dir) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1296,7 +1305,7 @@ class TestVerificationFrame(unittest.IsolatedAsyncioTestCase):
 class TestVerificationGroundFrame(unittest.IsolatedAsyncioTestCase):
     """8.5.8 — verification_ground_frame returns composited JPEG."""
 
-    @patch("scripts.dashboard.app._active_output_dir")
+    @patch("scripts.dashboard.dependencies.AppState.active_output_dir")
     async def test_missing_frame_returns_404(self, mock_dir) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
@@ -1319,7 +1328,7 @@ class TestVramInfo(unittest.IsolatedAsyncioTestCase):
 
     async def test_vram_info_no_gpu_returns_null(self) -> None:
         """When vram_utils raises, free_mb is None."""
-        with patch.dict("sys.modules", {"vram_utils": MagicMock(
+        with patch.dict("sys.modules", {"scripts.vram_utils": MagicMock(
             get_free_vram_mb=MagicMock(side_effect=RuntimeError("no GPU")),
         )}):
             response = await vram_info()
@@ -1330,8 +1339,8 @@ class TestVramInfo(unittest.IsolatedAsyncioTestCase):
 class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
     """8.8.1-8.8.3 — _startup installs LogBroadcaster and auto-loads."""
 
-    @patch("scripts.dashboard.app._list_objects", return_value=[])
-    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.list_objects", return_value=[])
+    @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
     async def test_startup_installs_broadcaster(self, mock_lb_cls, mock_root, mock_list) -> None:
         import tempfile
@@ -1349,8 +1358,8 @@ class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
             finally:
                 app_mod.log_broadcaster = old_broadcaster
 
-    @patch("scripts.dashboard.app._list_objects")
-    @patch("scripts.dashboard.app._resolve_output_root")
+    @patch("scripts.dashboard.app.list_objects")
+    @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
     async def test_startup_auto_loads_latest_object(self, mock_lb_cls, mock_root, mock_list) -> None:
         import tempfile

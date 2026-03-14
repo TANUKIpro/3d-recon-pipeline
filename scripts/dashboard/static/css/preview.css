@@ -1,0 +1,234 @@
+/* ── 3D Containers (shared for stages 3-6) ───────────────── */
+.three-container {
+  flex: 1;
+  background: #0a0a14;
+  position: relative;
+  display: none;
+  overflow: hidden;
+}
+.three-container.visible { display: block; }
+
+/* ── Pi3X Toolbar ────────────────────────────────────────── */
+#pi3x-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.toolbar-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.toolbar-check input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.toolbar-info {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--font);
+}
+
+/* ── Stage 5 Classical Phase Status ─────────────────────── */
+.mesh-phase-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+#mesh-phase-status-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: var(--font);
+}
+
+.mesh-phase-status.live #mesh-phase-status-text {
+  color: var(--accent);
+}
+
+.mesh-phase-status.ready #mesh-phase-status-text {
+  color: var(--success);
+}
+
+.mesh-phase-status.error #mesh-phase-status-text {
+  color: var(--danger);
+}
+
+/* ── Stage 5 Mesh Post-Process Toolbar ───────────────────── */
+#mesh-post-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mesh-post-toolbar label {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+#mesh-post-toolbar select,
+#mesh-post-toolbar input[type="number"] {
+  width: auto;
+  margin: 0;
+}
+
+#mesh-post-method {
+  min-width: 110px;
+}
+
+#mesh-post-iterations {
+  width: 72px;
+}
+
+#mesh-post-lambda {
+  width: 82px;
+}
+
+#mesh-post-downsample-enabled {
+  width: auto;
+}
+
+#mesh-post-target-faces,
+#mesh-post-trigger-faces {
+  width: 108px;
+}
+
+#mesh-post-status {
+  margin-left: auto;
+}
+
+#mesh-post-status.error {
+  color: var(--danger);
+}
+
+#mesh-post-status.success {
+  color: var(--success);
+}
+
+/* ── Stage 7 Mesh Repair Toolbar ──────────────────────────── */
+#mesh-repair-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mesh-repair-status {
+  min-width: 0;
+  flex: 1 1 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#mesh-repair-threshold-control {
+  flex: 1 1 300px;
+  min-width: 220px;
+  max-width: 420px;
+}
+
+#mesh-repair-threshold-control .range-label-row {
+  margin-bottom: 2px;
+}
+
+#mesh-repair-threshold-control .range-value {
+  min-width: 44px;
+  text-align: right;
+}
+
+#mesh-repair-threshold {
+  margin: 0;
+}
+
+#mesh-repair-clear,
+#mesh-repair-apply {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+#mesh-repair-status.error {
+  color: var(--danger);
+}
+
+#mesh-repair-status.success {
+  color: var(--success);
+}
+
+/* ── Frame Count Header ──────────────────────────────────── */
+.frame-count-header {
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ── Gallery ──────────────────────────────────────────────── */
+#gallery-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+  background: var(--bg-primary);
+}
+
+.gallery-thumb {
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.gallery-thumb:hover { transform: scale(1.03); }
+
+/* ── Light Theme ──────────────────────────────────────────── */
+[data-theme="light"] .three-container {
+  background: #e8e8ef;
+}
+
+/* ── Responsive ───────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #mesh-repair-toolbar {
+    align-items: flex-start;
+  }
+  #mesh-repair-status {
+    flex: 1 1 100%;
+    order: 1;
+  }
+  #mesh-repair-threshold-control {
+    flex: 1 1 100%;
+    max-width: none;
+    order: 2;
+  }
+  #mesh-repair-clear {
+    order: 3;
+  }
+  #mesh-repair-apply {
+    order: 4;
+  }
+}
