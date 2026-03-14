@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useFetchMock } from './helpers/fetch-mock.js';
+import { buildMeshRepairDOM } from './helpers/dom-factory.js';
 import { MeshRepairController } from '../../../scripts/dashboard/static/js/mesh-repair-controller.js';
 import { MESH_REPAIR_THRESHOLD_DEFAULT } from '../../../scripts/dashboard/static/js/constants.js';
 import { formatMeshRepairThreshold } from '../../../scripts/dashboard/static/js/utils.js';
@@ -14,18 +15,6 @@ beforeEach(() => {
 afterEach(() => {
   restoreFetch();
 });
-
-function buildMeshRepairDOM() {
-  document.body.innerHTML = `
-    <div id="mesh-repair-toolbar" style="display:none">
-      <span id="mesh-repair-status"></span>
-      <input type="range" id="mesh-repair-threshold" min="-1" max="0" step="0.01" value="-0.25">
-      <span id="mesh-repair-threshold-value"></span>
-      <button id="mesh-repair-clear">Clear</button>
-      <button id="mesh-repair-apply">Apply</button>
-    </div>
-  `;
-}
 
 function createMockPreview() {
   return {

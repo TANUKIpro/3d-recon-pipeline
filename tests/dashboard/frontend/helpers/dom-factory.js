@@ -103,6 +103,18 @@ export function buildSAM2CanvasDOM() {
   `;
 }
 
+export function buildMeshRepairDOM() {
+  document.body.innerHTML = `
+    <div id="mesh-repair-toolbar" style="display:none">
+      <span id="mesh-repair-status"></span>
+      <input type="range" id="mesh-repair-threshold" min="-1" max="0" step="0.01" value="-0.25">
+      <span id="mesh-repair-threshold-value"></span>
+      <button id="mesh-repair-clear">Clear</button>
+      <button id="mesh-repair-apply">Apply</button>
+    </div>
+  `;
+}
+
 export function buildConfigPanelDOM() {
   // Build the massive config panel DOM with all required inputs
   const inputIds = [

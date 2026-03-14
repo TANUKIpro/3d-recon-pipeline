@@ -40,7 +40,7 @@ from scripts.stage_contact_hole_repair import (
     run_contact_hole_repair,
 )
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "coffee01"
+from tests.conftest import FIXTURE_DIR
 
 
 def _load_fixture_mesh(path: Path) -> tuple[np.ndarray, np.ndarray]:

@@ -296,23 +296,21 @@
 
 ---
 
-## Phase 8: テスト構造の改善
+## Phase 8: テスト構造の改善 ✅
 
 **目標**: テストヘルパーの重複を排除し、カバレッジを可視化する
 
-### 8-1. Python テストの conftest 整理
-> **事前確認**: `tests/conftest.py` と `tests/dashboard/backend/` 内の各テストファイルの fixture を確認
+### 8-1. Python テストの conftest 整理 ✅
 
-- [ ] 重複する fixture やモックパターンを確認
-- [ ] 共通 fixture を `conftest.py` に集約
-- [ ] Dockerで全テスト実行して確認
+- [x] `FIXTURE_DIR` 定数を `tests/conftest.py` に集約
+- [x] 4 ファイルのローカル定義を `from tests.conftest import FIXTURE_DIR` に置換
+- [x] `fixture_dir()` pytest fixture が `FIXTURE_DIR` を返すように更新
 
-### 8-2. フロントエンドテストヘルパーの整理
-> **事前確認**: `tests/dashboard/frontend/helpers/` 内のファイルを確認
+### 8-2. フロントエンドテストヘルパーの整理 ✅
 
-- [ ] `dom-factory.js`, `fetch-mock.js`, `ws-mock.js`, `three-stub.js` の利用パターンを確認
-- [ ] 共通パターンの抽出が可能か検討
-- [ ] 実施する場合はリファクタリングしてテスト実行
+- [x] `buildMeshRepairDOM()` を `dom-factory.js` に移動
+- [x] `mesh-repair-controller.test.js` のローカル定義を import に置換
+- [x] フロントエンドテスト実行して確認
 
 ---
 
@@ -380,4 +378,5 @@
 | **中** | Phase 5 (定数命名修正) | ✅ 完了 |
 | **低** | Phase 6 (遅延 import 統一) | ✅ 完了 |
 | **低** | Phase 7 (CSS 分割) | ✅ 完了 |
-| **低** | Phase 8-10 | 未着手 |
+| **低** | Phase 8 (テスト構造改善) | ✅ 完了 |
+| **低** | Phase 9-10 | 未着手 |

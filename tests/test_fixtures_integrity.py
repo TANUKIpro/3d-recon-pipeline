@@ -16,7 +16,7 @@ from pathlib import Path
 
 from scripts.dashboard.state import detect_stage_outputs
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "coffee01"
+from tests.conftest import FIXTURE_DIR
 
 
 class FixtureExistenceTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "coffee01"
+from tests.conftest import FIXTURE_DIR
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 

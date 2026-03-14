@@ -26,7 +26,7 @@ from scripts.dashboard.state import (
     detect_stage_outputs,
 )
 
-FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "fixtures" / "coffee01"
+from tests.conftest import FIXTURE_DIR
 
 
 # ------------------------------------------------------------------ helpers ---
