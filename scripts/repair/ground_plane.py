@@ -755,6 +755,7 @@ def _generate_bottom_skirt_cap(
         # --- Floor cap ---
         uv = _loop_projection_uv(proj_points, plane_normal)
         local_tris = _triangulate_polygon_ear_clip(uv)
+        cap_faces: np.ndarray | None = None
         if local_tris:
             cap_faces = np.asarray(
                 [
@@ -763,13 +764,41 @@ def _generate_bottom_skirt_cap(
                 ],
                 dtype=np.int64,
             )
-            # Orient cap normal to -plane_normal (pointing down/outward)
-            cs0 = all_verts_so_far[cap_faces[0, 0]]
-            cs1 = all_verts_so_far[cap_faces[0, 1]]
-            cs2 = all_verts_so_far[cap_faces[0, 2]]
-            cap_normal = np.cross(cs1 - cs0, cs2 - cs0)
-            if float(np.dot(cap_normal, -plane_normal)) < 0:
-                cap_faces = cap_faces[:, [0, 2, 1]]
+        else:
+            # Fallback: centroid fan triangulation.
+            # Projected polygon may self-intersect or have near-degenerate
+            # edges after collapsing heights, causing ear-clip to fail.
+            centroid_pt = proj_points.mean(axis=0)
+            centroid_idx = next_vertex
+            new_vertices_list.append(centroid_pt)
+            next_vertex += 1
+            fan_tris: list[list[int]] = []
+            for i in range(n):
+                i_next = (i + 1) % n
+                fan_tris.append([centroid_idx, proj_indices[i], proj_indices[i_next]])
+            cap_faces = np.asarray(fan_tris, dtype=np.int64)
+
+        if cap_faces is not None and cap_faces.shape[0] > 0:
+            # Rebuild vertex lookup to include any centroid vertex just added
+            all_verts_cap = np.vstack(
+                (vertices, np.asarray(new_vertices_list, dtype=np.float64))
+            )
+            # Remove degenerate triangles (area ≈ 0)
+            tri_pts = all_verts_cap[cap_faces]
+            tri_cross = np.cross(
+                tri_pts[:, 1] - tri_pts[:, 0],
+                tri_pts[:, 2] - tri_pts[:, 0],
+            )
+            tri_area2 = np.linalg.norm(tri_cross, axis=1)
+            valid_mask = tri_area2 > 1e-10
+            cap_faces = cap_faces[valid_mask]
+            tri_cross = tri_cross[valid_mask]
+
+        if cap_faces is not None and cap_faces.shape[0] > 0:
+            # Orient each cap triangle so its normal aligns with -plane_normal
+            dots = tri_cross @ (-plane_normal)
+            flip_mask = dots < 0
+            cap_faces[flip_mask] = cap_faces[flip_mask][:, [0, 2, 1]]
 
             new_faces_list.append(cap_faces)
             stats["cap_faces"] += int(cap_faces.shape[0])
