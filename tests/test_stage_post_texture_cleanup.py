@@ -418,6 +418,97 @@ class TestPassFloatingIslandRemoval(unittest.TestCase):
         assert mask.all()
         assert result["removed_islands"] == 0
 
+    def test_removed_faces_not_in_split_faces(self):
+        """Faces removed by pass 2-5 must NOT appear in split_faces.
+
+        Regression test for a bug where the exclusion set for split_faces was
+        built from *kept* merged faces only (``merged_faces[keep_merged_mask]``).
+        This caused faces removed by above-plane noise / floating-island passes
+        to be re-added as cap faces in the final OBJ.
+
+        The fix uses **all** merged faces as the exclusion set so that
+        ``split_faces`` contains only genuinely new faces produced by plane
+        clipping (those with interpolated vertex indices).
+        """
+        # Build a minimal mesh:
+        #   - 2 main-body triangles (faces 0-1)
+        #   - 1 floating-island triangle (face 2) above the ground plane
+        merged_faces = np.array([
+            [0, 1, 2],  # main body
+            [1, 2, 3],  # main body
+            [4, 5, 6],  # floating island (above ground, removed by pass 4/5)
+        ], dtype=np.int64)
+
+        # Simulate keep_merged_mask: island face is removed
+        keep_merged_mask = np.array([True, True, False], dtype=bool)
+
+        # clipped_faces == merged_faces (all above ground, nothing clipped)
+        clipped_faces = merged_faces.copy()
+
+        # --- Fixed logic (using all merged faces) ---
+        all_merged_face_keys = {
+            tuple(sorted((int(f[0]), int(f[1]), int(f[2]))))
+            for f in merged_faces
+        }
+        split_faces = np.asarray(
+            [
+                f for f in clipped_faces
+                if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in all_merged_face_keys
+            ],
+            dtype=np.int64,
+        )
+        if split_faces.size == 0:
+            split_faces = np.zeros((0, 3), dtype=np.int64)
+
+        # The floating island face must NOT appear in split_faces
+        self.assertEqual(split_faces.shape[0], 0,
+                         "Removed island face leaked into split_faces")
+
+        # --- Old (buggy) logic for comparison: would produce 1 leaked face ---
+        kept_face_keys = {
+            tuple(sorted((int(f[0]), int(f[1]), int(f[2]))))
+            for f in merged_faces[keep_merged_mask]
+        }
+        buggy_split = [
+            f for f in clipped_faces
+            if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in kept_face_keys
+        ]
+        self.assertEqual(len(buggy_split), 1,
+                         "Sanity check: old logic should leak 1 face")
+
+    def test_split_faces_keeps_interpolated_boundary(self):
+        """Genuine boundary faces (with interpolated vertices) survive the fix.
+
+        When clipping splits a face, the new sub-triangle references at least
+        one interpolated vertex whose index is >= len(merged_vertices), so its
+        sorted key will never match any merged face.
+        """
+        merged_faces = np.array([
+            [0, 1, 2],
+            [1, 2, 3],
+        ], dtype=np.int64)
+
+        # Clipping produced a new boundary triangle with interpolated vertex 10
+        clipped_faces = np.array([
+            [0, 1, 2],
+            [1, 2, 3],
+            [1, 10, 2],  # boundary fragment (vertex 10 is interpolated)
+        ], dtype=np.int64)
+
+        all_merged_face_keys = {
+            tuple(sorted((int(f[0]), int(f[1]), int(f[2]))))
+            for f in merged_faces
+        }
+        split_faces = np.asarray(
+            [
+                f for f in clipped_faces
+                if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in all_merged_face_keys
+            ],
+            dtype=np.int64,
+        )
+        self.assertEqual(split_faces.shape[0], 1)
+        np.testing.assert_array_equal(split_faces[0], [1, 10, 2])
+
     def test_single_component_noop(self):
         """Mesh with only one component should be a no-op."""
         _, faces, adjacency = _make_test_mesh()

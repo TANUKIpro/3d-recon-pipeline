@@ -1057,15 +1057,15 @@ def _analyze_cleanup(
     removed_merged_faces = merged_faces[~keep_merged_mask]
     removed_obj_face_indices = np.unique(merged_face_to_obj_face[~keep_merged_mask])
 
-    kept_face_keys = {
+    all_merged_face_keys = {
         tuple(sorted((int(face[0]), int(face[1]), int(face[2]))))
-        for face in merged_faces[keep_merged_mask]
+        for face in merged_faces
     }
     split_faces = np.asarray(
         [
             face
             for face in clipped_faces
-            if tuple(sorted((int(face[0]), int(face[1]), int(face[2])))) not in kept_face_keys
+            if tuple(sorted((int(face[0]), int(face[1]), int(face[2])))) not in all_merged_face_keys
         ],
         dtype=np.int64,
     )
