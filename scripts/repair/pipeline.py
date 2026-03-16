@@ -414,7 +414,7 @@ def run_contact_hole_repair(
 
         _emit_progress(progress_cb, 15.0, "Contact Hole Repair: clipping at ground plane")
         _check_cancel(cancel_cb)
-        clipped_verts, clipped_faces = _clip_mesh_at_plane(
+        clipped_verts, clipped_faces, _ = _clip_mesh_at_plane(
             vertices, faces, gp_normal, gp_d, offset=selected_shift,
         )
         print(

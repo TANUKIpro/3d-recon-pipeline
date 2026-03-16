@@ -10,12 +10,14 @@ try:
     from scripts.stage_post_texture_contact_cleanup import (
         _COMPONENT_MIN_FACE_RATIO,
         _CONVERGENCE_MAX_ITERATIONS,
+        _FLIPPED_NORMAL_NEAR_GROUND_BBOX_RATIO,
         _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD,
         _MASK_LOWER_HALF_REMOVAL_THRESHOLD,
         _NEIGHBOR_REMOVAL_RATIO_THRESHOLD,
         _aggregate_pass_stats,
         _filter_small_components,
         _pass_above_plane_noise,
+        _pass_flipped_ground_normals,
         _pass_floating_island_removal,
         _pass_geometric_clip,
         _pass_lower_half_mask_noise,
@@ -555,19 +557,24 @@ class TestPassFloatingIslandRemoval(unittest.TestCase):
 
         When clipping splits a face, the new sub-triangle references at least
         one interpolated vertex whose index is >= len(merged_vertices), so its
-        sorted key will never match any merged face.
+        sorted key will never match any merged face.  Split faces from kept
+        source faces pass through; those from removed sources are excluded.
         """
         merged_faces = np.array([
             [0, 1, 2],
             [1, 2, 3],
         ], dtype=np.int64)
 
-        # Clipping produced a new boundary triangle with interpolated vertex 10
+        # Clipping produced: face 0 kept as-is, face 1 kept as-is,
+        # plus a boundary fragment from source face 1 (interpolated vertex 10)
         clipped_faces = np.array([
             [0, 1, 2],
             [1, 2, 3],
-            [1, 10, 2],  # boundary fragment (vertex 10 is interpolated)
+            [1, 10, 2],  # boundary fragment from face 1
         ], dtype=np.int64)
+        clipped_source = np.array([0, 1, 1], dtype=np.int64)
+
+        keep_merged_mask = np.array([True, True], dtype=bool)
 
         all_merged_face_keys = {
             tuple(sorted((int(f[0]), int(f[1]), int(f[2]))))
@@ -575,13 +582,72 @@ class TestPassFloatingIslandRemoval(unittest.TestCase):
         }
         split_faces = np.asarray(
             [
-                f for f in clipped_faces
+                f for cf_idx, f in enumerate(clipped_faces)
                 if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in all_merged_face_keys
+                and keep_merged_mask[clipped_source[cf_idx]]
             ],
             dtype=np.int64,
         )
         self.assertEqual(split_faces.shape[0], 1)
         np.testing.assert_array_equal(split_faces[0], [1, 10, 2])
+
+        # Now mark source face 1 as removed — the split fragment should be excluded
+        keep_merged_mask[1] = False
+        split_faces_after = np.asarray(
+            [
+                f for cf_idx, f in enumerate(clipped_faces)
+                if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in all_merged_face_keys
+                and keep_merged_mask[clipped_source[cf_idx]]
+            ],
+            dtype=np.int64,
+        )
+        if split_faces_after.size == 0:
+            split_faces_after = np.zeros((0, 3), dtype=np.int64)
+        self.assertEqual(split_faces_after.shape[0], 0)
+
+    def test_split_faces_from_removed_source_excluded(self):
+        """Split fragments from a removed merged face must not appear in output.
+
+        A merged face straddling the ground plane produces split fragments with
+        interpolated vertices.  When that source face is removed by cleanup
+        (keep_merged_mask=False), the fragments must be filtered out.
+        """
+        # 3 merged faces: face 0 is fully above, face 1 straddles (removed),
+        # face 2 is fully above.
+        merged_faces = np.array([
+            [0, 1, 2],
+            [3, 4, 5],
+            [6, 7, 8],
+        ], dtype=np.int64)
+
+        # After clipping: face 0 kept, face 1 split into 2 fragments, face 2 kept
+        clipped_faces = np.array([
+            [0, 1, 2],       # from face 0
+            [6, 7, 8],       # from face 2
+            [3, 4, 20],      # split from face 1 (vertex 20 interpolated)
+            [4, 21, 20],     # split from face 1 (vertex 21 interpolated)
+        ], dtype=np.int64)
+        clipped_source = np.array([0, 2, 1, 1], dtype=np.int64)
+
+        # Face 1 was removed by cleanup
+        keep_merged_mask = np.array([True, False, True], dtype=bool)
+
+        all_merged_face_keys = {
+            tuple(sorted((int(f[0]), int(f[1]), int(f[2]))))
+            for f in merged_faces
+        }
+        split_faces = np.asarray(
+            [
+                f for cf_idx, f in enumerate(clipped_faces)
+                if tuple(sorted((int(f[0]), int(f[1]), int(f[2])))) not in all_merged_face_keys
+                and keep_merged_mask[clipped_source[cf_idx]]
+            ],
+            dtype=np.int64,
+        )
+        if split_faces.size == 0:
+            split_faces = np.zeros((0, 3), dtype=np.int64)
+        # Both split fragments from face 1 should be excluded
+        self.assertEqual(split_faces.shape[0], 0)
 
     def test_single_component_noop(self):
         """Mesh with only one component should be a no-op."""
@@ -601,3 +667,90 @@ class TestPassFloatingIslandRemoval(unittest.TestCase):
         )
         assert mask.all()
         assert result["removed_islands"] == 0
+
+
+@unittest.skipUnless(_IMPORTABLE, "cleanup module not importable")
+class TestPassFlippedGroundNormals(unittest.TestCase):
+    """Tests for Pass 6: flipped normals at ground plane."""
+
+    def test_removes_downward_facing_near_ground(self):
+        """Face near the ground with a downward normal should be removed."""
+        # Ground plane: y-up, at y=0
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        # Two triangles: face 0 is upward-facing near ground, face 1 is
+        # downward-facing near ground (flipped winding).
+        verts = np.array([
+            [0, 0.01, 0],   # v0 — just above ground
+            [1, 0.01, 0],   # v1
+            [0.5, 0.01, 1], # v2
+            [0, 0.01, 2],   # v3
+            [1, 0.01, 2],   # v4
+            [0.5, 0.01, 3], # v5
+        ], dtype=np.float64)
+        faces = np.array([
+            [0, 2, 1],  # normal = +y (upward)
+            [3, 4, 5],  # normal = -y (downward, flipped winding)
+        ], dtype=np.int64)
+
+        plane_d = 0.0
+        orig_face_dist = verts[faces] @ plane_normal + plane_d
+        adjacency = _build_face_adjacency(faces)
+        mask = np.ones(len(faces), dtype=bool)
+
+        result = _pass_flipped_ground_normals(
+            mask, verts, faces, plane_normal, orig_face_dist, adjacency,
+            near_ground_bbox_ratio=1.0,  # generous threshold for test
+        )
+        self.assertTrue(mask[0], "Upward-facing face should be kept")
+        self.assertFalse(mask[1], "Downward-facing face should be removed")
+        self.assertEqual(result["flipped_removed"], 1)
+
+    def test_keeps_downward_facing_far_from_ground(self):
+        """Downward-facing face far from ground should NOT be removed."""
+        plane_normal = np.array([0.0, 1.0, 0.0])
+        verts = np.array([
+            [0, 5.0, 0],
+            [1, 5.0, 0],
+            [0.5, 5.0, 1],
+        ], dtype=np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int64)  # downward normal at y=5
+
+        plane_d = 0.0
+        orig_face_dist = verts[faces] @ plane_normal + plane_d
+        adjacency = _build_face_adjacency(faces)
+        mask = np.ones(len(faces), dtype=bool)
+
+        result = _pass_flipped_ground_normals(
+            mask, verts, faces, plane_normal, orig_face_dist, adjacency,
+            near_ground_bbox_ratio=0.01,
+        )
+        self.assertTrue(mask[0], "Far-from-ground face should be kept")
+        self.assertEqual(result["flipped_removed"], 0)
+
+    def test_split_faces_flipped_normal_filtered(self):
+        """Split face fragments with flipped normals are removed."""
+        # Ground plane: y-up at y=0
+        plane_normal = np.array([0.0, 1.0, 0.0])
+
+        # Simulate split faces — one upward, one downward
+        verts = np.array([
+            [0, 0.01, 0],
+            [1, 0.01, 0],
+            [0.5, 0.01, 1],
+            [0, 0.01, 2],
+            [1, 0.01, 2],
+            [0.5, 0.01, 3],
+        ], dtype=np.float64)
+        split_faces = np.array([
+            [0, 2, 1],  # upward normal (+y)
+            [3, 4, 5],  # downward normal (-y, flipped)
+        ], dtype=np.int64)
+
+        sv0 = verts[split_faces[:, 0]]
+        sv1 = verts[split_faces[:, 1]]
+        sv2 = verts[split_faces[:, 2]]
+        split_dot = np.cross(sv1 - sv0, sv2 - sv0) @ plane_normal
+        filtered = split_faces[split_dot >= 0.0]
+
+        self.assertEqual(filtered.shape[0], 1)
+        np.testing.assert_array_equal(filtered[0], [0, 2, 1])

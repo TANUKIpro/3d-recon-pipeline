@@ -460,12 +460,17 @@ def _clip_mesh_at_plane(
     plane_normal: np.ndarray,
     plane_d: float,
     offset: float = 0.002,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Clip mesh at a plane, keeping the 'above' side.
 
     Vertices with ``dot(v, normal) + d - offset > 0`` are considered above.
     Faces that straddle the plane are split so that only the above portion
     remains.
+
+    Returns:
+        Tuple of (vertices, faces, source_face_indices) where
+        *source_face_indices* maps each output face to its index in the
+        input ``faces`` array.
     """
     plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
     dist = vertices @ plane_normal + plane_d
@@ -499,19 +504,24 @@ def _clip_mesh_at_plane(
         return new_idx
 
     kept_faces: list[list[int]] = []
+    source_face_indices: list[int] = []
 
     # Vectorized face classification: bulk-keep all-above faces
     a0 = above[faces[:, 0]]
     a1 = above[faces[:, 1]]
     a2 = above[faces[:, 2]]
     n_above_arr = a0.astype(np.int8) + a1.astype(np.int8) + a2.astype(np.int8)
-    all_above_faces = faces[n_above_arr == 3]
+    all_above_mask = n_above_arr == 3
+    all_above_indices = np.where(all_above_mask)[0]
+    all_above_faces = faces[all_above_mask]
     if all_above_faces.shape[0] > 0:
         kept_faces.extend(all_above_faces.tolist())
+        source_face_indices.extend(all_above_indices.tolist())
 
     # Only Python-loop over straddling faces (n_above == 1 or 2)
     straddle_mask = (n_above_arr > 0) & (n_above_arr < 3)
-    for tri in faces[straddle_mask]:
+    straddle_indices = np.where(straddle_mask)[0]
+    for src_idx, tri in zip(straddle_indices, faces[straddle_mask]):
         i0, i1, i2 = int(tri[0]), int(tri[1]), int(tri[2])
         a0_t, a1_t, a2_t = above[i0], above[i1], above[i2]
         n_above = int(a0_t) + int(a1_t) + int(a2_t)
@@ -527,7 +537,9 @@ def _clip_mesh_at_plane(
             m1 = _get_interp_vertex(above1, below_idx)
             m2 = _get_interp_vertex(above2, below_idx)
             kept_faces.append([above1, above2, m1])
+            source_face_indices.append(int(src_idx))
             kept_faces.append([above2, m2, m1])
+            source_face_indices.append(int(src_idx))
         else:
             # One above, two below: produce one triangle
             if a0_t:
@@ -539,6 +551,7 @@ def _clip_mesh_at_plane(
             m1 = _get_interp_vertex(above_idx, below1)
             m2 = _get_interp_vertex(above_idx, below2)
             kept_faces.append([above_idx, m1, m2])
+            source_face_indices.append(int(src_idx))
 
     if new_vertices_list:
         all_vertices = np.vstack((vertices, np.array(new_vertices_list, dtype=np.float64)))
@@ -550,7 +563,8 @@ def _clip_mesh_at_plane(
     else:
         all_faces = np.zeros((0, 3), dtype=np.int64)
 
-    return all_vertices, all_faces
+    source_arr = np.asarray(source_face_indices, dtype=np.int64)
+    return all_vertices, all_faces, source_arr
 
 
 def _cap_boundary_at_plane(
@@ -652,7 +666,7 @@ def _probe_ground_plane_shift(
         )
 
     original_vertex_count = int(vertices.shape[0])
-    clipped_verts, clipped_faces = _clip_mesh_at_plane(
+    clipped_verts, clipped_faces, _ = _clip_mesh_at_plane(
         vertices,
         faces,
         plane_normal,

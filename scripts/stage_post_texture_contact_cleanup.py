@@ -53,6 +53,7 @@ _NEIGHBOR_REMOVAL_RATIO_THRESHOLD = 0.6
 _CONVERGENCE_MAX_ITERATIONS = 3
 _ISLAND_FACE_RATIO = 0.1
 _ISLAND_GAP_RATIO = 0.02
+_FLIPPED_NORMAL_NEAR_GROUND_BBOX_RATIO = 0.01
 
 
 @dataclass(frozen=True)
@@ -890,6 +891,46 @@ def _pass_floating_island_removal(
     return {"removed_islands": removed_islands, "removed_faces": removed_faces}
 
 
+def _pass_flipped_ground_normals(
+    keep_merged_mask: np.ndarray,
+    merged_vertices: np.ndarray,
+    merged_faces: np.ndarray,
+    plane_normal: np.ndarray,
+    orig_face_dist: np.ndarray,
+    adjacency: list[np.ndarray],
+    near_ground_bbox_ratio: float = _FLIPPED_NORMAL_NEAR_GROUND_BBOX_RATIO,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 6: remove faces near the ground whose normals point away from it.
+
+    Faces very close to the ground plane whose surface normals are opposite
+    to the plane normal are thin reconstruction artifacts visible only from
+    below.
+    """
+    bbox_diag = float(np.linalg.norm(
+        merged_vertices.max(axis=0) - merged_vertices.min(axis=0)
+    ))
+    threshold = near_ground_bbox_ratio * bbox_diag
+    min_dist = orig_face_dist.min(axis=1)
+    near_ground = min_dist < threshold
+
+    v0 = merged_vertices[merged_faces[:, 0]]
+    v1 = merged_vertices[merged_faces[:, 1]]
+    v2 = merged_vertices[merged_faces[:, 2]]
+    face_normals = np.cross(v1 - v0, v2 - v0)
+    dot_plane = face_normals @ plane_normal
+    flipped = dot_plane < 0.0
+
+    to_remove = keep_merged_mask & near_ground & flipped
+    removed_count = int(to_remove.sum())
+    keep_merged_mask[to_remove] = False
+
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {"flipped_removed": removed_count, "component_stats": component_stats}
+
+
 def _aggregate_pass_stats(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
@@ -900,9 +941,12 @@ def _aggregate_pass_stats(
     outside_ratio_arr: np.ndarray | None,
     ground_ratio_arr: np.ndarray | None,
     keep_merged_mask: np.ndarray,
+    pass6: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Aggregate per-pass statistics into the structures expected by _proposal_payload."""
     all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass3b, pass4)]
+    if pass6 is not None:
+        all_comp.append(pass6.get("component_stats", {}))
     total_component_removed = (
         sum(c.get("removed_faces", 0) for c in all_comp)
         + pass5.get("removed_faces", 0)
@@ -953,15 +997,21 @@ def _aggregate_pass_stats(
                 "removed_islands": pass5.get("removed_islands", 0),
                 "removed_faces": pass5.get("removed_faces", 0),
             },
+            "flipped_ground_normals": {
+                "removed_count": pass6.get("flipped_removed", 0) if pass6 else 0,
+            },
         }
     else:
         mask_filtering_stats = {"applied": False}
-        if pass5.get("removed_islands", 0) > 0:
+        if pass5.get("removed_islands", 0) > 0 or (pass6 and pass6.get("flipped_removed", 0) > 0):
             mask_filtering_stats = {
                 "applied": True,
                 "floating_island_removal": {
                     "removed_islands": pass5["removed_islands"],
                     "removed_faces": pass5["removed_faces"],
+                },
+                "flipped_ground_normals": {
+                    "removed_count": pass6.get("flipped_removed", 0) if pass6 else 0,
                 },
                 "component_filtering": component_stats,
             }
@@ -991,7 +1041,7 @@ def _analyze_cleanup(
     section_loops = _extract_closed_section_loops(merged_vertices, merged_faces, plane_normal, actual_plane_d)
     selected_loop = max(section_loops, key=lambda loop: loop.area) if section_loops else None
 
-    clipped_vertices, clipped_faces = _clip_mesh_at_plane(
+    clipped_vertices, clipped_faces, clipped_source = _clip_mesh_at_plane(
         merged_vertices,
         merged_faces,
         plane_normal,
@@ -1105,10 +1155,20 @@ def _analyze_cleanup(
     print(f"  Pass 5 (floating islands): {pass5['removed_islands']} islands"
           f" ({pass5['removed_faces']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
+    # === Pass 6: Flipped normals at ground plane ===
+    pass6 = _pass_flipped_ground_normals(
+        keep_merged_mask, merged_vertices, merged_faces, plane_normal,
+        orig_face_dist, adjacency,
+    )
+    p6_comp = pass6["component_stats"].get("removed_faces", 0)
+    print(f"  Pass 6 (flipped normals): {pass6['flipped_removed']} removed"
+          f" + {p6_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
     # Aggregate statistics
     mask_filtering_stats, component_stats = _aggregate_pass_stats(
         pass1, pass2, pass3, pass3b, pass4, pass5,
         outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
+        pass6=pass6,
     )
 
     removed_merged_faces = merged_faces[~keep_merged_mask]
@@ -1121,13 +1181,23 @@ def _analyze_cleanup(
     split_faces = np.asarray(
         [
             face
-            for face in clipped_faces
+            for cf_idx, face in enumerate(clipped_faces)
             if tuple(sorted((int(face[0]), int(face[1]), int(face[2])))) not in all_merged_face_keys
+            and keep_merged_mask[clipped_source[cf_idx]]
         ],
         dtype=np.int64,
     )
     if split_faces.size == 0:
         split_faces = np.zeros((0, 3), dtype=np.int64)
+    # Remove split fragments whose normals point opposite to the ground plane
+    if split_faces.shape[0] > 0:
+        _sv0 = capped_vertices[split_faces[:, 0]]
+        _sv1 = capped_vertices[split_faces[:, 1]]
+        _sv2 = capped_vertices[split_faces[:, 2]]
+        _split_dot = np.cross(_sv1 - _sv0, _sv2 - _sv0) @ plane_normal
+        split_faces = split_faces[_split_dot >= 0.0]
+        if split_faces.size == 0:
+            split_faces = np.zeros((0, 3), dtype=np.int64)
     cap_faces = capped_faces[int(clipped_faces.shape[0]):].copy()
     if cap_faces.size == 0:
         cap_faces = np.zeros((0, 3), dtype=np.int64)
