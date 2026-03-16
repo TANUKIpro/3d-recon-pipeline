@@ -497,6 +497,88 @@ def _compute_per_face_ground_score(
     return outside_ratio, ground_ratio
 
 
+_CAP_ATLAS_STRIP_HEIGHT = 16
+
+
+def _build_obj_vertex_uv_index(
+    obj_mesh: _ObjMesh,
+) -> dict[int, list[tuple[int, int]]]:
+    """Map OBJ 1-based vertex ID → [(face_idx, corner_pos)] for UV lookup."""
+    index: dict[int, list[tuple[int, int]]] = {}
+    for fi, face in enumerate(obj_mesh.faces):
+        for corner, vid in enumerate(face.vertex_indices):
+            index.setdefault(vid, []).append((fi, corner))
+    return index
+
+
+def _sample_boundary_vertex_color(
+    texture_path: Path,
+    obj_mesh: _ObjMesh,
+    merged_to_originals: list[list[int]],
+    merged_vertex_ids: list[int],
+    obj_vid_index: dict[int, list[tuple[int, int]]],
+) -> np.ndarray:
+    """Sample median texture color from a set of merged boundary vertices."""
+    fallback = np.asarray([176, 176, 176], dtype=np.uint8)
+    image = cv2.imread(str(texture_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return fallback
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+
+    colors: list[np.ndarray] = []
+    for mvid in merged_vertex_ids:
+        if mvid < 0 or mvid >= len(merged_to_originals):
+            continue
+        originals = merged_to_originals[mvid]
+        for orig_vid in originals:
+            # merged_to_originals stores OBJ 1-based vertex indices already
+            entries = obj_vid_index.get(orig_vid)
+            if entries is None:
+                continue
+            for fi, corner in entries:
+                vt_idx = obj_mesh.faces[fi].texcoord_indices[corner]
+                if vt_idx <= 0 or vt_idx > len(obj_mesh.texcoords):
+                    continue
+                uv = obj_mesh.texcoords[vt_idx - 1]
+                x = int(np.clip(round(float(uv[0]) * (w - 1)), 0, w - 1))
+                y = int(np.clip(round((1.0 - float(uv[1])) * (h - 1)), 0, h - 1))
+                colors.append(rgb[y, x].astype(np.float64))
+    if not colors:
+        return fallback
+    median_color = np.median(np.vstack(colors), axis=0)
+    return np.clip(np.round(median_color), 0, 255).astype(np.uint8)
+
+
+def _write_cap_texture_atlas(
+    path: Path,
+    group_colors: dict[int, np.ndarray],
+) -> tuple[int, dict[int, float]]:
+    """Write a texture atlas with one horizontal color strip per group.
+
+    Returns (atlas_height, group_v_centers) where group_v_centers maps each
+    group ID to its V coordinate center in [0, 1].
+    """
+    n = max(len(group_colors), 1)
+    atlas_h = n * _CAP_ATLAS_STRIP_HEIGHT
+    atlas_w = _DEFAULT_CAP_TEXTURE_SIZE
+    img = np.full((atlas_h, atlas_w, 3), 176, dtype=np.uint8)
+
+    group_v_centers: dict[int, float] = {}
+    sorted_groups = sorted(group_colors.keys())
+    for strip_idx, gid in enumerate(sorted_groups):
+        color = group_colors[gid]
+        y_start = strip_idx * _CAP_ATLAS_STRIP_HEIGHT
+        y_end = y_start + _CAP_ATLAS_STRIP_HEIGHT
+        img[y_start:y_end, :] = color.reshape(1, 1, 3)
+        # V center: OBJ textures have V=0 at bottom, image row 0 at top
+        pixel_center = (y_start + y_end) / 2.0
+        group_v_centers[gid] = 1.0 - pixel_center / atlas_h
+
+    cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    return atlas_h, group_v_centers
+
+
 def _sample_cap_color(
     texture_path: Path,
     obj_mesh: _ObjMesh,
@@ -943,24 +1025,26 @@ def _pass_post_holefill_cleanup(
     merged_faces: np.ndarray,
     cleanup_faces: np.ndarray,
     capped_vertices: np.ndarray,
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Pass 8: remove disconnected components after hole-fill.
+    cleanup_face_groups: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any], np.ndarray | None]:
+    """Pass 8/10: remove disconnected components after hole-fill.
 
     After Pass 7 generates skirt + floor cap faces the combined mesh may still
     contain small disconnected fragments that survived earlier passes.  This
     pass builds a single adjacency graph over *all* remaining faces (kept
     merged + cleanup) and removes every connected component except the largest.
     """
+    _empty_stats: dict[str, Any] = {
+        "removed_components": 0,
+        "removed_faces_merged": 0,
+        "removed_faces_cleanup": 0,
+        "removed_faces_total": 0,
+    }
     kept_merged_indices = np.where(keep_merged_mask)[0]
     n_merged = len(kept_merged_indices)
 
     if n_merged == 0 and cleanup_faces.size == 0:
-        return cleanup_faces, {
-            "removed_components": 0,
-            "removed_faces_merged": 0,
-            "removed_faces_cleanup": 0,
-            "removed_faces_total": 0,
-        }
+        return cleanup_faces, _empty_stats, cleanup_face_groups
 
     # Build combined face array indexing into capped_vertices
     parts = []
@@ -972,12 +1056,7 @@ def _pass_post_holefill_cleanup(
     total_combined = len(combined_faces)
 
     if total_combined <= 1:
-        return cleanup_faces, {
-            "removed_components": 0,
-            "removed_faces_merged": 0,
-            "removed_faces_cleanup": 0,
-            "removed_faces_total": 0,
-        }
+        return cleanup_faces, _empty_stats, cleanup_face_groups
 
     adjacency = _build_face_adjacency(combined_faces)
 
@@ -1001,12 +1080,7 @@ def _pass_post_holefill_cleanup(
         components.append(comp)
 
     if len(components) <= 1:
-        return cleanup_faces, {
-            "removed_components": 0,
-            "removed_faces_merged": 0,
-            "removed_faces_cleanup": 0,
-            "removed_faces_total": 0,
-        }
+        return cleanup_faces, _empty_stats, cleanup_face_groups
 
     # Keep only the largest component
     largest_comp = max(components, key=len)
@@ -1029,15 +1103,18 @@ def _pass_post_holefill_cleanup(
 
     if cleanup_faces.size > 0:
         cleanup_faces = cleanup_faces[cleanup_keep_mask]
+        if cleanup_face_groups is not None:
+            cleanup_face_groups = cleanup_face_groups[cleanup_keep_mask]
         if cleanup_faces.size == 0:
             cleanup_faces = np.zeros((0, 3), dtype=np.int64)
+            cleanup_face_groups = np.zeros(0, dtype=np.int32) if cleanup_face_groups is not None else None
 
     return cleanup_faces, {
         "removed_components": len(components) - 1,
         "removed_faces_merged": removed_merged,
         "removed_faces_cleanup": removed_cleanup,
         "removed_faces_total": removed_merged + removed_cleanup,
-    }
+    }, cleanup_face_groups
 
 
 def _build_edge_counts(faces: np.ndarray) -> dict[tuple[int, int], int]:
@@ -1294,6 +1371,8 @@ def _pass_general_holefill(
     all_new_faces: list[np.ndarray] = []
     new_vertex_list: list[np.ndarray] = []
     smooth_seed_vertices: set[int] = set()
+    boundary_loop_verts: list[list[int]] = []
+    per_loop_face_counts: list[int] = []
     next_vertex = int(capped_vertices.shape[0])
 
     def _make_fan(loop_verts: list[int], centroid: np.ndarray) -> tuple[np.ndarray, bool]:
@@ -1381,6 +1460,8 @@ def _pass_general_holefill(
         smooth_seed_vertices.update(loop_verts)
         stats["loops_capped"] += 1
         stats["cap_faces_added"] += int(new_faces.shape[0])
+        boundary_loop_verts.append(list(loop_verts))
+        per_loop_face_counts.append(int(new_faces.shape[0]))
 
     # append new vertices
     if new_vertex_list:
@@ -1413,6 +1494,8 @@ def _pass_general_holefill(
                 lamb=smooth_lambda,
             )
 
+    stats["boundary_loops"] = boundary_loop_verts
+    stats["per_loop_face_counts"] = per_loop_face_counts
     return capped_vertices, cleanup_faces, stats
 
 
@@ -1711,6 +1794,8 @@ def _analyze_cleanup(
     if cap_faces.size == 0:
         cap_faces = np.zeros((0, 3), dtype=np.int64)
     cleanup_faces = np.vstack([arr for arr in (split_faces, cap_faces) if arr.size > 0]) if (split_faces.size > 0 or cap_faces.size > 0) else np.zeros((0, 3), dtype=np.int64)
+    # Group 0 = split/cap faces from passes 1-6
+    cleanup_face_groups = np.zeros(cleanup_faces.shape[0], dtype=np.int32)
 
     # === Pass 7: Bottom hole-fill (skirt + floor cap) ===
     kept_merged = merged_faces[keep_merged_mask]
@@ -1731,6 +1816,11 @@ def _analyze_cleanup(
             if cleanup_faces.size > 0
             else skirt_cap_faces
         )
+        # Group 1 = bottom skirt + floor cap
+        cleanup_face_groups = np.concatenate((
+            cleanup_face_groups,
+            np.ones(skirt_cap_faces.shape[0], dtype=np.int32),
+        ))
     print(
         f"  Pass 7 (bottom hole-fill): {skirt_stats['loops_found']} loops,"
         f" {skirt_stats['skirt_faces']} skirt + {skirt_stats['cap_faces']} cap faces,"
@@ -1738,8 +1828,9 @@ def _analyze_cleanup(
     )
 
     # === Pass 8: Post-hole-fill disconnected component removal ===
-    cleanup_faces, pass8 = _pass_post_holefill_cleanup(
+    cleanup_faces, pass8, cleanup_face_groups = _pass_post_holefill_cleanup(
         keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
+        cleanup_face_groups,
     )
     print(f"  Pass 8 (post-holefill noise): {pass8['removed_components']} components"
           f" ({pass8['removed_faces_total']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
@@ -1748,6 +1839,18 @@ def _analyze_cleanup(
     capped_vertices, cleanup_faces, pass9 = _pass_general_holefill(
         keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
     )
+    # Groups 2+ = one per capped general hole-fill loop
+    p9_loop_counts = pass9.get("per_loop_face_counts", [])
+    p9_group_start = int(cleanup_face_groups.max()) + 1 if cleanup_face_groups.size > 0 else 2
+    if p9_loop_counts:
+        next_group = p9_group_start
+        new_group_tags: list[np.ndarray] = []
+        for lfc in p9_loop_counts:
+            new_group_tags.append(np.full(lfc, next_group, dtype=np.int32))
+            next_group += 1
+        cleanup_face_groups = np.concatenate(
+            [cleanup_face_groups] + new_group_tags,
+        )
     print(
         f"  Pass 9 (general hole-fill): {pass9['loops_found']} loops"
         f" ({pass9['open_paths_merged']} recovered from {pass9['open_paths_found']} open paths),"
@@ -1757,8 +1860,9 @@ def _analyze_cleanup(
     )
 
     # === Pass 10: Final disconnected component removal ===
-    cleanup_faces, pass10 = _pass_post_holefill_cleanup(
+    cleanup_faces, pass10, cleanup_face_groups = _pass_post_holefill_cleanup(
         keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
+        cleanup_face_groups,
     )
     print(
         f"  Pass 10 (final cleanup): {pass10['removed_components']} components"
@@ -1786,7 +1890,45 @@ def _analyze_cleanup(
     )
 
     texture_path = output_root / "texture.png"
-    cap_color = _sample_cap_color(texture_path, obj_mesh, removed_obj_face_indices)
+
+    # Per-group color sampling
+    group_colors: dict[int, np.ndarray] = {}
+    # Group 0 = split/cap faces — sample from removed faces' texture (existing behavior)
+    group_colors[0] = _sample_cap_color(texture_path, obj_mesh, removed_obj_face_indices)
+
+    # Groups 1+ = boundary-based sampling
+    unique_groups = sorted(set(int(g) for g in cleanup_face_groups)) if cleanup_face_groups is not None and cleanup_face_groups.size > 0 else []
+    boundary_groups_to_sample: dict[int, list[int]] = {}  # group_id → merged vertex ids
+
+    # Group 1 = bottom skirt/cap → boundary root vertices from Pass 7
+    skirt_boundary_loops = skirt_stats.get("boundary_loops", [])
+    if skirt_boundary_loops and 1 in unique_groups:
+        all_skirt_boundary = []
+        for loop in skirt_boundary_loops:
+            all_skirt_boundary.extend(loop)
+        boundary_groups_to_sample[1] = all_skirt_boundary
+
+    # Groups from Pass 9 (IDs start at p9_group_start, matching tagging above)
+    p9_boundary_loops = pass9.get("boundary_loops", [])
+    if p9_boundary_loops:
+        next_group_base = p9_group_start
+        for loop_verts in p9_boundary_loops:
+            gid = next_group_base
+            next_group_base += 1
+            if gid in unique_groups:
+                boundary_groups_to_sample[gid] = loop_verts
+
+    if boundary_groups_to_sample:
+        obj_vid_index = _build_obj_vertex_uv_index(obj_mesh)
+        for gid, mvids in boundary_groups_to_sample.items():
+            group_colors[gid] = _sample_boundary_vertex_color(
+                texture_path, obj_mesh, merged_to_originals, mvids, obj_vid_index,
+            )
+
+    # Ensure every group present in cleanup_face_groups has a color
+    for gid in unique_groups:
+        if gid not in group_colors:
+            group_colors[gid] = group_colors[0]
 
     has_candidate = (
         removed_merged_faces.size > 0
@@ -1820,7 +1962,9 @@ def _analyze_cleanup(
         "mask_score": mask_score,
         "mask_filtering": mask_filtering_stats,
         "component_filtering": component_stats,
-        "cap_color": cap_color,
+        "cap_color": group_colors[0],
+        "group_colors": group_colors,
+        "cleanup_face_groups": cleanup_face_groups,
         "matched_boundary_area": float(matched_boundary_area),
         "skirt_stats": skirt_stats,
         "pass8_stats": pass8,
@@ -2070,17 +2214,11 @@ def apply_cleanup_proposal(
     plane_normal = analysis["plane_normal"]
 
     texture_cap = _cap_texture_path(output_root)
-    _write_cap_texture(texture_cap, analysis["cap_color"])
+    group_colors: dict[int, np.ndarray] = analysis["group_colors"]
+    cleanup_face_groups: np.ndarray | None = analysis["cleanup_face_groups"]
+    _atlas_h, group_v_centers = _write_cap_texture_atlas(texture_cap, group_colors)
 
     cleanup_vertex_ids = sorted({int(idx) for idx in cleanup_faces.reshape(-1)}) if cleanup_faces.size > 0 else []
-    cleanup_positions = capped_vertices[np.asarray(cleanup_vertex_ids, dtype=np.int64)] if cleanup_vertex_ids else np.zeros((0, 3), dtype=np.float64)
-    cleanup_uv_coords = np.zeros((len(cleanup_vertex_ids), 2), dtype=np.float64)
-    if cleanup_positions.size > 0:
-        projected = _loop_projection_uv(cleanup_positions, plane_normal)
-        uv_min = projected.min(axis=0)
-        uv_span = np.maximum(projected.max(axis=0) - uv_min, 1e-8)
-        normalized = (projected - uv_min) / uv_span
-        cleanup_uv_coords = 0.05 + normalized * 0.90
 
     next_vertex_index = int(obj_mesh.vertices.shape[0]) + 1
     merged_to_output_vertex: dict[int, int] = {}
@@ -2093,13 +2231,22 @@ def apply_cleanup_proposal(
             appended_vertices.append(capped_vertices[int(merged_vid)])
             next_vertex_index += 1
 
+    # Per-face-corner UV allocation: each cleanup face gets 3 UV entries
+    # mapped to (0.5, group_v_center) for its group.  This avoids the
+    # vertex-sharing-between-groups issue.
     next_vt_index = int(obj_mesh.texcoords.shape[0]) + 1
-    merged_to_output_vt: dict[int, int] = {}
     appended_vts: list[np.ndarray] = []
-    for merged_vid, uv in zip(cleanup_vertex_ids, cleanup_uv_coords, strict=False):
-        merged_to_output_vt[int(merged_vid)] = next_vt_index
-        appended_vts.append(uv)
-        next_vt_index += 1
+    cleanup_face_vt_indices: list[tuple[int, int, int]] = []
+    for fi in range(cleanup_faces.shape[0]):
+        gid = int(cleanup_face_groups[fi]) if cleanup_face_groups is not None and fi < len(cleanup_face_groups) else 0
+        v_center = group_v_centers.get(gid, group_v_centers.get(0, 0.5))
+        uv = np.array([0.5, v_center], dtype=np.float64)
+        t0 = next_vt_index
+        t1 = next_vt_index + 1
+        t2 = next_vt_index + 2
+        appended_vts.extend([uv, uv, uv])
+        next_vt_index += 3
+        cleanup_face_vt_indices.append((t0, t1, t2))
 
     _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 60.0, "Writing cleaned OBJ/MTL")
@@ -2158,14 +2305,12 @@ def apply_cleanup_proposal(
 
     if cleanup_faces.size > 0:
         lines.append("usemtl material_cap\n")
-        for face in cleanup_faces:
+        for fi, face in enumerate(cleanup_faces):
             a, b, c = (int(face[0]), int(face[1]), int(face[2]))
             va = merged_to_output_vertex[a]
             vb = merged_to_output_vertex[b]
             vc = merged_to_output_vertex[c]
-            ta = merged_to_output_vt[a]
-            tb = merged_to_output_vt[b]
-            tc = merged_to_output_vt[c]
+            ta, tb, tc = cleanup_face_vt_indices[fi]
             lines.append(f"f {va}/{ta} {vb}/{tb} {vc}/{tc}\n")
 
     cleaned_obj.write_text("".join(lines), encoding="utf-8")

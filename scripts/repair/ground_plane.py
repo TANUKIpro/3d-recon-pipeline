@@ -675,6 +675,7 @@ def _generate_bottom_skirt_cap(
 
     new_vertices_list: list[np.ndarray] = []
     new_faces_list: list[np.ndarray] = []
+    boundary_loop_verts: list[list[int]] = []
     next_vertex = int(vertices.shape[0])
 
     for path in raw_paths:
@@ -804,7 +805,9 @@ def _generate_bottom_skirt_cap(
             stats["cap_faces"] += int(cap_faces.shape[0])
 
         stats["loops_capped"] += 1
+        boundary_loop_verts.append(list(loop_verts))
 
+    stats["boundary_loops"] = boundary_loop_verts
     if not new_faces_list:
         return vertices, np.zeros((0, 3), dtype=np.int64), stats
 
