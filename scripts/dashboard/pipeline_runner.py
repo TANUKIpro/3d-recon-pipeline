@@ -19,7 +19,11 @@ from scripts.dashboard.log_capture import broadcast_to_clients, stage_log_scope
 from scripts.dashboard.stage_wrappers import (
     _stage_colmap_sfm,
     _stage_extract_frames,
+    _stage_extract_ground_plane,
     _stage_gs2mesh_reconstruct,
+    _stage_post_texture_contact_cleanup_apply,
+    _stage_post_texture_contact_cleanup_prepare,
+    _stage_post_texture_contact_cleanup_skip,
     _stage_texture_bake,
     _vram_gate,
 )
@@ -116,11 +120,11 @@ def _cleanup_cancelled_outputs(
 
 
 async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> None:
-    """Execute the full 5-stage pipeline asynchronously."""
+    """Execute the full 6-stage pipeline asynchronously."""
     cfg = session.config
     output_dir = cfg.output_dir
     start_stage = int(session.resume_from_stage)
-    if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.TEXTURE_BAKE):
+    if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
         start_stage = int(PipelineStage.EXTRACT_FRAMES)
     cancelled = False
     session.running = True
@@ -431,6 +435,20 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.texture_quality_boost,
             )
             session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
+            _check_cancelled(session)
+            await _wait_for_next_stage_confirmation(
+                session,
+                PipelineStage.TEXTURE_BAKE,
+                PipelineStage.POST_TEXTURE_CONTACT_CLEANUP,
+                "Texture Bake complete. Continue to Post Cleanup?",
+            )
+
+        if start_stage <= int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
+            _require_file(session.obj_path, "Textured mesh")
+            await _run_post_texture_cleanup_stage(session)
+            session.cleaned_obj_path = str(Path(output_dir) / "textured_mesh_cleaned.obj")
+            proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+            session.cleanup_proposal_path = str(proposal_path) if proposal_path.is_file() else None
 
         # ── Complete ──────────────────────────────────────────────
         session.current_stage = PipelineStage.COMPLETE
@@ -534,7 +552,7 @@ def _safe_current_stage(stage: PipelineStage | int) -> PipelineStage | None:
         parsed = PipelineStage(int(stage))
     except Exception:
         return None
-    if PipelineStage.EXTRACT_FRAMES <= parsed <= PipelineStage.TEXTURE_BAKE:
+    if PipelineStage.EXTRACT_FRAMES <= parsed <= PipelineStage.POST_TEXTURE_CONTACT_CLEANUP:
         return parsed
     return None
 
@@ -691,3 +709,154 @@ async def _run_stage(
         "elapsed": session.stages[int(stage)].elapsed,
         "overall_progress": session.overall_progress(),
     })
+
+async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
+    stage = PipelineStage.POST_TEXTURE_CONTACT_CLEANUP
+    output_dir = str(session.config.output_dir)
+    session.stage_start(stage)
+    checkpoint_id = first_checkpoint_id(int(stage))
+    if checkpoint_id:
+        session.stage_progress(stage, checkpoint_id=checkpoint_id)
+    await broadcast(
+        session,
+        {
+            "type": "stage_start",
+            "stage": int(stage),
+            "label": STAGE_LABELS[stage],
+            "checkpoint_id": checkpoint_id,
+        },
+    )
+    await _broadcast_stage_progress(
+        session,
+        stage,
+        progress=0.0,
+        detail="Starting",
+        checkpoint_id=checkpoint_id,
+    )
+
+    loop = asyncio.get_running_loop()
+    progress_cb = _make_progress_cb(session, stage, loop)
+    cancel_cb = _make_cancel_cb(session)
+
+    def _run_blocking(fn, *args):
+        with stage_log_scope(int(stage)):
+            return fn(
+                *args,
+                progress_cb=progress_cb,
+                cancel_cb=cancel_cb,
+                register_process=session.register_active_process,
+                unregister_process=session.unregister_active_process,
+            )
+
+    try:
+        # Extract ground plane from mesh + SAM2 ground masks if not yet done
+        if session.ground_plane_path is None and session.ground_mask_dir is not None:
+            intrinsics_file = Path(output_dir) / "intrinsics.json"
+            mesh_ply = session.mesh_ply or str(Path(output_dir) / "object_mesh.ply")
+            if Path(mesh_ply).is_file() and intrinsics_file.is_file() and session.poses_path:
+                await _broadcast_stage_progress(
+                    session, stage, progress=5.0,
+                    detail="Extracting ground plane from mesh",
+                )
+                gp_result = await asyncio.to_thread(
+                    _run_blocking,
+                    _stage_extract_ground_plane,
+                    mesh_ply,
+                    session.ground_mask_dir,
+                    output_dir,
+                    session.poses_path,
+                    str(intrinsics_file),
+                    session.mask_dir,
+                )
+                if gp_result is not None:
+                    gp_path = Path(output_dir) / "ground_plane.json"
+                    session.ground_plane_path = str(gp_path) if gp_path.is_file() else None
+
+        intrinsics_path = Path(output_dir) / "intrinsics.json"
+        proposal = await asyncio.to_thread(
+            _run_blocking,
+            _stage_post_texture_contact_cleanup_prepare,
+            str(session.obj_path),
+            output_dir,
+            session.poses_path,
+            str(intrinsics_path) if intrinsics_path.is_file() else None,
+            session.mask_dir,
+            session.ground_mask_dir,
+            session.ground_plane_path,
+        )
+
+        proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+        session.cleanup_proposal_path = str(proposal_path) if proposal_path.is_file() else None
+
+        decision = "skip"
+        if session.config.post_texture_cleanup_enabled and proposal.get("requires_review") is True:
+            session.cleanup_review_event.clear()
+            session.cleanup_decision = None
+            session.stage_interactive(stage)
+            await _broadcast_stage_progress(
+                session,
+                stage,
+                progress=max(session.stages[int(stage)].progress, 74.0),
+                detail="Waiting for cleanup review decision",
+                checkpoint_id="s6.review",
+            )
+            await broadcast(
+                session,
+                {
+                    "type": "post_texture_cleanup_review_ready",
+                    "proposal": proposal,
+                    "proposal_path": session.cleanup_proposal_path,
+                    "overall_progress": session.overall_progress(),
+                },
+            )
+            await session.cleanup_review_event.wait()
+            _check_cancelled(session)
+            decision = str(session.cleanup_decision or "skip")
+        elif session.config.post_texture_cleanup_enabled and proposal.get("recommended_decision") == "apply":
+            decision = "apply"
+
+        await _broadcast_stage_progress(
+            session,
+            stage,
+            progress=max(session.stages[int(stage)].progress, 82.0),
+            detail=f"Applying cleanup decision ({decision})",
+            checkpoint_id="s6.apply",
+        )
+        finalize_fn = (
+            _stage_post_texture_contact_cleanup_apply
+            if decision == "apply"
+            else _stage_post_texture_contact_cleanup_skip
+        )
+        cleaned_obj = await asyncio.to_thread(
+            _run_blocking,
+            finalize_fn,
+            output_dir,
+        )
+        session.cleaned_obj_path = str(cleaned_obj)
+    except _CancelledError:
+        raise
+    except Exception as e:
+        session.stage_failed(stage, str(e))
+        await broadcast(
+            session,
+            {
+                "type": "stage_complete",
+                "stage": int(stage),
+                "elapsed": session.stages[int(stage)].elapsed,
+                "error": str(e),
+                "checkpoint_id": session.stages[int(stage)].checkpoint_id,
+                "overall_progress": session.overall_progress(),
+            },
+        )
+        raise
+
+    session.stage_complete(stage)
+    await broadcast(
+        session,
+        {
+            "type": "stage_complete",
+            "stage": int(stage),
+            "elapsed": session.stages[int(stage)].elapsed,
+            "overall_progress": session.overall_progress(),
+        },
+    )

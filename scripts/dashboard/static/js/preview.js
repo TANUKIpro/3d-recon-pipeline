@@ -4,12 +4,13 @@
  * Uses a single shared renderer that moves between stage containers.
  * Stage 2 has a dedicated scene for camera overlay support.
  *
- * 5-stage pipeline:
+ * 6-stage pipeline:
  *   1. Extract Frames
  *   2. COLMAP SfM (camera_poses.json + colmap_sparse_points.ply)
  *   3. SAM2 Segmentation (masks only)
  *   4. gs2mesh Reconstruction (object_mesh.ply)
  *   5. Texture Bake (textured_mesh.obj)
+ *   6. Post-texture Cleanup (textured_mesh_cleaned.obj)
  */
 
 import { SCENE_THEMES } from './preview/constants.js';
@@ -70,7 +71,7 @@ export class PreviewPanel {
   }
 
   clearFromStage(startStage = 1) {
-    const start = Math.max(1, Math.min(5, Number(startStage) || 1));
+    const start = Math.max(1, Math.min(6, Number(startStage) || 1));
 
     if (start <= 1) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
@@ -101,6 +102,12 @@ export class PreviewPanel {
     if (start <= 5) {
       this._clearStageScene(5);
       const empty = document.getElementById('stage-5-empty');
+      if (empty) empty.classList.remove('hidden');
+    }
+
+    if (start <= 6) {
+      this._clearStageScene(6);
+      const empty = document.getElementById('stage-6-empty');
       if (empty) empty.classList.remove('hidden');
     }
   }
@@ -215,6 +222,7 @@ export class PreviewPanel {
     this._stages[stageNum] = {
       scene, sceneRoot, camera, controls, container,
       currentObject: null,
+      overlayObject: null,
       _loadGeneration: 0,
       grid,
       ambientLight: ambient,
@@ -506,6 +514,7 @@ export class PreviewPanel {
     const fileMap = {
       4: 'object_mesh.ply',
       5: 'textured_mesh.obj',
+      6: 'textured_mesh_cleaned.obj',
     };
 
     const overrideFile = String(opts.file || '').trim();
@@ -725,6 +734,7 @@ export class PreviewPanel {
 
       const box = new THREE.Box3().setFromObject(object);
       const center = box.getCenter(new THREE.Vector3());
+      stage.centerOffset = center.clone();
       object.position.sub(center);
 
       if (!materials) {
@@ -753,6 +763,72 @@ export class PreviewPanel {
       console.error(`Failed to load OBJ (stage ${stageNum}):`, e);
       return false;
     }
+  }
+
+  /**
+   * Load a translucent PLY overlay without replacing the current stage asset.
+   */
+  async loadStageOverlay(stageNum, relativePath, opts = {}) {
+    await this.initSceneForStage(stageNum);
+    await this._ensureSceneFlipForStage(stageNum, opts.cacheToken ?? null);
+    this.activateStage(stageNum);
+
+    const stage = this._stages[stageNum];
+    if (!stage) return false;
+    this._cleanupOverlayObject(stage);
+
+    const url = this._buildPreviewFileUrl(relativePath, opts.cacheToken);
+    const loader = new PLYLoader();
+
+    try {
+      const geometry = await new Promise((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
+
+      geometry.computeBoundingBox();
+      if (stage.centerOffset) {
+        geometry.translate(-stage.centerOffset.x, -stage.centerOffset.y, -stage.centerOffset.z);
+      }
+      geometry.computeBoundingBox();
+
+      const hasColor = geometry.hasAttribute('color');
+      let overlayObject;
+      if (geometry.index && geometry.index.count > 0) {
+        const material = new THREE.MeshStandardMaterial({
+          vertexColors: hasColor,
+          color: hasColor ? undefined : (opts.color ?? 0xff5533),
+          transparent: true,
+          opacity: Number.isFinite(opts.opacity) ? opts.opacity : 0.68,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        overlayObject = new THREE.Mesh(geometry, material);
+      } else {
+        const material = new THREE.PointsMaterial({
+          vertexColors: hasColor,
+          color: hasColor ? undefined : (opts.color ?? 0xff5533),
+          transparent: true,
+          opacity: Number.isFinite(opts.opacity) ? opts.opacity : 0.85,
+          size: 0.006,
+          sizeAttenuation: true,
+          depthWrite: false,
+        });
+        overlayObject = new THREE.Points(geometry, material);
+      }
+      overlayObject.renderOrder = 10;
+      stage.overlayObject = overlayObject;
+      stage.sceneRoot.add(overlayObject);
+      return true;
+    } catch (e) {
+      console.error(`Failed to load overlay PLY (stage ${stageNum}):`, e);
+      return false;
+    }
+  }
+
+  clearStageOverlay(stageNum) {
+    const stage = this._stages[stageNum];
+    if (!stage) return;
+    this._cleanupOverlayObject(stage);
   }
 
   /**
@@ -831,6 +907,7 @@ Object.assign(PreviewPanel.prototype, {
 Object.assign(PreviewPanel.prototype, {
   _disposeObject: SceneHelpers._disposeObject,
   _cleanupCurrentObject: SceneHelpers._cleanupCurrentObject,
+  _cleanupOverlayObject: SceneHelpers._cleanupOverlayObject,
   _fitCamera: SceneHelpers._fitCamera,
   _setMeshShadowProfile: SceneHelpers._setMeshShadowProfile,
   _applyStageCenterOffset: SceneHelpers._applyStageCenterOffset,

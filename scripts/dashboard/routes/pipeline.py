@@ -197,9 +197,9 @@ async def pipeline_start(body: dict | None = None):
         else int(PipelineStage.EXTRACT_FRAMES)
     )
     start_stage = parse_int(raw.get("resume_from_stage"), inferred_stage)
-    if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.TEXTURE_BAKE):
+    if start_stage < int(PipelineStage.EXTRACT_FRAMES) or start_stage > int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
         return JSONResponse(
-            {"error": f"resume_from_stage must be between 1 and {int(PipelineStage.TEXTURE_BAKE)}"},
+            {"error": f"resume_from_stage must be between 1 and {int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP)}"},
             status_code=400,
         )
 
@@ -269,7 +269,7 @@ async def pipeline_cancel():
     terminated = await asyncio.to_thread(session.terminate_active_processes, 1.0)
     stage_num = int(session.current_stage)
     checkpoint_id = session.current_checkpoint_id
-    if int(PipelineStage.EXTRACT_FRAMES) <= stage_num <= int(PipelineStage.TEXTURE_BAKE):
+    if int(PipelineStage.EXTRACT_FRAMES) <= stage_num <= int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
         stage = PipelineStage(stage_num)
         session.stage_progress(
             stage,
@@ -292,6 +292,7 @@ async def pipeline_cancel():
     session.sam2_confirm_event.set()
     session.sam2_approve_event.set()
     session.sam2_ground_skip_event.set()
+    session.cleanup_review_event.set()
     session.next_stage_confirm_event.set()
     return JSONResponse(
         {

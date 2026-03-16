@@ -32,6 +32,10 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
     },
     4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    6: {
+        "dirs": ("post_texture_contact_cleanup",),
+        "files": ("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+    },
 }
 
 RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
@@ -39,6 +43,7 @@ RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
     3: {"dirs": ("frames",), "files": ("camera_poses.json",)},
     4: {"dirs": ("frames",), "files": ("camera_poses.json",)},
     5: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "object_mesh.ply")},
+    6: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "textured_mesh.obj", "intrinsics.json")},
 }
 
 PRIMARY_ARTIFACT_PATHS = (
@@ -46,7 +51,9 @@ PRIMARY_ARTIFACT_PATHS = (
     "colmap_sparse_points.ply",
     "object_mesh.ply",
     "textured_mesh.obj",
+    "textured_mesh_cleaned.obj",
     "texture.png",
+    "texture_cap.png",
     "intrinsics.json",
 )
 
@@ -170,7 +177,7 @@ def prepare_object_output_dir(out: Path) -> None:
 
 def reset_outputs_from_stage(out: Path, start_stage: int) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    for stage in range(max(1, start_stage), int(PipelineStage.TEXTURE_BAKE) + 1):
+    for stage in range(max(1, start_stage), int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP) + 1):
         plan = STAGE_RESET_PATHS.get(stage, {})
         for rel in plan.get("dirs", ()):
             target = out / rel
@@ -184,10 +191,10 @@ def reset_outputs_from_stage(out: Path, start_stage: int) -> None:
 
 def infer_resume_stage(out: Path) -> int:
     stage_complete, _, _ = detect_stage_outputs(out)
-    for stage in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
+    for stage in range(1, int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP) + 1):
         if not stage_complete.get(stage, False):
             return stage
-    return int(PipelineStage.TEXTURE_BAKE)
+    return int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP)
 
 
 def validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:

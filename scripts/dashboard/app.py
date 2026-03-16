@@ -84,7 +84,7 @@ async def _startup() -> None:
             stage = int(session.current_stage)
         except Exception:
             return None
-        if 1 <= stage <= int(PipelineStage.TEXTURE_BAKE):
+        if 1 <= stage <= int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
             return stage
         return None
 
@@ -151,6 +151,7 @@ from scripts.dashboard.routes.verification import router as _verification_router
 from scripts.dashboard.routes.preview import router as _preview_router  # noqa: E402
 from scripts.dashboard.routes.mesh import router as _mesh_router  # noqa: E402
 from scripts.dashboard.routes.health import router as _health_router  # noqa: E402
+from scripts.dashboard.routes.post_texture_cleanup import router as _post_texture_cleanup_router  # noqa: E402
 
 app.include_router(_pipeline_router)
 app.include_router(_sam2_router)
@@ -158,6 +159,7 @@ app.include_router(_verification_router)
 app.include_router(_preview_router)
 app.include_router(_mesh_router)
 app.include_router(_health_router)
+app.include_router(_post_texture_cleanup_router)
 
 
 # ── Test backward-compatibility re-exports ────────────────────────
@@ -199,4 +201,8 @@ from scripts.dashboard.routes.preview import (  # noqa: E402, F401
 )
 from scripts.dashboard.routes.health import (  # noqa: E402, F401
     vram_info,
+)
+from scripts.dashboard.routes.post_texture_cleanup import (  # noqa: E402, F401
+    post_texture_cleanup_confirm,
+    post_texture_cleanup_proposal,
 )

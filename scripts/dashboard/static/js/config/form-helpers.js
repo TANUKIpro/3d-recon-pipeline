@@ -12,6 +12,7 @@ import {
   parsePositiveFloat,
   parseNonNegativeFloat,
 } from '../utils.js';
+import { STAGE_COUNT } from '../constants.js';
 import { NEW_OBJECT_VALUE, STAGE_LABELS } from './presets.js';
 
 export function _normalizeObjectName(value) {
@@ -98,7 +99,7 @@ export function _resolveResumeStage() {
 
 export function _clampStage(stage) {
   const n = Number(stage) || 1;
-  return Math.max(1, Math.min(5, Math.round(n)));
+  return Math.max(1, Math.min(STAGE_COUNT, Math.round(n)));
 }
 
 export function _updateResumeHint() {

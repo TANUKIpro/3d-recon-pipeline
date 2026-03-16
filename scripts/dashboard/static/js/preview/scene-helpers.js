@@ -40,6 +40,15 @@ export function _cleanupCurrentObject(stage) {
     stage.sceneRoot.remove(stage.currentObject);
     stage.currentObject = null;
   }
+  this._cleanupOverlayObject(stage);
+}
+
+export function _cleanupOverlayObject(stage) {
+  if (stage.overlayObject) {
+    this._disposeObject(stage.overlayObject);
+    stage.sceneRoot.remove(stage.overlayObject);
+    stage.overlayObject = null;
+  }
 }
 
 // ── Camera & shadow ───────────────────────────────────────────────

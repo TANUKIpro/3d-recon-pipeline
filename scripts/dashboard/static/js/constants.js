@@ -2,8 +2,8 @@
  * Shared constants used across dashboard modules.
  */
 
-export const STAGE_COUNT = 5;
-export const TRANSITION_STAGE_MAX = 4;
+export const STAGE_COUNT = 6;
+export const TRANSITION_STAGE_MAX = 5;
 
 export const STORAGE_KEYS = {
   theme: 'clip2mesh:theme',

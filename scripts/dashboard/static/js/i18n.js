@@ -19,6 +19,7 @@ const TRANSLATIONS = {
   'stage.sam2': { en: 'SAM2', ja: 'SAM2' },
   'stage.gs2mesh': { en: 'gs2mesh', ja: 'gs2mesh' },
   'stage.texture': { en: 'Texture', ja: 'テクスチャ' },
+  'stage.post_cleanup': { en: 'Post Cleanup', ja: '後処理' },
 
   // Section titles
   'config.title': { en: 'Configuration', ja: '設定' },

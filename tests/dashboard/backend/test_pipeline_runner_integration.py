@@ -99,6 +99,16 @@ def _populate_mesh(d: str) -> None:
     (Path(d) / "object_mesh.ply").write_bytes(b"ply")
 
 
+def _populate_cleanup_outputs(d: str) -> None:
+    out = Path(d)
+    (out / "post_texture_contact_cleanup").mkdir(parents=True, exist_ok=True)
+    (out / "post_texture_contact_cleanup" / "proposal.json").write_text(
+        '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
+        encoding="utf-8",
+    )
+    (out / "textured_mesh_cleaned.obj").write_bytes(b"obj")
+
+
 # ── Common base ────────────────────────────────────────────────────────────
 
 
@@ -135,6 +145,21 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             "texture_bake": lambda *a, **kw: (
                 Path(d) / "textured_mesh.obj"
             ).write_bytes(b"obj"),
+            "post_texture_prepare": lambda *a, **kw: (
+                (Path(d) / "post_texture_contact_cleanup").mkdir(parents=True, exist_ok=True),
+                (Path(d) / "post_texture_contact_cleanup" / "proposal.json").write_text(
+                    '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
+                    encoding="utf-8",
+                ),
+            )[1] and {"requires_review": False, "recommended_decision": "skip"},
+            "post_texture_apply": lambda *a, **kw: (
+                _populate_cleanup_outputs(d),
+                str(Path(d) / "textured_mesh_cleaned.obj"),
+            )[1],
+            "post_texture_skip": lambda *a, **kw: (
+                _populate_cleanup_outputs(d),
+                str(Path(d) / "textured_mesh_cleaned.obj"),
+            )[1],
         }
 
     # -- Broadcast helpers --
@@ -177,6 +202,9 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             (f"{_MODULE}._stage_colmap_sfm", MagicMock(side_effect=effects["colmap_sfm"])),
             (f"{_MODULE}._stage_gs2mesh_reconstruct", MagicMock(side_effect=effects["gs2mesh_reconstruct"])),
             (f"{_MODULE}._stage_texture_bake", MagicMock(side_effect=effects["texture_bake"])),
+            (f"{_MODULE}._stage_post_texture_contact_cleanup_prepare", MagicMock(side_effect=effects["post_texture_prepare"])),
+            (f"{_MODULE}._stage_post_texture_contact_cleanup_apply", MagicMock(side_effect=effects["post_texture_apply"])),
+            (f"{_MODULE}._stage_post_texture_contact_cleanup_skip", MagicMock(side_effect=effects["post_texture_skip"])),
             (f"{_MODULE}._vram_gate", MagicMock()),
         ]
         overrides = extra_overrides or {}
@@ -334,14 +362,14 @@ class TestRunPipelineFullFlow(_PipelineIntegrationBase):
         mocks["_stage_gs2mesh_reconstruct"].assert_called_once()
         mocks["_stage_texture_bake"].assert_called_once()
 
-        # Broadcast checks: 5 stage_starts (non-SAM2 via _run_stage, SAM2 inline)
+        # Broadcast checks: 6 stage_starts (non-SAM2 via _run_stage, SAM2 inline, stage 6 inline)
         bc = mocks["broadcast"]
         starts = self._broadcasts_of_type(bc, "stage_start")
-        # Stages 1,2,4,5 via _run_stage (4) + stage 3 inline (1) = 5
-        self.assertEqual(len(starts), 5)
+        # Stages 1,2,4,5 via _run_stage (4) + stage 3 inline (1) + stage 6 inline (1) = 6
+        self.assertEqual(len(starts), 6)
 
         completes = self._broadcasts_of_type(bc, "stage_complete")
-        self.assertEqual(len(completes), 5)
+        self.assertEqual(len(completes), 6)
 
         pipeline_complete = self._broadcasts_of_type(bc, "pipeline_complete")
         self.assertEqual(len(pipeline_complete), 1)
@@ -385,7 +413,7 @@ class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
         bc = mocks["broadcast"]
         starts = self._broadcasts_of_type(bc, "stage_start")
         start_stages = {s["stage"] for s in starts}
-        self.assertTrue(start_stages.issubset({4, 5}))
+        self.assertTrue(start_stages.issubset({4, 5, 6}))
         self.assertNotIn(1, start_stages)
         self.assertNotIn(2, start_stages)
         self.assertNotIn(3, start_stages)

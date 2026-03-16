@@ -27,14 +27,14 @@ export function _poseJsonToArray(data) {
 
 export function _applySceneFlipToLoadedStages(sceneFlipX) {
   const rotationX = sceneFlipX ? Math.PI : 0;
-  for (const stageNum of [2, 4, 5]) {
+  for (const stageNum of [2, 4, 5, 6]) {
     const stage = this._stages[stageNum];
     if (stage?.sceneRoot) stage.sceneRoot.rotation.x = rotationX;
   }
 }
 
 export async function _ensureSceneFlipForStage(stageNum, cacheToken = null) {
-  if (stageNum < 4 || stageNum > 5) return;
+  if (stageNum < 4 || stageNum > 6) return;
   if (this._sceneFlipX == null) {
     this._sceneFlipX = await this._resolveSceneFlipFromCameraPoses(cacheToken);
   }

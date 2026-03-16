@@ -19,6 +19,7 @@ import { CameraOverlay } from './camera-overlay.js';
 import { CheckpointPanel } from './checkpoint-panel.js';
 import { TaskConfirmController } from './task-confirm-controller.js';
 import { StatusHydrator } from './status-hydrator.js';
+import { PostTextureCleanupReviewController } from './post-texture-cleanup-review.js';
 import {
   STAGE_COUNT,
   TRANSITION_STAGE_MAX,
@@ -73,6 +74,12 @@ function appendLog(stream, text, opts = {}) {
   });
 }
 
+const postTextureCleanupReview = new PostTextureCleanupReviewController({
+  preview,
+  stageCtrl,
+  appendLog,
+});
+
 // ── DOM references ───────────────────────────────────────────
 
 const statusBadge = document.getElementById('status-badge');
@@ -90,7 +97,7 @@ const taskConfirm = new TaskConfirmController({ stageCtrl, appendLog });
 
 const statusHydrator = new StatusHydrator({
   preview, cameraOverlay, sam2, sam2Verify, config, stageCtrl,
-  checkpoints, pipelineUI, taskConfirm,
+  checkpoints, pipelineUI, taskConfirm, postTextureCleanupReview,
   setStatus,
   setOverallProgress,
 });
@@ -103,7 +110,7 @@ document.addEventListener('stage-activated', async (e) => {
   config.setActiveStage(stage);
   checkpoints.setActiveStage(stage);
 
-  if (stage === 2 || stage === 4 || stage === 5) {
+  if (stage === 2 || stage === 4 || stage === 5 || stage === 6) {
     if (preview._stages?.[stage]?.initialized) {
       preview.activateStage(stage);
     }
@@ -144,6 +151,7 @@ config.onObjectSelected = async (objectName) => {
     cameraOverlay.remove();
     sam2.deactivate();
     sam2Verify.hide();
+    postTextureCleanupReview.reset();
     preview.reset();
     pipelineUI.reset();
     taskConfirm.resetBars();
@@ -289,7 +297,10 @@ ws.on('stage_complete', async (msg) => {
     await preview.loadGallery(_extractedFrameCount);
   } else if (msg.stage === 2) {
     await preview.loadColmapResults(cameraOverlay);
-  } else if (msg.stage === 4 || msg.stage === 5) {
+  } else if (msg.stage === 4 || msg.stage === 5 || msg.stage === 6) {
+    if (msg.stage === 6) {
+      postTextureCleanupReview.markCompleted();
+    }
     await preview.loadStageResult(msg.stage);
   }
 });
@@ -341,6 +352,15 @@ ws.on('colmap_preview_ready', () => {
   stageCtrl.setStageState(2, 'interactive');
   stageCtrl.activateStage(2);
   appendLog('stdout', 'COLMAP SfM complete. Review the 3D preview, then confirm on Stage 2.\n', { stage: 2 });
+});
+
+ws.on('post_texture_cleanup_review_ready', async (msg) => {
+  checkpoints.onStageInteractive(6, 'Waiting for cleanup review', 's6.review');
+  pipelineUI.stageInteractive(6);
+  stageCtrl.setStageState(6, 'interactive');
+  stageCtrl.activateStage(6);
+  await postTextureCleanupReview.showProposal(msg.proposal || null);
+  appendLog('stdout', 'Post-texture cleanup proposal ready. Review the overlay and choose Apply or Skip.\n', { stage: 6 });
 });
 
 ws.on('next_stage_confirmation_required', (msg) => {
@@ -395,6 +415,7 @@ ws.on('next_stage_confirmation_cleared', (msg) => {
 
 ws.on('pipeline_complete', (msg) => {
   checkpoints.onStageComplete(STAGE_COUNT);
+  postTextureCleanupReview.hide({ keepOverlay: false });
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();
@@ -412,6 +433,7 @@ ws.on('pipeline_complete', (msg) => {
 });
 
 ws.on('pipeline_error', (msg) => {
+  postTextureCleanupReview.hide({ keepOverlay: false });
   config.setRunning(false);
   config.setActiveStage(null);
   config.refreshObjects();

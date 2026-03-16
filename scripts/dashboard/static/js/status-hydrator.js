@@ -26,12 +26,20 @@ export class StatusHydrator {
   reset() {
     this._hydratedStatusKey = '';
     this._latestStatusSnapshot = null;
+    this._deps.postTextureCleanupReview?.reset?.();
   }
 
   resetHydratedKey() { this._hydratedStatusKey = ''; }
 
   async hydrateOutputs(statusMsg, opts = {}) {
-    const { preview, cameraOverlay, sam2, sam2Verify, config, stageCtrl } = this._deps;
+    const {
+      preview,
+      cameraOverlay,
+      sam2,
+      sam2Verify,
+      stageCtrl,
+      postTextureCleanupReview,
+    } = this._deps;
     if (!statusMsg?.object_name) return;
 
     const key = buildStatusKey(statusMsg);
@@ -43,6 +51,7 @@ export class StatusHydrator {
     cameraOverlay.remove();
     sam2.deactivate();
     sam2Verify.hide();
+    postTextureCleanupReview?.reset?.();
     preview.reset();
 
     if (isStageDone(statusMsg, 1)) {
@@ -57,6 +66,7 @@ export class StatusHydrator {
 
     if (isStageDone(statusMsg, 4)) await preview.loadStageResult(4);
     if (isStageDone(statusMsg, 5)) await preview.loadStageResult(5);
+    if (isStageDone(statusMsg, 6)) await preview.loadStageResult(6);
 
     if (opts.activate !== false) {
       stageCtrl.activateStage(resolvePreferredStage(statusMsg));
@@ -67,6 +77,7 @@ export class StatusHydrator {
     const {
       checkpoints, pipelineUI, stageCtrl, config,
       taskConfirm,
+      postTextureCleanupReview,
       setStatus, setOverallProgress,
     } = this._deps;
 
@@ -81,6 +92,7 @@ export class StatusHydrator {
 
     taskConfirm.syncFromStatus(statusMsg);
     setOverallProgress(statusMsg.overall_progress ?? pipelineUI.getOverallProgress());
+    await postTextureCleanupReview?.syncFromStatus?.(statusMsg);
 
     if (statusMsg.object_name) {
       config.setObjectName(statusMsg.object_name);
@@ -110,7 +122,8 @@ export class StatusHydrator {
     config.setRunning(false);
     config.setActiveStage(null);
 
-    const allDone = [1, 2, 3, 4, 5].every((stage) => isStageDone(statusMsg, stage));
+    const allDone = Array.from({ length: STAGE_COUNT }, (_, idx) => idx + 1)
+      .every((stage) => isStageDone(statusMsg, stage));
     if (allDone) setStatus('complete', 'Done');
     else setStatus('idle', 'Idle');
 

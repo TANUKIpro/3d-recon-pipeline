@@ -83,13 +83,13 @@ class TestPipelineStageEnum(unittest.TestCase):
         for i in range(len(ordered) - 1):
             self.assertLess(ordered[i], ordered[i + 1])
 
-    def test_stage_labels_cover_stages_1_to_5(self) -> None:
-        for stage_id in range(1, 6):
+    def test_stage_labels_cover_stages_1_to_6(self) -> None:
+        for stage_id in range(1, 7):
             self.assertIn(stage_id, STAGE_LABELS, f"Stage {stage_id} missing from STAGE_LABELS")
 
     def test_stage_output_files_cover_relevant_stages(self) -> None:
-        # Stages 2, 4, 5 have output files; stage 3 uses masks dir check
-        for stage_id in (2, 4, 5):
+        # Stages 2, 4, 5, 6 have output files; stage 3 uses masks dir check
+        for stage_id in (2, 4, 5, 6):
             self.assertIn(stage_id, STAGE_OUTPUT_FILES, f"Stage {stage_id} missing from STAGE_OUTPUT_FILES")
 
 
@@ -172,11 +172,11 @@ class TestStageInfo(unittest.TestCase):
 
 
 class TestPipelineSessionInit(unittest.TestCase):
-    """Post-init creates stages 1-5 and preserves preconditions."""
+    """Post-init creates stages 1-6 and preserves preconditions."""
 
-    def test_stages_1_to_5_initialised(self) -> None:
+    def test_stages_1_to_6_initialised(self) -> None:
         session = PipelineSession()
-        for s in range(1, 6):
+        for s in range(1, 7):
             self.assertIn(s, session.stages)
             self.assertEqual(session.stages[s].status, StageStatus.PENDING)
 
@@ -432,15 +432,15 @@ class TestPipelineSessionOverallProgress(unittest.TestCase):
         self.assertAlmostEqual(self.session.overall_progress(), 0.0)
 
     def test_all_complete(self) -> None:
-        for s in range(1, 6):
+        for s in range(1, 7):
             self.session.stages[s].progress = 100.0
         self.assertAlmostEqual(self.session.overall_progress(), 100.0)
 
     def test_mixed_progress(self) -> None:
-        # Stages 1-2 at 100%, 3-5 at 0% => 200/5 = 40.0
+        # Stages 1-2 at 100%, 3-6 at 0% => 200/6 = 33.3
         for s in range(1, 3):
             self.session.stages[s].progress = 100.0
-        self.assertAlmostEqual(self.session.overall_progress(), 40.0)
+        self.assertAlmostEqual(self.session.overall_progress(), 33.3)
 
 
 # ---------------------------------------- PipelineSession status dict ---
@@ -502,7 +502,7 @@ class TestDetectStageOutputs(unittest.TestCase):
     def test_empty_directory(self) -> None:
         with TemporaryDirectory() as tmp:
             stages, fc, mc = detect_stage_outputs(tmp)
-            for stage_id in range(1, 6):
+            for stage_id in range(1, 7):
                 self.assertFalse(stages[stage_id], f"Stage {stage_id} should be False")
             self.assertEqual(fc, 0)
             self.assertEqual(mc, 0)

@@ -34,6 +34,7 @@ export function resolvePreferredStage(statusMsg) {
 export function buildStatusKey(statusMsg) {
   const objectName = statusMsg?.object_name || '';
   const next = statusMsg?.next_stage_confirmation || {};
+  const cleanupProposal = statusMsg?.cleanup_proposal_path || '';
   const stageState = [];
   for (let i = 1; i <= STAGE_COUNT; i++) {
     const info = getStageInfo(statusMsg, i);
@@ -45,6 +46,7 @@ export function buildStatusKey(statusMsg) {
     next.required ? 'wait' : 'idle',
     next.from_stage || '',
     next.to_stage || '',
+    cleanupProposal,
   ].join('|');
 }
 

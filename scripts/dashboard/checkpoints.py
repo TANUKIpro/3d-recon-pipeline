@@ -157,6 +157,25 @@ _CHECKPOINTS: dict[int, Any] = {
             cleanup_files=("textured_mesh.obj", "textured_mesh.mtl", "texture.png"),
         ),
     ),
+    6: (
+        _checkpoint(
+            "s6.proposal",
+            label="Generate cleanup proposal",
+            patterns=_patterns(r"loading textured mesh|scoring cleanup proposal|cleanup proposal ready"),
+        ),
+        _checkpoint(
+            "s6.review",
+            label="Wait for cleanup review",
+            patterns=_patterns(r"waiting for cleanup review decision|cleanup review ready"),
+        ),
+        _checkpoint(
+            "s6.apply",
+            label="Apply cleanup decision",
+            patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped"),
+            cleanup_dirs=("post_texture_contact_cleanup",),
+            cleanup_files=("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+        ),
+    ),
 }
 
 _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
@@ -168,6 +187,10 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
     },
     4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    6: {
+        "dirs": ("post_texture_contact_cleanup",),
+        "files": ("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+    },
 }
 
 

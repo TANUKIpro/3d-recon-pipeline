@@ -25,6 +25,7 @@ from scripts.config_defaults import (
     GS2MESH_TSDF_VOXEL_SIZE,
     GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
+    POST_TEXTURE_CLEANUP_ENABLED,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
@@ -48,7 +49,8 @@ class PipelineStage(IntEnum):
     SAM2_SEGMENT = 3
     GS2MESH_RECONSTRUCT = 4
     TEXTURE_BAKE = 5
-    COMPLETE = 6
+    POST_TEXTURE_CONTACT_CLEANUP = 6
+    COMPLETE = 7
 
 
 STAGE_LABELS: dict[int, str] = {
@@ -57,6 +59,7 @@ STAGE_LABELS: dict[int, str] = {
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
     PipelineStage.GS2MESH_RECONSTRUCT: "gs2mesh Reconstruction",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
+    PipelineStage.POST_TEXTURE_CONTACT_CLEANUP: "PostTextureContactCleanup",
 }
 
 STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
@@ -64,6 +67,7 @@ STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
     3: (),  # masks dir checked separately
     4: ("object_mesh.ply",),
     5: ("textured_mesh.obj",),
+    6: ("textured_mesh_cleaned.obj",),
 }
 
 
@@ -78,6 +82,7 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
     frame_count = _count_indexed_files(out / "frames", ".jpg")
     mask_count = _count_indexed_files(out / "masks", ".png")
     textured_ready = (out / "textured_mesh.obj").is_file()
+    cleaned_ready = (out / "textured_mesh_cleaned.obj").is_file()
     colmap_sparse_dir = out / "colmap_sparse"
     stage_complete = {
         1: frame_count > 0,
@@ -85,6 +90,7 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
         3: mask_count > 0,
         4: (out / "object_mesh.ply").is_file(),
         5: textured_ready,
+        6: cleaned_ready,
     }
     return stage_complete, frame_count, mask_count
 
@@ -111,6 +117,7 @@ class PipelineConfig:
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
+    post_texture_cleanup_enabled: bool = POST_TEXTURE_CLEANUP_ENABLED
     ground_plane_enabled: bool = GROUND_PLANE_ENABLED
     auto_accept: bool = False
 
@@ -163,6 +170,8 @@ class PipelineSession:
     sam2_width: int = 0
     sam2_height: int = 0
     sam2_ground_skip_event: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_review_event: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_decision: str | None = None
 
     # Global stage-to-stage approval
     next_stage_confirm_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -186,12 +195,14 @@ class PipelineSession:
     poses_path: str | None = None
     mesh_ply: str | None = None
     obj_path: str | None = None
+    cleaned_obj_path: str | None = None
+    cleanup_proposal_path: str | None = None
     frame_count: int = 0
     mask_count: int = 0
 
     def __post_init__(self) -> None:
         if not self.stages:
-            for s in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
+            for s in range(1, int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP) + 1):
                 self.stages[s] = StageInfo()
 
     def reset(self) -> None:
@@ -207,6 +218,8 @@ class PipelineSession:
         self.sam2_approve_event = asyncio.Event()
         self.sam2_approved = False
         self.sam2_ground_skip_event = asyncio.Event()
+        self.cleanup_review_event = asyncio.Event()
+        self.cleanup_decision = None
         self.next_stage_confirm_event = asyncio.Event()
         self.next_stage_confirmation_required = False
         self.next_stage_confirmation_from = None
@@ -225,6 +238,8 @@ class PipelineSession:
         self.poses_path = None
         self.mesh_ply = None
         self.obj_path = None
+        self.cleaned_obj_path = None
+        self.cleanup_proposal_path = None
         self.frame_count = 0
         self.mask_count = 0
         for s in self.stages.values():
@@ -254,8 +269,15 @@ class PipelineSession:
         base_mesh = out / "object_mesh.ply"
         self.mesh_ply = str(base_mesh) if base_mesh.is_file() else None
         self.obj_path = str(out / "textured_mesh.obj") if (out / "textured_mesh.obj").is_file() else None
+        self.cleaned_obj_path = (
+            str(out / "textured_mesh_cleaned.obj")
+            if (out / "textured_mesh_cleaned.obj").is_file()
+            else None
+        )
+        cleanup_proposal = out / "post_texture_contact_cleanup" / "proposal.json"
+        self.cleanup_proposal_path = str(cleanup_proposal) if cleanup_proposal.is_file() else None
 
-        for stage_id in range(1, int(PipelineStage.TEXTURE_BAKE) + 1):
+        for stage_id in range(1, int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP) + 1):
             info = self.stages[stage_id]
             info.start_time = None
             info.elapsed = None
@@ -270,7 +292,7 @@ class PipelineSession:
                 info.progress = 0.0
 
         completed = [stage_id for stage_id, ok in stage_complete.items() if ok]
-        if len(completed) == int(PipelineStage.TEXTURE_BAKE):
+        if len(completed) == int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
             self.current_stage = PipelineStage.COMPLETE
         elif completed:
             self.current_stage = PipelineStage(max(completed))
@@ -291,6 +313,8 @@ class PipelineSession:
         self.sam2_width = 0
         self.sam2_height = 0
         self.sam2_ground_skip_event = asyncio.Event()
+        self.cleanup_review_event = asyncio.Event()
+        self.cleanup_decision = None
         self.next_stage_confirmation_required = False
         self.next_stage_confirmation_from = None
         self.next_stage_confirmation_to = None
@@ -406,7 +430,7 @@ class PipelineSession:
 
     def overall_progress(self) -> float:
         total = 0.0
-        stage_count = int(PipelineStage.TEXTURE_BAKE)
+        stage_count = int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP)
         for stage_id in range(1, stage_count + 1):
             total += self.stages[stage_id].progress
         return round(total / float(stage_count), 1)
@@ -447,6 +471,7 @@ class PipelineSession:
                 for k, v in self.stages.items()
             },
             "has_ground_plane": self.ground_plane_path is not None,
+            "cleanup_proposal_path": self.cleanup_proposal_path,
             "auto_accept": self.config.auto_accept,
             "overall_progress": self.overall_progress(),
         }

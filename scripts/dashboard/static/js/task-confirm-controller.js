@@ -145,7 +145,7 @@ export class TaskConfirmController {
         this.setState(stage, 'idle', defaultTaskConfirmIdleMessage(stage));
       }
     }
-    this.setState(8, 'final', 'Final stage. No next-stage confirmation.');
+    this.setState(STAGE_COUNT, 'final', 'Final stage. No next-stage confirmation.');
     this.setVisibleStage(resumeStage);
   }
 
@@ -198,10 +198,10 @@ export class TaskConfirmController {
       this.setState(stage, 'idle', this.resolveIdleMessage(statusMsg, stage));
     }
 
-    if (isStageDone(statusMsg, 8)) {
-      this.setState(8, 'final', 'Final stage complete. No next-stage confirmation.');
+    if (isStageDone(statusMsg, STAGE_COUNT)) {
+      this.setState(STAGE_COUNT, 'final', 'Final stage complete. No next-stage confirmation.');
     } else {
-      this.setState(8, 'final', 'Final stage. No next-stage confirmation.');
+      this.setState(STAGE_COUNT, 'final', 'Final stage. No next-stage confirmation.');
     }
     this.setVisibleStage(resolvePreferredStage(statusMsg));
   }

@@ -20,6 +20,7 @@ from scripts.config_defaults import (
     GS2MESH_TSDF_VOXEL_SIZE,
     GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
+    POST_TEXTURE_CLEANUP_ENABLED,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
@@ -140,6 +141,10 @@ def build_pipeline_config(
         texture_quality_boost=parse_bool(
             raw.get("texture_quality_boost"),
             env_bool("TEXTURE_QUALITY_BOOST", TEXTURE_QUALITY_BOOST, env_map),
+        ),
+        post_texture_cleanup_enabled=parse_bool(
+            raw.get("post_texture_cleanup_enabled"),
+            env_bool("POST_TEXTURE_CLEANUP_ENABLED", POST_TEXTURE_CLEANUP_ENABLED, env_map),
         ),
         ground_plane_enabled=parse_bool(
             raw.get("ground_plane_enabled"),

@@ -1,12 +1,13 @@
 /**
  * Configuration panel: video/object selection and parameter inputs.
  *
- * 5-stage gs2mesh pipeline:
+ * 6-stage gs2mesh pipeline:
  *   1. Extract Frames
  *   2. COLMAP SfM
  *   3. SAM2 Segmentation
  *   4. gs2mesh Reconstruction
  *   5. Texture Bake
+ *   6. Post-texture Cleanup
  */
 
 import { NEW_OBJECT_VALUE, STAGE_LABELS } from './config/presets.js';
@@ -56,6 +57,9 @@ export class ConfigPanel {
       texture_size: document.getElementById('cfg-texture-size'),
       texture_view_assign_mode: document.getElementById('cfg-texture-view-assign-mode'),
       texture_quality_boost: document.getElementById('cfg-texture-quality-boost'),
+
+      // Stage 6: Post-texture Cleanup
+      post_texture_cleanup_enabled: document.getElementById('cfg-post-texture-cleanup-enabled'),
     };
 
     this.onStart = null;  // callback(config)
@@ -188,6 +192,9 @@ export class ConfigPanel {
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
       texture_view_assign_mode: this._inputs.texture_view_assign_mode?.value || 'legacy',
       texture_quality_boost: Boolean(this._inputs.texture_quality_boost?.checked),
+
+      // Stage 6: Post-texture Cleanup
+      post_texture_cleanup_enabled: this._inputs.post_texture_cleanup_enabled?.checked ?? true,
     };
   }
 
@@ -322,7 +329,7 @@ export class ConfigPanel {
     for (const o of objects) {
       const opt = document.createElement('option');
       opt.value = o.name;
-      opt.textContent = `${o.name} (${o.complete_stages || 0}/5)`;
+      opt.textContent = `${o.name} (${o.complete_stages || 0}/6)`;
       this._objectSelect.appendChild(opt);
     }
   }
@@ -393,7 +400,7 @@ export class ConfigPanel {
   _renderObjectSummary(object, fallbackName = '') {
     if (object) {
       const details = [
-        `${object.complete_stages || 0}/5 stages`,
+        `${object.complete_stages || 0}/6 stages`,
         `${object.file_count || 0} files`,
         `${this._formatSize(object.size_mb)}`,
       ];
@@ -567,6 +574,9 @@ export class ConfigPanel {
     }
     if (cfg.texture_quality_boost != null && this._inputs.texture_quality_boost) {
       this._inputs.texture_quality_boost.checked = Boolean(cfg.texture_quality_boost);
+    }
+    if (cfg.post_texture_cleanup_enabled != null && this._inputs.post_texture_cleanup_enabled) {
+      this._inputs.post_texture_cleanup_enabled.checked = cfg.post_texture_cleanup_enabled !== false;
     }
 
     this._maxFramesAuto = false;

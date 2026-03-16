@@ -7,7 +7,7 @@
 
 export class StageController {
   constructor() {
-    this._stageCount = 5;
+    this._stageCount = 6;
     this._panels = {};
     this._pills = {};
     this._activeStage = 1; // Default to Extract Frames panel

@@ -10,4 +10,5 @@ export const STAGE_LABELS = {
   3: 'SAM2',
   4: 'gs2mesh',
   5: 'Texture Bake',
+  6: 'Post Cleanup',
 };

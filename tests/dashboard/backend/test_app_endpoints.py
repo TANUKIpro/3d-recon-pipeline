@@ -31,6 +31,8 @@ from scripts.dashboard.app import (
     preview_object_file,
     preview_outputs,
     preview_crop_obb,
+    post_texture_cleanup_confirm,
+    post_texture_cleanup_proposal,
     pipeline_status,
     sam2_approve,
     sam2_clear,
@@ -53,6 +55,7 @@ from scripts.dashboard.app import (
     _shutdown,
     _active_output_dir,
 )
+from scripts.dashboard.state import PipelineStage
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -197,6 +200,60 @@ class TestPipelineStatusEndpoint(unittest.IsolatedAsyncioTestCase):
         self.assertIn("running", payload)
         self.assertIn("stages", payload)
         self.assertIn("overall_progress", payload)
+
+
+class TestPostTextureCleanupEndpoints(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self._snapshot = {
+            "running": session.running,
+            "current_stage": session.current_stage,
+            "cleanup_review_event": session.cleanup_review_event,
+            "cleanup_decision": session.cleanup_decision,
+            "cleanup_proposal_path": session.cleanup_proposal_path,
+            "output_dir": session.config.output_dir,
+        }
+        proposal_dir = Path(self.tmpdir.name) / "post_texture_contact_cleanup"
+        proposal_dir.mkdir(parents=True, exist_ok=True)
+        self.proposal_path = proposal_dir / "proposal.json"
+        self.proposal_path.write_text(
+            json.dumps({"status": "proposal_ready", "recommended_decision": "apply"}),
+            encoding="utf-8",
+        )
+        session.config.output_dir = self.tmpdir.name
+        session.cleanup_proposal_path = str(self.proposal_path)
+        session.cleanup_review_event = asyncio.Event()
+        session.cleanup_decision = None
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.current_stage = self._snapshot["current_stage"]
+        session.cleanup_review_event = self._snapshot["cleanup_review_event"]
+        session.cleanup_decision = self._snapshot["cleanup_decision"]
+        session.cleanup_proposal_path = self._snapshot["cleanup_proposal_path"]
+        session.config.output_dir = self._snapshot["output_dir"]
+        self.tmpdir.cleanup()
+
+    async def test_get_proposal_returns_payload(self) -> None:
+        response = await post_texture_cleanup_proposal()
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["proposal"]["recommended_decision"], "apply")
+
+    async def test_confirm_requires_running_pipeline(self) -> None:
+        session.running = False
+        response = await post_texture_cleanup_confirm({"decision": "apply"})
+        self.assertEqual(response.status_code, 409)
+
+    async def test_confirm_sets_decision_and_event(self) -> None:
+        session.running = True
+        session.current_stage = PipelineStage.POST_TEXTURE_CONTACT_CLEANUP
+        response = await post_texture_cleanup_confirm({"decision": "skip"})
+        self.assertEqual(response.status_code, 200)
+        payload = _json_payload(response)
+        self.assertEqual(payload["decision"], "skip")
+        self.assertEqual(session.cleanup_decision, "skip")
+        self.assertTrue(session.cleanup_review_event.is_set())
 
 
 # ── Pipeline cancel endpoint ─────────────────────────────────────

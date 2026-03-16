@@ -73,6 +73,13 @@
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
+    <div class="stage-connector stage-connector-main"></div>
+    <div class="stage-pill" data-stage="6">
+      <span class="stage-dot"></span>
+      <span class="stage-label" data-i18n="stage.post_cleanup">Post Cleanup</span>
+      <span class="stage-progress">0%</span>
+      <span class="stage-time"></span>
+    </div>
   </nav>
 
   <!-- Main Content -->
@@ -153,6 +160,29 @@
         <div id="three-container-5" class="three-container"></div>
       </div>
 
+      <!-- Stage 6: Post-texture Cleanup -->
+      <div id="stage-panel-6" class="stage-panel">
+        <div class="stage-panel-empty" id="stage-6-empty">
+          <p>Cleaned textured mesh will appear here after Post Cleanup completes.</p>
+        </div>
+        <div id="post-texture-cleanup-review" class="hidden">
+          <div class="sam2-verification-header">
+            <span>Post-texture cleanup review</span>
+            <div class="sam2-verification-actions">
+              <button id="post-cleanup-skip" class="btn-danger btn-small">Skip Cleanup</button>
+              <button id="post-cleanup-apply" class="btn-primary btn-small">Apply Cleanup</button>
+            </div>
+          </div>
+          <div class="config-note" id="post-cleanup-review-summary"></div>
+          <div class="config-note" id="post-cleanup-review-stats"></div>
+          <label class="checkbox-label" for="post-cleanup-overlay-toggle">
+            <input type="checkbox" id="post-cleanup-overlay-toggle" checked>
+            Show candidate overlay
+          </label>
+        </div>
+        <div id="three-container-6" class="three-container"></div>
+      </div>
+
       <div id="task-confirm-dock">
         <div class="task-confirm-bar idle is-visible" data-stage="1" aria-live="polite">
           <span class="task-confirm-message">Stage 1 confirmation will appear after completion.</span>
@@ -170,7 +200,11 @@
           <span class="task-confirm-message">Stage 4 confirmation will appear after completion.</span>
           <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
         </div>
-        <div class="task-confirm-bar task-confirm-final" data-stage="5" aria-live="polite">
+        <div class="task-confirm-bar idle" data-stage="5" aria-live="polite">
+          <span class="task-confirm-message">Stage 5 confirmation will appear after completion.</span>
+          <button class="task-confirm-btn btn-primary btn-small" disabled>Continue</button>
+        </div>
+        <div class="task-confirm-bar task-confirm-final" data-stage="6" aria-live="polite">
           <span class="task-confirm-message">Final stage. No next-stage confirmation.</span>
           <button class="task-confirm-btn btn-small" disabled>Done</button>
         </div>
@@ -333,6 +367,17 @@
               <input type="checkbox" id="cfg-texture-quality-boost" checked>
               High Quality Region Refinement
             </label>
+          </div>
+        </div>
+
+        <!-- Stage 6: Post-texture Cleanup -->
+        <div class="config-section" data-stages="6">
+          <div class="form-group">
+            <label class="checkbox-label" for="cfg-post-texture-cleanup-enabled">
+              <input type="checkbox" id="cfg-post-texture-cleanup-enabled" checked>
+              Enable Post-texture Cleanup
+            </label>
+            <div class="config-note">Generate a ground-contact cleanup proposal after texture baking and review it before applying.</div>
           </div>
         </div>
 

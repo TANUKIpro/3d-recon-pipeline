@@ -68,6 +68,18 @@ TEXTURE_SHARPEN = 0.15
 TEXTURE_BLEND_TOPK = 3
 TEXTURE_BLEND_HARD_RATIO = 2.0
 
+# --- Stage 6: PostTextureContactCleanup -------------------
+POST_TEXTURE_CLEANUP_ENABLED = True
+
+# --- Shared Repair Defaults -------------------------------
+# Contact-hole repair helpers are reused by post-texture cleanup.
+# Keep these defaults available for backward compatibility even though the
+# original standalone repair stage is no longer part of the main pipeline.
+REPAIR_ENABLED = True
+REPAIR_MAX_DIAMETER_RATIO = 0.46
+REPAIR_Y_BAND_RATIO = 0.06
+REPAIR_SMOOTH_ITERS = 3
+
 # --- Infrastructure (user-facing) -------------------------
 OUTPUT_DIR_DEFAULT = "/data/output"
 
@@ -100,6 +112,13 @@ _TEXTURE_MEM_FALLBACK_MB = 4096.0
 
 # --- VRAM Management -------------------------------------
 _VRAM_GATE_MIN_FREE_MB = 12_000
+
+# --- Shared Repair Internals ------------------------------
+_REPAIR_SMOOTH_LAMBDA = 0.18
+_REPAIR_MIN_DOWNWARD_NORMAL_Y = 0.25
+_REPAIR_MIN_LOOP_VERTICES = 4
+_REPAIR_GROUND_SECTION_MIN_AREA_RATIO = 1e-3
+_REPAIR_GROUND_SECTION_START_QUANTILE = 0.75
 
 # --- Infrastructure --------------------------------------
 _LOG_QUEUE_MAXSIZE = 4096

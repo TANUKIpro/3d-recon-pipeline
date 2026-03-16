@@ -8,10 +8,6 @@ from per-stage wiring.
 
 from __future__ import annotations
 
-from scripts.dashboard.log_capture import stage_log_scope
-from scripts.dashboard.state import PipelineStage
-
-
 def _stage_extract_frames(
     video_path: str,
     output_dir: str,
@@ -119,6 +115,92 @@ def _stage_texture_bake(
         view_assign_mode=texture_view_assign_mode,
         quality_boost=texture_quality_boost,
         progress_cb=progress_cb,
+    )
+
+
+def _stage_extract_ground_plane(
+    mesh_ply: str,
+    ground_mask_dir: str,
+    output_dir: str,
+    poses_path: str,
+    intrinsics_path: str,
+    object_mask_dir: str | None = None,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> dict | None:
+    del register_process, unregister_process
+    from scripts.ground_plane_extraction import extract_ground_plane_from_mesh
+    return extract_ground_plane_from_mesh(
+        mesh_ply,
+        ground_mask_dir,
+        output_dir,
+        poses_path,
+        intrinsics_path,
+        object_mask_dir=object_mask_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
+
+
+def _stage_post_texture_contact_cleanup_prepare(
+    textured_obj: str,
+    output_dir: str,
+    poses_path: str | None = None,
+    intrinsics_path: str | None = None,
+    masks_dir: str | None = None,
+    ground_masks_dir: str | None = None,
+    ground_plane_path: str | None = None,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> dict:
+    del register_process, unregister_process
+    from scripts.stage_post_texture_contact_cleanup import prepare_cleanup_review
+    return prepare_cleanup_review(
+        textured_obj,
+        output_dir,
+        poses_path=poses_path,
+        intrinsics_path=intrinsics_path,
+        masks_dir=masks_dir,
+        ground_masks_dir=ground_masks_dir,
+        ground_plane_path=ground_plane_path,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
+
+
+def _stage_post_texture_contact_cleanup_apply(
+    output_dir: str,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> str:
+    del register_process, unregister_process
+    from scripts.stage_post_texture_contact_cleanup import apply_cleanup_proposal
+    return apply_cleanup_proposal(
+        output_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
+    )
+
+
+def _stage_post_texture_contact_cleanup_skip(
+    output_dir: str,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> str:
+    del register_process, unregister_process
+    from scripts.stage_post_texture_contact_cleanup import copy_stage5_as_cleaned
+    return copy_stage5_as_cleaned(
+        output_dir,
+        progress_cb=progress_cb,
+        cancel_cb=cancel_cb,
     )
 
 
