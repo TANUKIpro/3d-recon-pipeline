@@ -48,6 +48,10 @@ _MASK_NEAR_PLANE_RATIO = 2.0
 _COMPONENT_MIN_FACE_RATIO = 0.02
 _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD = 0.7
 _NEAR_PLANE_MIN_BBOX_RATIO = 0.005
+_NEIGHBOR_REMOVAL_RATIO_THRESHOLD = 0.6
+_CONVERGENCE_MAX_ITERATIONS = 3
+_ISLAND_FACE_RATIO = 0.1
+_ISLAND_GAP_RATIO = 0.02
 
 
 @dataclass(frozen=True)
@@ -581,6 +585,7 @@ def _filter_small_components(
     keep_merged_mask: np.ndarray,
     merged_faces: np.ndarray,
     min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+    adjacency: list[np.ndarray] | None = None,
 ) -> dict[str, Any]:
     """Remove small connected components from the kept face set (in-place).
 
@@ -589,7 +594,8 @@ def _filter_small_components(
     whose face count is below ``min_face_ratio * kept_count`` are marked as
     removed in *keep_merged_mask*.
     """
-    adjacency = _build_face_adjacency(merged_faces)
+    if adjacency is None:
+        adjacency = _build_face_adjacency(merged_faces)
     kept_indices = np.where(keep_merged_mask)[0]
     if len(kept_indices) == 0:
         return {"applied": False, "total_components": 0, "removed_components": 0,
@@ -637,6 +643,294 @@ def _filter_small_components(
     }
 
 
+# ---------------------------------------------------------------------------
+# Multi-pass cleanup functions
+# ---------------------------------------------------------------------------
+
+
+def _pass_geometric_clip(
+    keep_merged_mask: np.ndarray,
+    orig_face_dist: np.ndarray,
+    adjacency: list[np.ndarray],
+    merged_faces: np.ndarray,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 1: remove faces below the ground plane and filter remnants."""
+    below_plane = ~np.all(orig_face_dist > 0.0, axis=1)
+    geometric_removed = int((keep_merged_mask & below_plane).sum())
+    keep_merged_mask[below_plane] = False
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {"geometric_removed": geometric_removed, "component_stats": component_stats}
+
+
+def _pass_mask_boundary_refinement(
+    keep_merged_mask: np.ndarray,
+    outside_ratio_arr: np.ndarray,
+    ground_ratio_arr: np.ndarray,
+    near_plane_band: np.ndarray,
+    adjacency: list[np.ndarray],
+    merged_faces: np.ndarray,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 2: refine mask boundary — remove ground faces, restore object faces."""
+    mask_removed_count = 0
+    mask_preserved_count = 0
+    for i in range(len(keep_merged_mask)):
+        if not near_plane_band[i]:
+            continue
+        score = max(float(outside_ratio_arr[i]), float(ground_ratio_arr[i]))
+        if keep_merged_mask[i] and score > _MASK_GROUND_REMOVAL_THRESHOLD:
+            keep_merged_mask[i] = False
+            mask_removed_count += 1
+        elif not keep_merged_mask[i] and score < _MASK_OBJECT_PRESERVATION_THRESHOLD:
+            keep_merged_mask[i] = True
+            mask_preserved_count += 1
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {
+        "applied": True,
+        "mask_removed_count": mask_removed_count,
+        "mask_preserved_count": mask_preserved_count,
+        "near_plane_faces": int(near_plane_band.sum()),
+        "component_stats": component_stats,
+    }
+
+
+def _pass_above_plane_noise(
+    keep_merged_mask: np.ndarray,
+    outside_ratio_arr: np.ndarray,
+    near_plane_band: np.ndarray,
+    min_face_dist: np.ndarray,
+    adjacency: list[np.ndarray],
+    merged_faces: np.ndarray,
+    threshold: float = _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 3: remove floating noise above the ground plane."""
+    above_plane_candidates = (
+        keep_merged_mask
+        & ~near_plane_band
+        & (min_face_dist > 0.0)
+        & (outside_ratio_arr > threshold)
+    )
+    above_plane_removed = int(above_plane_candidates.sum())
+    keep_merged_mask[above_plane_candidates] = False
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {
+        "applied": True,
+        "above_plane_removed": above_plane_removed,
+        "threshold": threshold,
+        "component_stats": component_stats,
+    }
+
+
+def _pass_neighbor_erosion(
+    keep_merged_mask: np.ndarray,
+    adjacency: list[np.ndarray],
+    merged_faces: np.ndarray,
+    removal_ratio_threshold: float = _NEIGHBOR_REMOVAL_RATIO_THRESHOLD,
+    max_iterations: int = _CONVERGENCE_MAX_ITERATIONS,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 4: erode peninsulas where most neighbors are already removed.
+
+    Each iteration uses a **snapshot** of the mask so that removal decisions
+    are independent of face-index ordering, then applies all removals at once.
+    """
+    total_eroded = 0
+    iterations = 0
+    for iteration in range(max_iterations):
+        # Snapshot: evaluate every kept face against the frozen state
+        snapshot = keep_merged_mask.copy()
+        kept_indices = np.where(snapshot)[0]
+        to_erode: list[int] = []
+        for fi in kept_indices:
+            neighbors = adjacency[fi]
+            if len(neighbors) == 0:
+                continue
+            removed_ratio = np.sum(~snapshot[neighbors]) / len(neighbors)
+            if removed_ratio > removal_ratio_threshold:
+                to_erode.append(fi)
+        # Batch apply
+        if to_erode:
+            keep_merged_mask[to_erode] = False
+        total_eroded += len(to_erode)
+        iterations = iteration + 1
+        if len(to_erode) == 0:
+            break
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {
+        "total_eroded": total_eroded,
+        "iterations": iterations,
+        "component_stats": component_stats,
+    }
+
+
+def _pass_floating_island_removal(
+    keep_merged_mask: np.ndarray,
+    merged_vertices: np.ndarray,
+    merged_faces: np.ndarray,
+    adjacency: list[np.ndarray],
+    island_face_ratio: float = _ISLAND_FACE_RATIO,
+    gap_ratio: float = _ISLAND_GAP_RATIO,
+) -> dict[str, Any]:
+    """Pass 5: remove floating islands far from the main body.
+
+    Two removal criteria (OR):
+    - **Spatial**: component vertices are all farther than
+      ``gap_ratio * bbox_diagonal`` from the main body's bounding box.
+    - **Size**: component has fewer than ``island_face_ratio`` of the
+      largest component's face count.
+    """
+    kept_indices = np.where(keep_merged_mask)[0]
+    if len(kept_indices) == 0:
+        return {"removed_islands": 0, "removed_faces": 0}
+
+    # BFS — enumerate connected components among kept faces
+    kept_set = set(kept_indices.tolist())
+    visited: set[int] = set()
+    components: list[list[int]] = []
+
+    for start in kept_indices:
+        si = int(start)
+        if si in visited:
+            continue
+        queue = [si]
+        visited.add(si)
+        comp: list[int] = []
+        while queue:
+            node = queue.pop()
+            comp.append(node)
+            for nb in adjacency[node]:
+                nbi = int(nb)
+                if nbi not in visited and nbi in kept_set:
+                    visited.add(nbi)
+                    queue.append(nbi)
+        components.append(comp)
+
+    if len(components) <= 1:
+        return {"removed_islands": 0, "removed_faces": 0}
+
+    # Identify main body (largest component)
+    largest_comp = max(components, key=len)
+    largest_id = id(largest_comp)
+    min_faces = max(1, int(island_face_ratio * len(largest_comp)))
+
+    # Main body bounding box
+    main_vert_idx = np.unique(merged_faces[np.array(largest_comp, dtype=np.int64)].ravel())
+    main_verts = merged_vertices[main_vert_idx]
+    main_bbox_min = main_verts.min(axis=0)
+    main_bbox_max = main_verts.max(axis=0)
+    bbox_diag = float(np.linalg.norm(main_bbox_max - main_bbox_min))
+    gap_threshold = gap_ratio * bbox_diag
+
+    removed_islands = 0
+    removed_faces = 0
+
+    for comp in components:
+        if id(comp) == largest_id:
+            continue
+
+        # Size criterion — small relative to main body
+        is_small = len(comp) < min_faces
+
+        # Spatial criterion — min vertex-to-bbox distance
+        comp_vert_idx = np.unique(merged_faces[np.array(comp, dtype=np.int64)].ravel())
+        comp_verts = merged_vertices[comp_vert_idx]
+        clamped = np.clip(comp_verts, main_bbox_min, main_bbox_max)
+        dists = np.linalg.norm(comp_verts - clamped, axis=1)
+        min_dist = float(dists.min())
+        is_distant = min_dist > gap_threshold
+
+        if is_small or is_distant:
+            for fi in comp:
+                keep_merged_mask[fi] = False
+            removed_islands += 1
+            removed_faces += len(comp)
+
+    return {"removed_islands": removed_islands, "removed_faces": removed_faces}
+
+
+def _aggregate_pass_stats(
+    pass1: dict[str, Any],
+    pass2: dict[str, Any],
+    pass3: dict[str, Any],
+    pass4: dict[str, Any],
+    pass5: dict[str, Any],
+    outside_ratio_arr: np.ndarray | None,
+    ground_ratio_arr: np.ndarray | None,
+    keep_merged_mask: np.ndarray,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Aggregate per-pass statistics into the structures expected by _proposal_payload."""
+    all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass4)]
+    total_component_removed = (
+        sum(c.get("removed_faces", 0) for c in all_comp)
+        + pass5.get("removed_faces", 0)
+    )
+    total_component_removed_components = (
+        sum(c.get("removed_components", 0) for c in all_comp)
+        + pass5.get("removed_islands", 0)
+    )
+    component_stats: dict[str, Any] = {
+        "applied": any(c.get("applied", False) for c in all_comp) or pass5.get("removed_islands", 0) > 0,
+        "total_components": max((c.get("total_components", 0) for c in all_comp), default=0),
+        "removed_components": total_component_removed_components,
+        "removed_faces": total_component_removed,
+        "largest_component_faces": max(
+            (c.get("largest_component_faces", 0) for c in all_comp), default=0,
+        ),
+    }
+
+    mask_filtering_stats: dict[str, Any]
+    if pass2.get("applied") or pass3.get("applied"):
+        combined_scores: np.ndarray | None = None
+        if outside_ratio_arr is not None and ground_ratio_arr is not None:
+            combined_scores = np.maximum(outside_ratio_arr, ground_ratio_arr)
+        mask_filtering_stats = {
+            "applied": True,
+            "mask_removed_count": pass2.get("mask_removed_count", 0),
+            "mask_preserved_count": pass2.get("mask_preserved_count", 0),
+            "near_plane_faces": pass2.get("near_plane_faces", 0),
+            "avg_ground_score_removed": (
+                round(float(combined_scores[~keep_merged_mask].mean()), 4)
+                if combined_scores is not None and np.any(~keep_merged_mask) else None
+            ),
+            "above_plane_filtering": {
+                "removed_count": pass3.get("above_plane_removed", 0),
+                "threshold": pass3.get("threshold", _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD),
+            },
+            "component_filtering": component_stats,
+            "neighbor_erosion": {
+                "total_eroded": pass4.get("total_eroded", 0),
+                "iterations": pass4.get("iterations", 0),
+            },
+            "floating_island_removal": {
+                "removed_islands": pass5.get("removed_islands", 0),
+                "removed_faces": pass5.get("removed_faces", 0),
+            },
+        }
+    else:
+        mask_filtering_stats = {"applied": False}
+        if pass5.get("removed_islands", 0) > 0:
+            mask_filtering_stats = {
+                "applied": True,
+                "floating_island_removal": {
+                    "removed_islands": pass5["removed_islands"],
+                    "removed_faces": pass5["removed_faces"],
+                },
+                "component_filtering": component_stats,
+            }
+
+    return mask_filtering_stats, component_stats
+
+
 def _analyze_cleanup(
     output_dir: str | Path,
     *,
@@ -675,14 +969,12 @@ def _analyze_cleanup(
         target_loop=selected_loop,
     )
 
+    # Shared data computed once
+    adjacency = _build_face_adjacency(merged_faces)
     orig_face_dist = merged_vertices[merged_faces] @ plane_normal + plane_d - float(selected_shift)
-    keep_merged_mask = np.all(orig_face_dist > 0.0, axis=1)
+    keep_merged_mask = np.ones(len(merged_faces), dtype=bool)
 
-    # Phase 1: Connected-component filtering (remove tiny fragments)
-    component_stats = _filter_small_components(keep_merged_mask, merged_faces)
-
-    # Mask-based face filtering refinement
-    mask_filtering_stats: dict[str, Any] = {"applied": False}
+    # Mask score pre-computation (expensive, done once)
     all_centroids = merged_vertices[merged_faces].mean(axis=1)
     face_score_result = _compute_per_face_ground_score(
         all_centroids,
@@ -691,9 +983,15 @@ def _analyze_cleanup(
         masks_dir=masks_dir,
         ground_masks_dir=ground_masks_dir,
     )
+    outside_ratio_arr: np.ndarray | None = None
+    ground_ratio_arr: np.ndarray | None = None
+    near_plane_band: np.ndarray | None = None
+    min_face_dist: np.ndarray | None = None
     if face_score_result is not None:
-        outside_ratio_arr, ground_ratio_arr = face_score_result
-        if len(outside_ratio_arr) == len(keep_merged_mask):
+        _outside, _ground = face_score_result
+        if len(_outside) == len(keep_merged_mask):
+            outside_ratio_arr = _outside
+            ground_ratio_arr = _ground
             min_face_dist = orig_face_dist.min(axis=1)
             bbox_diag = float(np.linalg.norm(
                 merged_vertices.max(axis=0) - merged_vertices.min(axis=0)
@@ -704,46 +1002,57 @@ def _analyze_cleanup(
             )
             near_plane_band = np.abs(min_face_dist) < near_plane_threshold
 
-            mask_removed_count = 0
-            mask_preserved_count = 0
+    total_faces = len(merged_faces)
 
-            for i in range(len(keep_merged_mask)):
-                if not near_plane_band[i]:
-                    continue
-                score = max(float(outside_ratio_arr[i]), float(ground_ratio_arr[i]))
-                if keep_merged_mask[i] and score > _MASK_GROUND_REMOVAL_THRESHOLD:
-                    keep_merged_mask[i] = False
-                    mask_removed_count += 1
-                elif not keep_merged_mask[i] and score < _MASK_OBJECT_PRESERVATION_THRESHOLD:
-                    keep_merged_mask[i] = True
-                    mask_preserved_count += 1
+    # === Pass 1: Geometric clip (below ground plane) ===
+    pass1 = _pass_geometric_clip(
+        keep_merged_mask, orig_face_dist, adjacency, merged_faces,
+    )
+    p1_comp = pass1["component_stats"].get("removed_faces", 0)
+    print(f"  Pass 1 (geometric clip): {pass1['geometric_removed']} below-plane"
+          f" + {p1_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
-            # Phase 2: Above-plane mask filtering (remove floating noise)
-            above_plane_candidates = (
-                keep_merged_mask
-                & ~near_plane_band
-                & (min_face_dist > 0.0)
-                & (outside_ratio_arr > _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD)
-            )
-            above_plane_removed = int(above_plane_candidates.sum())
-            keep_merged_mask[above_plane_candidates] = False
+    # === Pass 2: Mask boundary refinement ===
+    pass2: dict[str, Any] = {"applied": False}
+    if outside_ratio_arr is not None and near_plane_band is not None:
+        pass2 = _pass_mask_boundary_refinement(
+            keep_merged_mask, outside_ratio_arr, ground_ratio_arr,  # type: ignore[arg-type]
+            near_plane_band, adjacency, merged_faces,
+        )
+        p2_comp = pass2["component_stats"].get("removed_faces", 0)
+        print(f"  Pass 2 (mask boundary): -{pass2['mask_removed_count']} removed"
+              f" +{pass2['mask_preserved_count']} restored"
+              f" + {p2_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
-            combined_scores = np.maximum(outside_ratio_arr, ground_ratio_arr)
-            mask_filtering_stats = {
-                "applied": True,
-                "mask_removed_count": mask_removed_count,
-                "mask_preserved_count": mask_preserved_count,
-                "near_plane_faces": int(near_plane_band.sum()),
-                "avg_ground_score_removed": (
-                    round(float(combined_scores[~keep_merged_mask].mean()), 4)
-                    if np.any(~keep_merged_mask) else None
-                ),
-                "above_plane_filtering": {
-                    "removed_count": above_plane_removed,
-                    "threshold": _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD,
-                },
-            }
-            mask_filtering_stats["component_filtering"] = component_stats
+    # === Pass 3: Above-plane noise removal ===
+    pass3: dict[str, Any] = {"applied": False}
+    if outside_ratio_arr is not None and near_plane_band is not None and min_face_dist is not None:
+        pass3 = _pass_above_plane_noise(
+            keep_merged_mask, outside_ratio_arr, near_plane_band,
+            min_face_dist, adjacency, merged_faces,
+        )
+        p3_comp = pass3["component_stats"].get("removed_faces", 0)
+        print(f"  Pass 3 (above-plane noise): {pass3['above_plane_removed']} removed"
+              f" + {p3_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
+    # === Pass 4: Neighbor erosion (peninsula removal) ===
+    pass4 = _pass_neighbor_erosion(keep_merged_mask, adjacency, merged_faces)
+    p4_comp = pass4["component_stats"].get("removed_faces", 0)
+    print(f"  Pass 4 (erosion): {pass4['total_eroded']} eroded in {pass4['iterations']} iter"
+          f" + {p4_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
+    # === Pass 5: Floating island removal ===
+    pass5 = _pass_floating_island_removal(
+        keep_merged_mask, merged_vertices, merged_faces, adjacency,
+    )
+    print(f"  Pass 5 (floating islands): {pass5['removed_islands']} islands"
+          f" ({pass5['removed_faces']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
+    # Aggregate statistics
+    mask_filtering_stats, component_stats = _aggregate_pass_stats(
+        pass1, pass2, pass3, pass4, pass5,
+        outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
+    )
 
     removed_merged_faces = merged_faces[~keep_merged_mask]
     removed_obj_face_indices = np.unique(merged_face_to_obj_face[~keep_merged_mask])
