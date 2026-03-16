@@ -237,10 +237,6 @@ def run_gs2mesh(
     if cancel_cb:
         cancel_cb()
 
-    if use_masks and mask_dir is not None:
-        _report(79.0, "Materializing SAM2 masks for TSDF")
-        _materialize_tsdf_masks(gs2mesh_output, mask_dir)
-
     # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
     _report(80.0, "GPU TSDF fusion")
 
