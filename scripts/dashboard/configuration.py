@@ -10,6 +10,7 @@ from scripts.config_defaults import (
     COLMAP_IMAGE_SIZE,
     COLMAP_MAX_FEATURES,
     COLMAP_MATCHER,
+    COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
     GS2MESH_GS_ITERATIONS,
@@ -109,6 +110,10 @@ def build_pipeline_config(
         colmap_image_size=max(
             256,
             parse_int(raw.get("colmap_image_size"), env_int("COLMAP_IMAGE_SIZE", COLMAP_IMAGE_SIZE, env_map)),
+        ),
+        colmap_use_gpu=parse_bool(
+            raw.get("colmap_use_gpu"),
+            env_bool("COLMAP_USE_GPU", COLMAP_USE_GPU, env_map),
         ),
         gs2mesh_gs_iterations=max(
             1000,

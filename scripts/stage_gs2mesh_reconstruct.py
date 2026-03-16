@@ -69,7 +69,7 @@ def run_gs2mesh(
     colmap_sparse_dir: str,
     mask_dir: str | None,
     output_dir: str,
-    gs_iterations: int = 30000,
+    gs_iterations: int = 5000,
     runtime_profile: str = GS2MESH_RUNTIME_PROFILE,
     stereo_model: str = "DLNR_Middlebury",
     tsdf_voxel_size: float = 0.005,

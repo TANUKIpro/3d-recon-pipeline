@@ -21,9 +21,10 @@ EXTRACT_FRAME_INTERVAL = 10
 EXTRACT_MAX_FRAMES = 50
 
 # --- Stage 2: COLMAP SfM -----------------------------------
-COLMAP_MATCHER = "sequential"
+COLMAP_MATCHER = "exhaustive"
 COLMAP_MAX_FEATURES = 8192
 COLMAP_IMAGE_SIZE = 1024
+COLMAP_USE_GPU = False
 
 # --- Stage 3: SAM2 ----------------------------------------
 SAM2_DEFAULT_MODEL = "large"
@@ -47,7 +48,7 @@ SAM2_MODEL_CONFIGS: dict[str, dict[str, str]] = {
 }
 
 # --- Stage 4: gs2mesh Reconstruction -----------------------
-GS2MESH_GS_ITERATIONS = 30000
+GS2MESH_GS_ITERATIONS = 5000
 GS2MESH_RUNTIME_PROFILE = "auto"
 GS2MESH_RUNTIME_PROFILES: set[str] = {"auto", "compat"}
 GS2MESH_STEREO_MODEL = "DLNR_Middlebury"

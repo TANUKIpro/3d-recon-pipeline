@@ -19,6 +19,7 @@ def run_colmap_sfm(
     matcher: str = "sequential",
     max_features: int = 8192,
     image_size: int = 1024,
+    use_gpu: bool = False,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -75,7 +76,7 @@ def run_colmap_sfm(
         "--ImageReader.single_camera", "1",
         "--SiftExtraction.max_num_features", str(max_features),
         "--SiftExtraction.max_image_size", str(image_size),
-        "--SiftExtraction.use_gpu", "0",
+        "--SiftExtraction.use_gpu", "1" if use_gpu else "0",
     ], "feature_extractor")
 
     if cancel_cb:
@@ -87,7 +88,7 @@ def run_colmap_sfm(
     _run_colmap([
         "colmap", matcher_cmd,
         "--database_path", str(colmap_db),
-        "--SiftMatching.use_gpu", "0",
+        "--SiftMatching.use_gpu", "1" if use_gpu else "0",
     ], matcher_cmd)
 
     if cancel_cb:

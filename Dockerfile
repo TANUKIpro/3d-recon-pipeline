@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 python3.11-dev python3.11-distutils \
     git wget curl ffmpeg \
     libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1 \
+    libegl1-mesa libgbm1 \
     colmap \
     && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \

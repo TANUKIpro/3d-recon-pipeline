@@ -260,8 +260,8 @@
           <div class="form-group">
             <label for="cfg-colmap-matcher">Feature Matcher</label>
             <select id="cfg-colmap-matcher">
-              <option value="sequential" selected>Sequential</option>
-              <option value="exhaustive">Exhaustive</option>
+              <option value="sequential">Sequential</option>
+              <option value="exhaustive" selected>Exhaustive</option>
             </select>
           </div>
           <details class="config-advanced">
@@ -276,6 +276,12 @@
                   <label for="cfg-colmap-image-size">Image Size</label>
                   <input type="number" id="cfg-colmap-image-size" value="1024" min="256" step="128">
                 </div>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-label" for="cfg-colmap-use-gpu">
+                  <input type="checkbox" id="cfg-colmap-use-gpu">
+                  GPU SIFT (CUDA版COLMAP必要)
+                </label>
               </div>
             </div>
           </details>
@@ -305,7 +311,7 @@
         <div class="config-section" data-stages="4">
           <div class="form-group">
             <label for="cfg-gs2mesh-gs-iterations">3DGS Training Iterations</label>
-            <input type="number" id="cfg-gs2mesh-gs-iterations" value="30000" min="1000" step="1000">
+            <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000" min="1000" step="1000">
           </div>
           <div class="form-group">
             <label for="cfg-gs2mesh-stereo-model">Stereo Model</label>

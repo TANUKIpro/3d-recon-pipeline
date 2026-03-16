@@ -40,6 +40,7 @@ export class ConfigPanel {
       colmap_matcher: document.getElementById('cfg-colmap-matcher'),
       colmap_max_features: document.getElementById('cfg-colmap-max-features'),
       colmap_image_size: document.getElementById('cfg-colmap-image-size'),
+      colmap_use_gpu: document.getElementById('cfg-colmap-use-gpu'),
 
       // Stage 3: SAM2 Segmentation
       sam2_model: document.getElementById('cfg-sam2-model'),
@@ -157,7 +158,7 @@ export class ConfigPanel {
       max_frames: maxFrames,
 
       // Stage 2: COLMAP SfM
-      colmap_matcher: this._inputs.colmap_matcher?.value || 'sequential',
+      colmap_matcher: this._inputs.colmap_matcher?.value || 'exhaustive',
       colmap_max_features: this._parsePositiveInt(
         this._inputs.colmap_max_features?.value,
         8192,
@@ -166,6 +167,7 @@ export class ConfigPanel {
         this._inputs.colmap_image_size?.value,
         1024,
       ),
+      colmap_use_gpu: this._inputs.colmap_use_gpu?.checked ?? false,
 
       // Stage 3: SAM2 Segmentation
       sam2_model: this._inputs.sam2_model.value,
@@ -174,7 +176,7 @@ export class ConfigPanel {
       // Stage 4: gs2mesh Reconstruction
       gs2mesh_gs_iterations: this._parsePositiveInt(
         this._inputs.gs2mesh_gs_iterations?.value,
-        7000,
+        5000,
       ),
       gs2mesh_runtime_profile: this._inputs.gs2mesh_runtime_profile?.value || 'auto',
       gs2mesh_stereo_model: this._inputs.gs2mesh_stereo_model?.value || 'DLNR',
@@ -536,6 +538,9 @@ export class ConfigPanel {
     for (const key of ['colmap_max_features', 'colmap_image_size']) {
       if (cfg[key] == null || !this._inputs[key]) continue;
       this._inputs[key].value = String(cfg[key]);
+    }
+    if (cfg.colmap_use_gpu != null && this._inputs.colmap_use_gpu) {
+      this._inputs.colmap_use_gpu.checked = cfg.colmap_use_gpu !== false;
     }
 
     // Stage 3: SAM2 Segmentation

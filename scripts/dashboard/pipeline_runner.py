@@ -172,6 +172,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.colmap_matcher,
                 cfg.colmap_max_features,
                 cfg.colmap_image_size,
+                cfg.colmap_use_gpu,
             )
             session.poses_path = str(Path(output_dir) / "camera_poses.json")
             session.colmap_sparse_path = str(Path(output_dir) / "colmap_sparse")
