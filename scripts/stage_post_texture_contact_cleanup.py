@@ -28,6 +28,7 @@ from scripts.repair.ground_plane import (
     _orient_ground_plane_toward_mesh,
 )
 from scripts.repair.triangulate import _loop_projection_uv
+from scripts.texture.conflict_region import _build_face_adjacency
 from scripts.texture.intrinsics import _make_K, _project_simple
 from scripts.texture.io_utils import _load_mask, _load_poses
 
@@ -44,6 +45,9 @@ _CAP_TEXTURE_NAME = "texture_cap.png"
 _MASK_GROUND_REMOVAL_THRESHOLD = 0.5
 _MASK_OBJECT_PRESERVATION_THRESHOLD = 0.2
 _MASK_NEAR_PLANE_RATIO = 2.0
+_COMPONENT_MIN_FACE_RATIO = 0.02
+_MASK_ABOVE_PLANE_REMOVAL_THRESHOLD = 0.7
+_NEAR_PLANE_MIN_BBOX_RATIO = 0.005
 
 
 @dataclass(frozen=True)
@@ -396,15 +400,15 @@ def _compute_per_face_ground_score(
     masks_dir: str | Path | None,
     ground_masks_dir: str | Path | None,
     max_views: int = 16,
-) -> np.ndarray | None:
-    """Compute per-face ground score in [0, 1].
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Compute per-face mask scores in [0, 1].
 
     For each face centroid, projects to sampled camera views and computes:
     - outside_ratio: fraction of views where centroid falls outside object mask
     - ground_ratio: fraction of views where centroid falls inside ground mask
-    - combined: max(outside_ratio, ground_ratio)
 
-    Returns array of shape (N_faces,) or None if inputs are insufficient.
+    Returns ``(outside_ratio, ground_ratio)`` arrays of shape ``(N_faces,)``
+    or ``None`` if inputs are insufficient.
     """
     if (
         face_centroids.size == 0
@@ -477,7 +481,7 @@ def _compute_per_face_ground_score(
         outside_ratio = np.where(visible_counts > 0, outside_counts / visible_counts, 0.0)
         ground_ratio = np.where(visible_counts > 0, ground_counts / visible_counts, 0.0)
 
-    return np.maximum(outside_ratio, ground_ratio)
+    return outside_ratio, ground_ratio
 
 
 def _sample_cap_color(
@@ -573,6 +577,66 @@ def _derive_original_face_mask(
     return keep_original
 
 
+def _filter_small_components(
+    keep_merged_mask: np.ndarray,
+    merged_faces: np.ndarray,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Remove small connected components from the kept face set (in-place).
+
+    Uses shared-edge adjacency (via ``_build_face_adjacency``) and BFS to
+    enumerate connected components among the currently-kept faces.  Components
+    whose face count is below ``min_face_ratio * kept_count`` are marked as
+    removed in *keep_merged_mask*.
+    """
+    adjacency = _build_face_adjacency(merged_faces)
+    kept_indices = np.where(keep_merged_mask)[0]
+    if len(kept_indices) == 0:
+        return {"applied": False, "total_components": 0, "removed_components": 0,
+                "removed_faces": 0, "largest_component_faces": 0}
+
+    kept_set = set(kept_indices.tolist())
+    visited: set[int] = set()
+    components: list[list[int]] = []
+
+    for start in kept_indices:
+        start_int = int(start)
+        if start_int in visited:
+            continue
+        queue = [start_int]
+        visited.add(start_int)
+        component: list[int] = []
+        while queue:
+            node = queue.pop()
+            component.append(node)
+            for neighbor in adjacency[node]:
+                nb = int(neighbor)
+                if nb not in visited and nb in kept_set:
+                    visited.add(nb)
+                    queue.append(nb)
+        components.append(component)
+
+    min_faces = max(1, int(min_face_ratio * len(kept_indices)))
+    removed_faces = 0
+    removed_components = 0
+    largest = 0
+    for comp in components:
+        largest = max(largest, len(comp))
+        if len(comp) < min_faces:
+            for idx in comp:
+                keep_merged_mask[idx] = False
+            removed_faces += len(comp)
+            removed_components += 1
+
+    return {
+        "applied": True,
+        "total_components": len(components),
+        "removed_components": removed_components,
+        "removed_faces": removed_faces,
+        "largest_component_faces": largest,
+    }
+
+
 def _analyze_cleanup(
     output_dir: str | Path,
     *,
@@ -614,45 +678,72 @@ def _analyze_cleanup(
     orig_face_dist = merged_vertices[merged_faces] @ plane_normal + plane_d - float(selected_shift)
     keep_merged_mask = np.all(orig_face_dist > 0.0, axis=1)
 
+    # Phase 1: Connected-component filtering (remove tiny fragments)
+    component_stats = _filter_small_components(keep_merged_mask, merged_faces)
+
     # Mask-based face filtering refinement
     mask_filtering_stats: dict[str, Any] = {"applied": False}
     all_centroids = merged_vertices[merged_faces].mean(axis=1)
-    face_ground_scores = _compute_per_face_ground_score(
+    face_score_result = _compute_per_face_ground_score(
         all_centroids,
         poses_path=poses_path,
         intrinsics_path=intrinsics_path,
         masks_dir=masks_dir,
         ground_masks_dir=ground_masks_dir,
     )
-    if face_ground_scores is not None and len(face_ground_scores) == len(keep_merged_mask):
-        min_face_dist = orig_face_dist.min(axis=1)
-        near_plane_threshold = _MASK_NEAR_PLANE_RATIO * float(selected_shift)
-        near_plane_band = np.abs(min_face_dist) < near_plane_threshold
+    if face_score_result is not None:
+        outside_ratio_arr, ground_ratio_arr = face_score_result
+        if len(outside_ratio_arr) == len(keep_merged_mask):
+            min_face_dist = orig_face_dist.min(axis=1)
+            bbox_diag = float(np.linalg.norm(
+                merged_vertices.max(axis=0) - merged_vertices.min(axis=0)
+            ))
+            near_plane_threshold = max(
+                _MASK_NEAR_PLANE_RATIO * float(selected_shift),
+                _NEAR_PLANE_MIN_BBOX_RATIO * bbox_diag,
+            )
+            near_plane_band = np.abs(min_face_dist) < near_plane_threshold
 
-        mask_removed_count = 0
-        mask_preserved_count = 0
+            mask_removed_count = 0
+            mask_preserved_count = 0
 
-        for i in range(len(keep_merged_mask)):
-            if not near_plane_band[i]:
-                continue
-            score = face_ground_scores[i]
-            if keep_merged_mask[i] and score > _MASK_GROUND_REMOVAL_THRESHOLD:
-                keep_merged_mask[i] = False
-                mask_removed_count += 1
-            elif not keep_merged_mask[i] and score < _MASK_OBJECT_PRESERVATION_THRESHOLD:
-                keep_merged_mask[i] = True
-                mask_preserved_count += 1
+            for i in range(len(keep_merged_mask)):
+                if not near_plane_band[i]:
+                    continue
+                score = max(float(outside_ratio_arr[i]), float(ground_ratio_arr[i]))
+                if keep_merged_mask[i] and score > _MASK_GROUND_REMOVAL_THRESHOLD:
+                    keep_merged_mask[i] = False
+                    mask_removed_count += 1
+                elif not keep_merged_mask[i] and score < _MASK_OBJECT_PRESERVATION_THRESHOLD:
+                    keep_merged_mask[i] = True
+                    mask_preserved_count += 1
 
-        mask_filtering_stats = {
-            "applied": True,
-            "mask_removed_count": mask_removed_count,
-            "mask_preserved_count": mask_preserved_count,
-            "near_plane_faces": int(near_plane_band.sum()),
-            "avg_ground_score_removed": (
-                round(float(face_ground_scores[~keep_merged_mask].mean()), 4)
-                if np.any(~keep_merged_mask) else None
-            ),
-        }
+            # Phase 2: Above-plane mask filtering (remove floating noise)
+            above_plane_candidates = (
+                keep_merged_mask
+                & ~near_plane_band
+                & (min_face_dist > 0.0)
+                & (outside_ratio_arr > _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD)
+            )
+            above_plane_removed = int(above_plane_candidates.sum())
+            keep_merged_mask[above_plane_candidates] = False
+
+            combined_scores = np.maximum(outside_ratio_arr, ground_ratio_arr)
+            mask_filtering_stats = {
+                "applied": True,
+                "mask_removed_count": mask_removed_count,
+                "mask_preserved_count": mask_preserved_count,
+                "near_plane_faces": int(near_plane_band.sum()),
+                "avg_ground_score_removed": (
+                    round(float(combined_scores[~keep_merged_mask].mean()), 4)
+                    if np.any(~keep_merged_mask) else None
+                ),
+                "above_plane_filtering": {
+                    "removed_count": above_plane_removed,
+                    "threshold": _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD,
+                },
+            }
+            mask_filtering_stats["component_filtering"] = component_stats
 
     removed_merged_faces = merged_faces[~keep_merged_mask]
     removed_obj_face_indices = np.unique(merged_face_to_obj_face[~keep_merged_mask])
@@ -722,6 +813,7 @@ def _analyze_cleanup(
         ),
         "mask_score": mask_score,
         "mask_filtering": mask_filtering_stats,
+        "component_filtering": component_stats,
         "cap_color": cap_color,
         "matched_boundary_area": float(matched_boundary_area),
         "has_candidate": bool(has_candidate),
@@ -754,6 +846,8 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "mask_samples": mask_samples,
         "mask_outside_ratio": outside_ratio,
         "mask_ground_ratio": ground_ratio,
+        "component_removed_faces": analysis.get("component_filtering", {}).get("removed_faces", 0),
+        "above_plane_removed_faces": analysis.get("mask_filtering", {}).get("above_plane_filtering", {}).get("removed_count", 0),
     }
     requires_review = bool(analysis["has_candidate"])
     return {
