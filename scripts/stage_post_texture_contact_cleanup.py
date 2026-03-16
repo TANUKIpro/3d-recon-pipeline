@@ -25,7 +25,6 @@ from scripts.repair.ground_plane import (
     _cap_boundary_at_plane,
     _clip_mesh_at_plane,
     _extract_closed_section_loops,
-    _find_ground_plane_shift,
     _orient_ground_plane_toward_mesh,
 )
 from scripts.repair.triangulate import _loop_projection_uv
@@ -557,6 +556,23 @@ def _write_overlay_ply(path: Path, vertices: np.ndarray, faces: np.ndarray) -> N
             f.write(f"3 {int(tri[0])} {int(tri[1])} {int(tri[2])}\n")
 
 
+def _derive_original_face_mask(
+    keep_merged_mask: np.ndarray,
+    merged_face_to_obj_face: np.ndarray,
+    num_obj_faces: int,
+) -> np.ndarray:
+    """Derive per-original-face keep mask from the merged-face keep mask.
+
+    Faces not referenced by any merged face (e.g. degenerate faces skipped
+    during vertex merging) default to kept (True).
+    """
+    keep_original = np.ones(num_obj_faces, dtype=bool)
+    removed_indices = merged_face_to_obj_face[~keep_merged_mask]
+    if removed_indices.size > 0:
+        keep_original[removed_indices] = False
+    return keep_original
+
+
 def _analyze_cleanup(
     output_dir: str | Path,
     *,
@@ -574,16 +590,8 @@ def _analyze_cleanup(
     )
 
     plane_normal, plane_d, plane_source = _resolve_ground_plane(merged_vertices, ground_plane_path)
-    search = _find_ground_plane_shift(merged_vertices, merged_faces, plane_normal, plane_d)
-    selected_shift = search.selected_shift
-    if selected_shift is None:
-        bbox_diag = max(
-            float(np.linalg.norm(merged_vertices.max(axis=0) - merged_vertices.min(axis=0))),
-            1e-6,
-        )
-        selected_shift = max(0.001, 0.0025 * bbox_diag)
-
-    actual_plane_d = plane_d - float(selected_shift)
+    selected_shift = 0.0
+    actual_plane_d = plane_d
     section_loops = _extract_closed_section_loops(merged_vertices, merged_faces, plane_normal, actual_plane_d)
     selected_loop = max(section_loops, key=lambda loop: loop.area) if section_loops else None
 
@@ -709,12 +717,8 @@ def _analyze_cleanup(
         "removed_merged_faces": removed_merged_faces,
         "removed_obj_face_indices": removed_obj_face_indices,
         "keep_merged_mask": keep_merged_mask,
-        "keep_original_face_mask": np.asarray(
-            [
-                np.all((obj_mesh.vertices[np.asarray(face.vertex_indices, dtype=np.int64) - 1] @ plane_normal + plane_d - float(selected_shift)) > 0.0)
-                for face in obj_mesh.faces
-            ],
-            dtype=bool,
+        "keep_original_face_mask": _derive_original_face_mask(
+            keep_merged_mask, merged_face_to_obj_face, len(obj_mesh.faces),
         ),
         "mask_score": mask_score,
         "mask_filtering": mask_filtering_stats,
