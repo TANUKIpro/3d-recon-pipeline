@@ -252,6 +252,7 @@ export class PreviewPanel {
     if (!stage || !this._renderer) return;
 
     this._activeStage = stageNum;
+    stage.container.classList.add('visible');
 
     // Move renderer canvas to this container
     const canvas = this._renderer.domElement;
@@ -518,6 +519,8 @@ export class PreviewPanel {
     await this.initSceneForStage(stageNum);
     await this._ensureSceneFlipForStage(stageNum, cacheToken);
     this.activateStage(stageNum);
+    // Re-sync viewport after container is guaranteed visible
+    requestAnimationFrame(() => this._syncViewportSize(stageNum, 2));
 
     // Toggle empty placeholder based on load result.
     const empty = document.getElementById(`stage-${stageNum}-empty`);
@@ -689,6 +692,7 @@ export class PreviewPanel {
     try {
       const mtlLoader = new MTLLoader();
       mtlLoader.setPath('/api/preview/file/');
+      mtlLoader.setResourcePath('/api/preview/file/');
       materials = await new Promise((resolve, reject) => {
         mtlLoader.load(mtlPathWithRevision, resolve, undefined, reject);
       });
@@ -696,7 +700,7 @@ export class PreviewPanel {
       materials.preload();
     } catch (e) {
       if (stage._loadGeneration !== gen) return false;
-      // No MTL file — okay
+      console.warn(`[preview] MTL load failed for stage ${stageNum}:`, e);
     }
 
     try {
@@ -722,6 +726,20 @@ export class PreviewPanel {
       const box = new THREE.Box3().setFromObject(object);
       const center = box.getCenter(new THREE.Vector3());
       object.position.sub(center);
+
+      if (!materials) {
+        const palette = SCENE_THEMES[this._currentTheme];
+        object.traverse((node) => {
+          if (node.isMesh) {
+            node.material = new THREE.MeshStandardMaterial({
+              color: palette.meshColor,
+              roughness: 0.9,
+              metalness: 0.02,
+              side: THREE.DoubleSide,
+            });
+          }
+        });
+      }
 
       this._cleanupCurrentObject(stage);
       stage.currentObject = object;
