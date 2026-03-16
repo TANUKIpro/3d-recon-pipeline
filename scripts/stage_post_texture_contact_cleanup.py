@@ -932,6 +932,108 @@ def _pass_flipped_ground_normals(
     return {"flipped_removed": removed_count, "component_stats": component_stats}
 
 
+def _pass_post_holefill_cleanup(
+    keep_merged_mask: np.ndarray,
+    merged_faces: np.ndarray,
+    cleanup_faces: np.ndarray,
+    capped_vertices: np.ndarray,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Pass 8: remove disconnected components after hole-fill.
+
+    After Pass 7 generates skirt + floor cap faces the combined mesh may still
+    contain small disconnected fragments that survived earlier passes.  This
+    pass builds a single adjacency graph over *all* remaining faces (kept
+    merged + cleanup) and removes every connected component except the largest.
+    """
+    kept_merged_indices = np.where(keep_merged_mask)[0]
+    n_merged = len(kept_merged_indices)
+
+    if n_merged == 0 and cleanup_faces.size == 0:
+        return cleanup_faces, {
+            "removed_components": 0,
+            "removed_faces_merged": 0,
+            "removed_faces_cleanup": 0,
+            "removed_faces_total": 0,
+        }
+
+    # Build combined face array indexing into capped_vertices
+    parts = []
+    if n_merged > 0:
+        parts.append(merged_faces[kept_merged_indices])
+    if cleanup_faces.size > 0:
+        parts.append(cleanup_faces)
+    combined_faces = np.vstack(parts) if parts else np.zeros((0, 3), dtype=np.int64)
+    total_combined = len(combined_faces)
+
+    if total_combined <= 1:
+        return cleanup_faces, {
+            "removed_components": 0,
+            "removed_faces_merged": 0,
+            "removed_faces_cleanup": 0,
+            "removed_faces_total": 0,
+        }
+
+    adjacency = _build_face_adjacency(combined_faces)
+
+    # BFS — enumerate connected components
+    visited: set[int] = set()
+    components: list[list[int]] = []
+    for start in range(total_combined):
+        if start in visited:
+            continue
+        queue = [start]
+        visited.add(start)
+        comp: list[int] = []
+        while queue:
+            node = queue.pop()
+            comp.append(node)
+            for nb in adjacency[node]:
+                nbi = int(nb)
+                if nbi not in visited:
+                    visited.add(nbi)
+                    queue.append(nbi)
+        components.append(comp)
+
+    if len(components) <= 1:
+        return cleanup_faces, {
+            "removed_components": 0,
+            "removed_faces_merged": 0,
+            "removed_faces_cleanup": 0,
+            "removed_faces_total": 0,
+        }
+
+    # Keep only the largest component
+    largest_comp = max(components, key=len)
+
+    removed_merged = 0
+    removed_cleanup = 0
+    cleanup_keep_mask = np.ones(max(cleanup_faces.shape[0], 0), dtype=bool) if cleanup_faces.size > 0 else np.zeros(0, dtype=bool)
+
+    for comp in components:
+        if comp is largest_comp:
+            continue
+        for fi in comp:
+            if fi < n_merged:
+                keep_merged_mask[kept_merged_indices[fi]] = False
+                removed_merged += 1
+            else:
+                ci = fi - n_merged
+                cleanup_keep_mask[ci] = False
+                removed_cleanup += 1
+
+    if cleanup_faces.size > 0:
+        cleanup_faces = cleanup_faces[cleanup_keep_mask]
+        if cleanup_faces.size == 0:
+            cleanup_faces = np.zeros((0, 3), dtype=np.int64)
+
+    return cleanup_faces, {
+        "removed_components": len(components) - 1,
+        "removed_faces_merged": removed_merged,
+        "removed_faces_cleanup": removed_cleanup,
+        "removed_faces_total": removed_merged + removed_cleanup,
+    }
+
+
 def _aggregate_pass_stats(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
@@ -943,6 +1045,7 @@ def _aggregate_pass_stats(
     ground_ratio_arr: np.ndarray | None,
     keep_merged_mask: np.ndarray,
     pass6: dict[str, Any] | None = None,
+    pass8: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Aggregate per-pass statistics into the structures expected by _proposal_payload."""
     all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass3b, pass4)]
@@ -951,10 +1054,12 @@ def _aggregate_pass_stats(
     total_component_removed = (
         sum(c.get("removed_faces", 0) for c in all_comp)
         + pass5.get("removed_faces", 0)
+        + (pass8.get("removed_faces_total", 0) if pass8 else 0)
     )
     total_component_removed_components = (
         sum(c.get("removed_components", 0) for c in all_comp)
         + pass5.get("removed_islands", 0)
+        + (pass8.get("removed_components", 0) if pass8 else 0)
     )
     component_stats: dict[str, Any] = {
         "applied": any(c.get("applied", False) for c in all_comp) or pass5.get("removed_islands", 0) > 0,
@@ -1001,10 +1106,14 @@ def _aggregate_pass_stats(
             "flipped_ground_normals": {
                 "removed_count": pass6.get("flipped_removed", 0) if pass6 else 0,
             },
+            "post_holefill_cleanup": {
+                "removed_components": pass8.get("removed_components", 0) if pass8 else 0,
+                "removed_faces": pass8.get("removed_faces_total", 0) if pass8 else 0,
+            },
         }
     else:
         mask_filtering_stats = {"applied": False}
-        if pass5.get("removed_islands", 0) > 0 or (pass6 and pass6.get("flipped_removed", 0) > 0):
+        if pass5.get("removed_islands", 0) > 0 or (pass6 and pass6.get("flipped_removed", 0) > 0) or (pass8 and pass8.get("removed_faces_total", 0) > 0):
             mask_filtering_stats = {
                 "applied": True,
                 "floating_island_removal": {
@@ -1013,6 +1122,10 @@ def _aggregate_pass_stats(
                 },
                 "flipped_ground_normals": {
                     "removed_count": pass6.get("flipped_removed", 0) if pass6 else 0,
+                },
+                "post_holefill_cleanup": {
+                    "removed_components": pass8.get("removed_components", 0) if pass8 else 0,
+                    "removed_faces": pass8.get("removed_faces_total", 0) if pass8 else 0,
                 },
                 "component_filtering": component_stats,
             }
@@ -1165,13 +1278,6 @@ def _analyze_cleanup(
     print(f"  Pass 6 (flipped normals): {pass6['flipped_removed']} removed"
           f" + {p6_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
-    # Aggregate statistics
-    mask_filtering_stats, component_stats = _aggregate_pass_stats(
-        pass1, pass2, pass3, pass3b, pass4, pass5,
-        outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
-        pass6=pass6,
-    )
-
     removed_merged_faces = merged_faces[~keep_merged_mask]
     removed_obj_face_indices = np.unique(merged_face_to_obj_face[~keep_merged_mask])
 
@@ -1229,6 +1335,20 @@ def _analyze_cleanup(
         f" {skirt_stats['new_vertices']} new vertices"
     )
 
+    # === Pass 8: Post-hole-fill disconnected component removal ===
+    cleanup_faces, pass8 = _pass_post_holefill_cleanup(
+        keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
+    )
+    print(f"  Pass 8 (post-holefill noise): {pass8['removed_components']} components"
+          f" ({pass8['removed_faces_total']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
+    # Aggregate statistics
+    mask_filtering_stats, component_stats = _aggregate_pass_stats(
+        pass1, pass2, pass3, pass3b, pass4, pass5,
+        outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
+        pass6=pass6, pass8=pass8,
+    )
+
     removed_centroids = np.zeros((0, 3), dtype=np.float64)
     if removed_merged_faces.size > 0:
         removed_centroids = merged_vertices[removed_merged_faces].mean(axis=1)
@@ -1279,6 +1399,7 @@ def _analyze_cleanup(
         "cap_color": cap_color,
         "matched_boundary_area": float(matched_boundary_area),
         "skirt_stats": skirt_stats,
+        "pass8_stats": pass8,
         "has_candidate": bool(has_candidate),
         "recommended_decision": recommended_decision,
         "reason": reason,
@@ -1313,6 +1434,7 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "above_plane_removed_faces": analysis.get("mask_filtering", {}).get("above_plane_filtering", {}).get("removed_count", 0),
         "lower_half_removed_faces": analysis.get("mask_filtering", {}).get("lower_half_mask_noise", {}).get("removed_count", 0),
         "bottom_hole_fill": analysis.get("skirt_stats", {}),
+        "post_holefill_cleanup": analysis.get("pass8_stats", {}),
     }
     requires_review = bool(analysis["has_candidate"])
     return {
