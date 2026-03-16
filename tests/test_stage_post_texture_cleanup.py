@@ -11,12 +11,14 @@ try:
         _COMPONENT_MIN_FACE_RATIO,
         _CONVERGENCE_MAX_ITERATIONS,
         _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD,
+        _MASK_LOWER_HALF_REMOVAL_THRESHOLD,
         _NEIGHBOR_REMOVAL_RATIO_THRESHOLD,
         _aggregate_pass_stats,
         _filter_small_components,
         _pass_above_plane_noise,
         _pass_floating_island_removal,
         _pass_geometric_clip,
+        _pass_lower_half_mask_noise,
         _pass_mask_boundary_refinement,
         _pass_neighbor_erosion,
     )
@@ -195,6 +197,67 @@ class TestPassAbovePlaneNoise(unittest.TestCase):
 
 
 @unittest.skipUnless(_IMPORTABLE, "required modules not available")
+class TestPassLowerHalfMaskNoise(unittest.TestCase):
+    """Pass 3b: _pass_lower_half_mask_noise."""
+
+    def test_removes_lower_half_high_outside(self):
+        """Faces in the lower half with outside_ratio > 0 are removed."""
+        _, faces, adjacency = _make_test_mesh()
+        mask = np.ones(len(faces), dtype=bool)
+        outside = np.array([0.5, 0.5, 0.5, 0.5, 0.5])
+        # centroid_heights: faces 0-3 in lower half, face 4 in upper half
+        centroid_heights = np.array([0.1, 0.1, 0.1, 0.1, 2.0])
+        half_height = 0.5
+
+        result = _pass_lower_half_mask_noise(
+            mask, outside, centroid_heights, half_height, adjacency, faces,
+        )
+        assert result["applied"] is True
+        assert result["lower_half_removed"] == 4  # faces 0-3 removed
+        assert not mask[0] and not mask[1] and not mask[2] and not mask[3]
+
+    def test_keeps_upper_half_high_outside(self):
+        """Faces in the upper half are not removed even with high outside_ratio."""
+        _, faces, adjacency = _make_test_mesh()
+        mask = np.ones(len(faces), dtype=bool)
+        outside = np.array([0.9, 0.9, 0.9, 0.9, 0.9])
+        centroid_heights = np.array([1.0, 1.0, 1.0, 1.0, 1.0])
+        half_height = 0.5
+
+        result = _pass_lower_half_mask_noise(
+            mask, outside, centroid_heights, half_height, adjacency, faces,
+        )
+        assert result["lower_half_removed"] == 0
+
+    def test_keeps_lower_half_zero_outside(self):
+        """Faces with outside_ratio == 0 (fully inside mask) are kept."""
+        _, faces, adjacency = _make_test_mesh()
+        mask = np.ones(len(faces), dtype=bool)
+        outside = np.array([0.0, 0.0, 0.0, 0.0, 0.0])
+        centroid_heights = np.array([0.1, 0.1, 0.1, 0.1, 0.1])
+        half_height = 0.5
+
+        result = _pass_lower_half_mask_noise(
+            mask, outside, centroid_heights, half_height, adjacency, faces,
+        )
+        assert result["lower_half_removed"] == 0
+        assert mask.all()
+
+    def test_component_filter_runs(self):
+        """Component filter executes after lower-half removal."""
+        _, faces, adjacency = _make_test_mesh()
+        mask = np.ones(len(faces), dtype=bool)
+        outside = np.array([0.5, 0.5, 0.5, 0.0, 0.0])
+        centroid_heights = np.array([0.1, 0.1, 0.1, 0.1, 0.1])
+        half_height = 0.5
+
+        result = _pass_lower_half_mask_noise(
+            mask, outside, centroid_heights, half_height, adjacency, faces,
+        )
+        assert "component_stats" in result
+
+
+@unittest.skipUnless(_IMPORTABLE, "required modules not available")
 class TestPassNeighborErosion(unittest.TestCase):
     """Step 5: _pass_neighbor_erosion."""
 
@@ -290,6 +353,13 @@ class TestAggregatePassStats(unittest.TestCase):
             "threshold": 0.7,
             "component_stats": {"removed_faces": 0, "applied": True},
         }
+        pass3b = {
+            "applied": True,
+            "lower_half_removed": 6,
+            "threshold": 0.0,
+            "half_height": 0.5,
+            "component_stats": {"removed_faces": 1, "applied": True},
+        }
         pass4 = {
             "total_eroded": 2,
             "iterations": 2,
@@ -301,21 +371,23 @@ class TestAggregatePassStats(unittest.TestCase):
         keep = np.array([True, False, True, False, True])
 
         mf_stats, comp_stats = _aggregate_pass_stats(
-            pass1, pass2, pass3, pass4, pass5, outside, ground, keep,
+            pass1, pass2, pass3, pass3b, pass4, pass5, outside, ground, keep,
         )
 
         # Keys expected by _proposal_payload
         assert mf_stats["applied"] is True
         assert "above_plane_filtering" in mf_stats
         assert mf_stats["above_plane_filtering"]["removed_count"] == 4
+        assert "lower_half_mask_noise" in mf_stats
+        assert mf_stats["lower_half_mask_noise"]["removed_count"] == 6
         assert "component_filtering" in mf_stats
-        assert mf_stats["component_filtering"]["removed_faces"] == 2 + 1 + 0 + 1 + 50
+        assert mf_stats["component_filtering"]["removed_faces"] == 2 + 1 + 0 + 1 + 1 + 50
         assert mf_stats["component_filtering"]["removed_components"] is not None
         assert "neighbor_erosion" in mf_stats
         assert mf_stats["neighbor_erosion"]["total_eroded"] == 2
         assert "floating_island_removal" in mf_stats
         assert mf_stats["floating_island_removal"]["removed_islands"] == 1
-        assert comp_stats["removed_faces"] == 2 + 1 + 0 + 1 + 50
+        assert comp_stats["removed_faces"] == 2 + 1 + 0 + 1 + 1 + 50
         assert "total_components" in comp_stats
         assert "largest_component_faces" in comp_stats
 
@@ -323,12 +395,13 @@ class TestAggregatePassStats(unittest.TestCase):
         pass1 = {"geometric_removed": 5, "component_stats": {"removed_faces": 0}}
         pass2 = {"applied": False}
         pass3 = {"applied": False}
+        pass3b = {"applied": False}
         pass4 = {"total_eroded": 0, "iterations": 1, "component_stats": {"removed_faces": 0}}
         pass5 = {"removed_islands": 0, "removed_faces": 0}
         keep = np.ones(5, dtype=bool)
 
         mf_stats, _ = _aggregate_pass_stats(
-            pass1, pass2, pass3, pass4, pass5, None, None, keep,
+            pass1, pass2, pass3, pass3b, pass4, pass5, None, None, keep,
         )
         assert mf_stats["applied"] is False
 
@@ -337,12 +410,13 @@ class TestAggregatePassStats(unittest.TestCase):
         pass1 = {"geometric_removed": 0, "component_stats": {"removed_faces": 0}}
         pass2 = {"applied": False}
         pass3 = {"applied": False}
+        pass3b = {"applied": False}
         pass4 = {"total_eroded": 0, "iterations": 1, "component_stats": {"removed_faces": 0}}
         pass5 = {"removed_islands": 2, "removed_faces": 100}
         keep = np.ones(5, dtype=bool)
 
         mf_stats, comp_stats = _aggregate_pass_stats(
-            pass1, pass2, pass3, pass4, pass5, None, None, keep,
+            pass1, pass2, pass3, pass3b, pass4, pass5, None, None, keep,
         )
         assert mf_stats["applied"] is True
         assert mf_stats["floating_island_removal"]["removed_islands"] == 2

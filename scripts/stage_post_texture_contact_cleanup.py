@@ -48,6 +48,7 @@ _MASK_NEAR_PLANE_RATIO = 2.0
 _COMPONENT_MIN_FACE_RATIO = 0.02
 _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD = 0.7
 _NEAR_PLANE_MIN_BBOX_RATIO = 0.005
+_MASK_LOWER_HALF_REMOVAL_THRESHOLD = 0.0
 _NEIGHBOR_REMOVAL_RATIO_THRESHOLD = 0.6
 _CONVERGENCE_MAX_ITERATIONS = 3
 _ISLAND_FACE_RATIO = 0.1
@@ -729,6 +730,37 @@ def _pass_above_plane_noise(
     }
 
 
+def _pass_lower_half_mask_noise(
+    keep_merged_mask: np.ndarray,
+    outside_ratio_arr: np.ndarray,
+    centroid_heights: np.ndarray,
+    half_height: float,
+    adjacency: list[np.ndarray],
+    merged_faces: np.ndarray,
+    threshold: float = _MASK_LOWER_HALF_REMOVAL_THRESHOLD,
+    min_face_ratio: float = _COMPONENT_MIN_FACE_RATIO,
+) -> dict[str, Any]:
+    """Pass 3b: remove noise in the lower half using full SAM2 mask trust."""
+    candidates = (
+        keep_merged_mask
+        & (centroid_heights >= 0)
+        & (centroid_heights <= half_height)
+        & (outside_ratio_arr > threshold)
+    )
+    lower_half_removed = int(candidates.sum())
+    keep_merged_mask[candidates] = False
+    component_stats = _filter_small_components(
+        keep_merged_mask, merged_faces, min_face_ratio, adjacency=adjacency,
+    )
+    return {
+        "applied": True,
+        "lower_half_removed": lower_half_removed,
+        "threshold": threshold,
+        "half_height": half_height,
+        "component_stats": component_stats,
+    }
+
+
 def _pass_neighbor_erosion(
     keep_merged_mask: np.ndarray,
     adjacency: list[np.ndarray],
@@ -862,6 +894,7 @@ def _aggregate_pass_stats(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
     pass3: dict[str, Any],
+    pass3b: dict[str, Any],
     pass4: dict[str, Any],
     pass5: dict[str, Any],
     outside_ratio_arr: np.ndarray | None,
@@ -869,7 +902,7 @@ def _aggregate_pass_stats(
     keep_merged_mask: np.ndarray,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Aggregate per-pass statistics into the structures expected by _proposal_payload."""
-    all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass4)]
+    all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass3b, pass4)]
     total_component_removed = (
         sum(c.get("removed_faces", 0) for c in all_comp)
         + pass5.get("removed_faces", 0)
@@ -889,7 +922,7 @@ def _aggregate_pass_stats(
     }
 
     mask_filtering_stats: dict[str, Any]
-    if pass2.get("applied") or pass3.get("applied"):
+    if pass2.get("applied") or pass3.get("applied") or pass3b.get("applied"):
         combined_scores: np.ndarray | None = None
         if outside_ratio_arr is not None and ground_ratio_arr is not None:
             combined_scores = np.maximum(outside_ratio_arr, ground_ratio_arr)
@@ -905,6 +938,11 @@ def _aggregate_pass_stats(
             "above_plane_filtering": {
                 "removed_count": pass3.get("above_plane_removed", 0),
                 "threshold": pass3.get("threshold", _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD),
+            },
+            "lower_half_mask_noise": {
+                "removed_count": pass3b.get("lower_half_removed", 0),
+                "threshold": pass3b.get("threshold", _MASK_LOWER_HALF_REMOVAL_THRESHOLD),
+                "half_height": pass3b.get("half_height", 0.0),
             },
             "component_filtering": component_stats,
             "neighbor_erosion": {
@@ -1012,28 +1050,47 @@ def _analyze_cleanup(
     print(f"  Pass 1 (geometric clip): {pass1['geometric_removed']} below-plane"
           f" + {p1_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
-    # === Pass 2: Mask boundary refinement ===
+    # Compute half-height from Pass 1 kept vertices for lower/upper half split
+    centroid_heights = all_centroids @ plane_normal + plane_d - float(selected_shift)
+    kept_vert_indices = np.unique(merged_faces[keep_merged_mask].ravel())
+    kept_vert_heights = merged_vertices[kept_vert_indices] @ plane_normal + plane_d - float(selected_shift)
+    model_centroid_height = float(kept_vert_heights.mean())
+    half_height = max(model_centroid_height / 2.0, 0.0)
+    upper_half_mask = centroid_heights > half_height
+
+    # === Pass 2: Mask boundary refinement (upper half only) ===
     pass2: dict[str, Any] = {"applied": False}
     if outside_ratio_arr is not None and near_plane_band is not None:
         pass2 = _pass_mask_boundary_refinement(
             keep_merged_mask, outside_ratio_arr, ground_ratio_arr,  # type: ignore[arg-type]
-            near_plane_band, adjacency, merged_faces,
+            near_plane_band & upper_half_mask, adjacency, merged_faces,
         )
         p2_comp = pass2["component_stats"].get("removed_faces", 0)
         print(f"  Pass 2 (mask boundary): -{pass2['mask_removed_count']} removed"
               f" +{pass2['mask_preserved_count']} restored"
               f" + {p2_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
-    # === Pass 3: Above-plane noise removal ===
+    # === Pass 3: Above-plane noise removal (upper half only) ===
     pass3: dict[str, Any] = {"applied": False}
     if outside_ratio_arr is not None and near_plane_band is not None and min_face_dist is not None:
         pass3 = _pass_above_plane_noise(
-            keep_merged_mask, outside_ratio_arr, near_plane_band,
+            keep_merged_mask, outside_ratio_arr, near_plane_band | ~upper_half_mask,
             min_face_dist, adjacency, merged_faces,
         )
         p3_comp = pass3["component_stats"].get("removed_faces", 0)
         print(f"  Pass 3 (above-plane noise): {pass3['above_plane_removed']} removed"
               f" + {p3_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+
+    # === Pass 3b: Lower-half full-mask noise removal ===
+    pass3b: dict[str, Any] = {"applied": False}
+    if outside_ratio_arr is not None and half_height > 0:
+        pass3b = _pass_lower_half_mask_noise(
+            keep_merged_mask, outside_ratio_arr, centroid_heights,
+            half_height, adjacency, merged_faces,
+        )
+        p3b_comp = pass3b["component_stats"].get("removed_faces", 0)
+        print(f"  Pass 3b (lower-half mask): {pass3b['lower_half_removed']} removed"
+              f" + {p3b_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
     # === Pass 4: Neighbor erosion (peninsula removal) ===
     pass4 = _pass_neighbor_erosion(keep_merged_mask, adjacency, merged_faces)
@@ -1050,7 +1107,7 @@ def _analyze_cleanup(
 
     # Aggregate statistics
     mask_filtering_stats, component_stats = _aggregate_pass_stats(
-        pass1, pass2, pass3, pass4, pass5,
+        pass1, pass2, pass3, pass3b, pass4, pass5,
         outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
     )
 
@@ -1157,6 +1214,7 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "mask_ground_ratio": ground_ratio,
         "component_removed_faces": analysis.get("component_filtering", {}).get("removed_faces", 0),
         "above_plane_removed_faces": analysis.get("mask_filtering", {}).get("above_plane_filtering", {}).get("removed_count", 0),
+        "lower_half_removed_faces": analysis.get("mask_filtering", {}).get("lower_half_mask_noise", {}).get("removed_count", 0),
     }
     requires_review = bool(analysis["has_candidate"])
     return {
