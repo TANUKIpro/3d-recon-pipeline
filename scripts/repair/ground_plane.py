@@ -11,6 +11,7 @@ from scripts.config_defaults import (
 from scripts.repair.boundary import (
     _extract_boundary_edges,
     _extract_boundary_paths,
+    _fit_loop_normal,
 )
 from scripts.repair.triangulate import (
     _loop_projection_uv,
@@ -621,6 +622,169 @@ def _cap_boundary_at_plane(
 
     augmented_faces = np.vstack((faces, new_faces))
     return vertices, augmented_faces, {int(idx) for idx in loop_vertices}, float(selected_loop.area)
+
+
+def _generate_bottom_skirt_cap(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    plane_normal: np.ndarray,
+    plane_d: float,
+    *,
+    bottom_height_ratio: float = 0.25,
+    min_loop_vertices: int = 4,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Generate skirt walls and floor cap for bottom boundary loops.
+
+    Finds boundary loops near the bottom of the mesh (above the ground plane
+    but not on it), projects their vertices onto the ground plane, and creates
+    skirt triangles connecting the original boundary to the projected loop,
+    plus a triangulated floor cap on the ground plane.
+
+    Returns:
+        (augmented_vertices, new_faces, stats) where *new_faces* contains only
+        the newly generated skirt+cap faces (not the input faces).
+    """
+    plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
+    stats: dict = {
+        "loops_found": 0,
+        "loops_capped": 0,
+        "skirt_faces": 0,
+        "cap_faces": 0,
+        "new_vertices": 0,
+    }
+
+    boundary_edges = _extract_boundary_edges(faces)
+    if boundary_edges.size == 0:
+        return vertices, np.zeros((0, 3), dtype=np.int64), stats
+
+    raw_paths = _extract_boundary_paths(boundary_edges)
+    if not raw_paths:
+        return vertices, np.zeros((0, 3), dtype=np.int64), stats
+
+    # Mesh metrics
+    signed_dist = vertices @ plane_normal + plane_d
+    dist_min = float(signed_dist.min())
+    dist_max = float(signed_dist.max())
+    bbox_height = max(dist_max - dist_min, 1e-6)
+    bbox_diag = max(
+        float(np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))),
+        1e-6,
+    )
+    on_plane_threshold = 0.005 * bbox_diag  # 0.5% of bbox diagonal
+    mesh_center = vertices.mean(axis=0)
+
+    new_vertices_list: list[np.ndarray] = []
+    new_faces_list: list[np.ndarray] = []
+    next_vertex = int(vertices.shape[0])
+
+    for path in raw_paths:
+        if len(path) < min_loop_vertices + 1:
+            continue
+        if path[0] != path[-1]:
+            continue
+        loop_verts = path[:-1]
+        if len(set(loop_verts)) < min_loop_vertices:
+            continue
+
+        loop_indices = np.asarray(loop_verts, dtype=np.int64)
+        loop_points = vertices[loop_indices]
+        loop_dists = signed_dist[loop_indices]
+
+        # Centroid must be within bottom portion of model height
+        avg_dist = float(loop_dists.mean())
+        dist_from_bottom = avg_dist - dist_min
+        if dist_from_bottom > bottom_height_ratio * bbox_height:
+            continue
+
+        # Must be above (or on) ground plane
+        if avg_dist < 0:
+            continue
+
+        # Loop normal must point downward (toward -plane_normal)
+        centroid = loop_points.mean(axis=0)
+        loop_normal = _fit_loop_normal(loop_points, centroid, mesh_center)
+        if float(np.dot(loop_normal, plane_normal)) > -0.1:
+            continue
+
+        # Must NOT already be on the ground plane (those are handled by _cap_boundary_at_plane)
+        max_dist = float(np.abs(loop_dists).max())
+        if max_dist <= on_plane_threshold:
+            continue
+
+        stats["loops_found"] += 1
+        n = len(loop_verts)
+
+        # Project loop vertices onto the ground plane
+        proj_points = loop_points - loop_dists[:, None] * plane_normal[None, :]
+
+        # Allocate new vertex indices for projected points
+        proj_indices = list(range(next_vertex, next_vertex + n))
+        new_vertices_list.extend(proj_points)
+        next_vertex += n
+
+        # --- Skirt triangles ---
+        skirt_tris: list[list[int]] = []
+        for i in range(n):
+            i_next = (i + 1) % n
+            v0 = loop_verts[i]
+            v1 = loop_verts[i_next]
+            p0 = proj_indices[i]
+            p1 = proj_indices[i_next]
+            skirt_tris.append([v0, v1, p0])
+            skirt_tris.append([v1, p1, p0])
+
+        skirt_faces = np.asarray(skirt_tris, dtype=np.int64)
+
+        # Orient skirt normals outward (away from mesh center)
+        all_verts_so_far = np.vstack(
+            (vertices, np.asarray(new_vertices_list, dtype=np.float64))
+        )
+        sample_tri = skirt_faces[0]
+        sv0 = all_verts_so_far[sample_tri[0]]
+        sv1 = all_verts_so_far[sample_tri[1]]
+        sv2 = all_verts_so_far[sample_tri[2]]
+        tri_normal = np.cross(sv1 - sv0, sv2 - sv0)
+        tri_center = (sv0 + sv1 + sv2) / 3.0
+        outward_dir = tri_center - mesh_center
+        if float(np.dot(tri_normal, outward_dir)) < 0:
+            skirt_faces = skirt_faces[:, [0, 2, 1]]
+
+        new_faces_list.append(skirt_faces)
+        stats["skirt_faces"] += int(skirt_faces.shape[0])
+
+        # --- Floor cap ---
+        uv = _loop_projection_uv(proj_points, plane_normal)
+        local_tris = _triangulate_polygon_ear_clip(uv)
+        if local_tris:
+            cap_faces = np.asarray(
+                [
+                    [proj_indices[a], proj_indices[b], proj_indices[c]]
+                    for a, b, c in local_tris
+                ],
+                dtype=np.int64,
+            )
+            # Orient cap normal to -plane_normal (pointing down/outward)
+            cs0 = all_verts_so_far[cap_faces[0, 0]]
+            cs1 = all_verts_so_far[cap_faces[0, 1]]
+            cs2 = all_verts_so_far[cap_faces[0, 2]]
+            cap_normal = np.cross(cs1 - cs0, cs2 - cs0)
+            if float(np.dot(cap_normal, -plane_normal)) < 0:
+                cap_faces = cap_faces[:, [0, 2, 1]]
+
+            new_faces_list.append(cap_faces)
+            stats["cap_faces"] += int(cap_faces.shape[0])
+
+        stats["loops_capped"] += 1
+
+    if not new_faces_list:
+        return vertices, np.zeros((0, 3), dtype=np.int64), stats
+
+    augmented_vertices = np.vstack(
+        (vertices, np.asarray(new_vertices_list, dtype=np.float64))
+    )
+    all_new_faces = np.vstack(new_faces_list)
+    stats["new_vertices"] = len(new_vertices_list)
+    return augmented_vertices, all_new_faces, stats
 
 
 def _probe_ground_plane_shift(

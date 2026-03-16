@@ -169,6 +169,11 @@ _CHECKPOINTS: dict[int, Any] = {
             patterns=_patterns(r"waiting for cleanup review decision|cleanup review ready"),
         ),
         _checkpoint(
+            "s6.holefill",
+            label="Bottom hole-fill (skirt + cap)",
+            patterns=_patterns(r"bottom hole-fill"),
+        ),
+        _checkpoint(
             "s6.apply",
             label="Apply cleanup decision",
             patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped"),

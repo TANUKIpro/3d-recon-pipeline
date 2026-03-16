@@ -54,6 +54,7 @@ const CHECKPOINT_TEMPLATES = {
   6: [
     'Generate cleanup proposal',
     'Wait for cleanup review',
+    'Bottom hole-fill (skirt + cap)',
     'Apply cleanup decision',
   ],
 };
@@ -64,7 +65,7 @@ const CHECKPOINT_IDS = {
   3: ['s3.initialize', 's3.interact', 's3.propagate', 's3.verify'],
   4: ['s4.train_gs', 's4.stereo', 's4.tsdf', 's4.save'],
   5: ['s5.load', 's5.intrinsics', 's5.uv', 's5.score', 's5.fill', 's5.export'],
-  6: ['s6.proposal', 's6.review', 's6.apply'],
+  6: ['s6.proposal', 's6.review', 's6.holefill', 's6.apply'],
 };
 
 const DETAIL_MATCHERS = {
@@ -102,7 +103,8 @@ const DETAIL_MATCHERS = {
   6: [
     { re: /loading textured mesh|scoring cleanup proposal|cleanup proposal ready/i, idx: 0 },
     { re: /waiting for cleanup review decision|cleanup review ready/i, idx: 1 },
-    { re: /writing cleaned obj\/mtl|post-texture cleanup complete|post-texture cleanup skipped|applying cleanup decision/i, idx: 2 },
+    { re: /bottom hole-fill/i, idx: 2 },
+    { re: /writing cleaned obj\/mtl|post-texture cleanup complete|post-texture cleanup skipped|applying cleanup decision/i, idx: 3 },
   ],
 };
 

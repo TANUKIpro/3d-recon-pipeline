@@ -25,6 +25,7 @@ from scripts.repair.ground_plane import (
     _cap_boundary_at_plane,
     _clip_mesh_at_plane,
     _extract_closed_section_loops,
+    _generate_bottom_skirt_cap,
     _orient_ground_plane_toward_mesh,
 )
 from scripts.repair.triangulate import _loop_projection_uv
@@ -1203,6 +1204,31 @@ def _analyze_cleanup(
         cap_faces = np.zeros((0, 3), dtype=np.int64)
     cleanup_faces = np.vstack([arr for arr in (split_faces, cap_faces) if arr.size > 0]) if (split_faces.size > 0 or cap_faces.size > 0) else np.zeros((0, 3), dtype=np.int64)
 
+    # === Pass 7: Bottom hole-fill (skirt + floor cap) ===
+    kept_merged = merged_faces[keep_merged_mask]
+    final_faces_for_skirt = (
+        np.vstack((kept_merged, cleanup_faces))
+        if cleanup_faces.size > 0
+        else kept_merged
+    )
+    capped_vertices, skirt_cap_faces, skirt_stats = _generate_bottom_skirt_cap(
+        capped_vertices,
+        final_faces_for_skirt,
+        plane_normal,
+        actual_plane_d,
+    )
+    if skirt_cap_faces.size > 0:
+        cleanup_faces = (
+            np.vstack((cleanup_faces, skirt_cap_faces))
+            if cleanup_faces.size > 0
+            else skirt_cap_faces
+        )
+    print(
+        f"  Pass 7 (bottom hole-fill): {skirt_stats['loops_found']} loops,"
+        f" {skirt_stats['skirt_faces']} skirt + {skirt_stats['cap_faces']} cap faces,"
+        f" {skirt_stats['new_vertices']} new vertices"
+    )
+
     removed_centroids = np.zeros((0, 3), dtype=np.float64)
     if removed_merged_faces.size > 0:
         removed_centroids = merged_vertices[removed_merged_faces].mean(axis=1)
@@ -1252,6 +1278,7 @@ def _analyze_cleanup(
         "component_filtering": component_stats,
         "cap_color": cap_color,
         "matched_boundary_area": float(matched_boundary_area),
+        "skirt_stats": skirt_stats,
         "has_candidate": bool(has_candidate),
         "recommended_decision": recommended_decision,
         "reason": reason,
@@ -1285,6 +1312,7 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "component_removed_faces": analysis.get("component_filtering", {}).get("removed_faces", 0),
         "above_plane_removed_faces": analysis.get("mask_filtering", {}).get("above_plane_filtering", {}).get("removed_count", 0),
         "lower_half_removed_faces": analysis.get("mask_filtering", {}).get("lower_half_mask_noise", {}).get("removed_count", 0),
+        "bottom_hole_fill": analysis.get("skirt_stats", {}),
     }
     requires_review = bool(analysis["has_candidate"])
     return {
@@ -1316,6 +1344,8 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "summary": {
             "removed_face_count": removed_faces,
             "cap_face_count": int(analysis["cap_faces"].shape[0]),
+            "skirt_face_count": analysis.get("skirt_stats", {}).get("skirt_faces", 0),
+            "floor_cap_face_count": analysis.get("skirt_stats", {}).get("cap_faces", 0),
             "confidence": float(mask_consistency_score) if mask_consistency_score is not None else 0.0,
         },
         "mask_consistency": {
@@ -1446,6 +1476,17 @@ def apply_cleanup_proposal(
         return _copy_stage5_outputs(output_root)
 
     _check_cancel(cancel_cb)
+
+    skirt = analysis.get("skirt_stats", {})
+    if skirt.get("loops_capped", 0) > 0:
+        _emit_progress(
+            progress_cb, 8.0,
+            f"Bottom hole-fill: {skirt['skirt_faces']} skirt"
+            f" + {skirt['cap_faces']} cap faces",
+        )
+    else:
+        _emit_progress(progress_cb, 8.0, "Bottom hole-fill: no bottom loops")
+
     _emit_progress(progress_cb, 12.0, "Preparing cleanup geometry")
 
     obj_mesh: _ObjMesh = analysis["obj_mesh"]
