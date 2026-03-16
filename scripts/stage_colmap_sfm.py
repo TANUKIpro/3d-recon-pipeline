@@ -20,7 +20,7 @@ def run_colmap_sfm(
     max_features: int = 32768,
     image_size: int = 1024,
     use_gpu: bool = False,
-    dsp_sift: bool = True,
+    dsp_sift: bool = False,
     first_octave: int = -1,
     progress_cb=None,
     cancel_cb=None,

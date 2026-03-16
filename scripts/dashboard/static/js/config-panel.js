@@ -170,7 +170,7 @@ export class ConfigPanel {
         2048,
       ),
       colmap_use_gpu: this._inputs.colmap_use_gpu?.checked ?? false,
-      colmap_dsp_sift: this._inputs.colmap_dsp_sift?.checked ?? true,
+      colmap_dsp_sift: this._inputs.colmap_dsp_sift?.checked ?? false,
       colmap_first_octave: (this._inputs.colmap_first_octave?.checked ?? true) ? -1 : 0,
 
       // Stage 3: SAM2 Segmentation
