@@ -270,7 +270,7 @@
               <div class="form-row">
                 <div class="form-group">
                   <label for="cfg-colmap-max-features">Max Features</label>
-                  <input type="number" id="cfg-colmap-max-features" value="8192" min="1000" step="1000">
+                  <input type="number" id="cfg-colmap-max-features" value="32768" min="1000" step="1000">
                 </div>
                 <div class="form-group">
                   <label for="cfg-colmap-image-size">Image Size</label>
@@ -287,6 +287,12 @@
                 <label class="checkbox-label" for="cfg-colmap-dsp-sift">
                   <input type="checkbox" id="cfg-colmap-dsp-sift" checked>
                   DSP-SIFT (高精度・低速)
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-label" for="cfg-colmap-first-octave">
+                  <input type="checkbox" id="cfg-colmap-first-octave" checked>
+                  First Octave -1 (2xアップサンプル・メモリ増)
                 </label>
               </div>
             </div>

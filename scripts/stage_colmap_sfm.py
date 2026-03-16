@@ -17,10 +17,11 @@ def run_colmap_sfm(
     frames_dir: str,
     output_dir: str,
     matcher: str = "sequential",
-    max_features: int = 8192,
+    max_features: int = 32768,
     image_size: int = 1024,
     use_gpu: bool = False,
     dsp_sift: bool = True,
+    first_octave: int = -1,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -78,6 +79,7 @@ def run_colmap_sfm(
         "--SiftExtraction.max_num_features", str(max_features),
         "--SiftExtraction.max_image_size", str(image_size),
         "--SiftExtraction.use_gpu", "1" if use_gpu else "0",
+        "--SiftExtraction.first_octave", str(first_octave),
     ]
     if dsp_sift:
         extract_cmd += [

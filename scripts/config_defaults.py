@@ -22,10 +22,11 @@ EXTRACT_MAX_FRAMES = 50
 
 # --- Stage 2: COLMAP SfM -----------------------------------
 COLMAP_MATCHER = "exhaustive"
-COLMAP_MAX_FEATURES = 8192
+COLMAP_MAX_FEATURES = 32768
 COLMAP_IMAGE_SIZE = 2048
 COLMAP_USE_GPU = False
 COLMAP_DSP_SIFT = True
+COLMAP_FIRST_OCTAVE = -1
 
 # --- Stage 3: SAM2 ----------------------------------------
 SAM2_DEFAULT_MODEL = "large"

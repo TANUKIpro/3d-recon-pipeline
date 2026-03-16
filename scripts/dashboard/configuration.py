@@ -11,6 +11,7 @@ from scripts.config_defaults import (
     COLMAP_MAX_FEATURES,
     COLMAP_MATCHER,
     COLMAP_DSP_SIFT,
+    COLMAP_FIRST_OCTAVE,
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
@@ -119,6 +120,10 @@ def build_pipeline_config(
         colmap_dsp_sift=parse_bool(
             raw.get("colmap_dsp_sift"),
             env_bool("COLMAP_DSP_SIFT", COLMAP_DSP_SIFT, env_map),
+        ),
+        colmap_first_octave=parse_int(
+            raw.get("colmap_first_octave"),
+            env_int("COLMAP_FIRST_OCTAVE", COLMAP_FIRST_OCTAVE, env_map),
         ),
         gs2mesh_gs_iterations=max(
             1000,

@@ -17,6 +17,7 @@ from scripts.config_defaults import (
     COLMAP_MAX_FEATURES,
     COLMAP_MATCHER,
     COLMAP_DSP_SIFT,
+    COLMAP_FIRST_OCTAVE,
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
@@ -112,6 +113,7 @@ class PipelineConfig:
     colmap_image_size: int = COLMAP_IMAGE_SIZE
     colmap_use_gpu: bool = COLMAP_USE_GPU
     colmap_dsp_sift: bool = COLMAP_DSP_SIFT
+    colmap_first_octave: int = COLMAP_FIRST_OCTAVE
     gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS
     gs2mesh_runtime_profile: str = GS2MESH_RUNTIME_PROFILE
     gs2mesh_stereo_model: str = GS2MESH_STEREO_MODEL
