@@ -20,6 +20,7 @@ def run_colmap_sfm(
     max_features: int = 8192,
     image_size: int = 1024,
     use_gpu: bool = False,
+    dsp_sift: bool = True,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -69,7 +70,7 @@ def run_colmap_sfm(
 
     # Step 1: Feature extraction
     _report(5.0, "Running COLMAP feature extraction")
-    _run_colmap([
+    extract_cmd = [
         "colmap", "feature_extractor",
         "--database_path", str(colmap_db),
         "--image_path", str(frames),
@@ -77,7 +78,13 @@ def run_colmap_sfm(
         "--SiftExtraction.max_num_features", str(max_features),
         "--SiftExtraction.max_image_size", str(image_size),
         "--SiftExtraction.use_gpu", "1" if use_gpu else "0",
-    ], "feature_extractor")
+    ]
+    if dsp_sift:
+        extract_cmd += [
+            "--SiftExtraction.estimate_affine_shape", "1",
+            "--SiftExtraction.domain_size_pooling", "1",
+        ]
+    _run_colmap(extract_cmd, "feature_extractor")
 
     if cancel_cb:
         cancel_cb()

@@ -274,13 +274,19 @@
                 </div>
                 <div class="form-group">
                   <label for="cfg-colmap-image-size">Image Size</label>
-                  <input type="number" id="cfg-colmap-image-size" value="1024" min="256" step="128">
+                  <input type="number" id="cfg-colmap-image-size" value="2048" min="256" step="128">
                 </div>
               </div>
               <div class="form-group">
                 <label class="checkbox-label" for="cfg-colmap-use-gpu">
                   <input type="checkbox" id="cfg-colmap-use-gpu">
                   GPU SIFT (CUDA版COLMAP必要)
+                </label>
+              </div>
+              <div class="form-group">
+                <label class="checkbox-label" for="cfg-colmap-dsp-sift">
+                  <input type="checkbox" id="cfg-colmap-dsp-sift" checked>
+                  DSP-SIFT (高精度・低速)
                 </label>
               </div>
             </div>

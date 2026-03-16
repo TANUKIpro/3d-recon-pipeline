@@ -41,6 +41,7 @@ export class ConfigPanel {
       colmap_max_features: document.getElementById('cfg-colmap-max-features'),
       colmap_image_size: document.getElementById('cfg-colmap-image-size'),
       colmap_use_gpu: document.getElementById('cfg-colmap-use-gpu'),
+      colmap_dsp_sift: document.getElementById('cfg-colmap-dsp-sift'),
 
       // Stage 3: SAM2 Segmentation
       sam2_model: document.getElementById('cfg-sam2-model'),
@@ -165,9 +166,10 @@ export class ConfigPanel {
       ),
       colmap_image_size: this._parsePositiveInt(
         this._inputs.colmap_image_size?.value,
-        1024,
+        2048,
       ),
       colmap_use_gpu: this._inputs.colmap_use_gpu?.checked ?? false,
+      colmap_dsp_sift: this._inputs.colmap_dsp_sift?.checked ?? true,
 
       // Stage 3: SAM2 Segmentation
       sam2_model: this._inputs.sam2_model.value,
@@ -541,6 +543,9 @@ export class ConfigPanel {
     }
     if (cfg.colmap_use_gpu != null && this._inputs.colmap_use_gpu) {
       this._inputs.colmap_use_gpu.checked = cfg.colmap_use_gpu !== false;
+    }
+    if (cfg.colmap_dsp_sift != null && this._inputs.colmap_dsp_sift) {
+      this._inputs.colmap_dsp_sift.checked = cfg.colmap_dsp_sift !== false;
     }
 
     // Stage 3: SAM2 Segmentation
