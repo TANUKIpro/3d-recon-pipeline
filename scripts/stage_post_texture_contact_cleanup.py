@@ -2031,14 +2031,35 @@ def apply_cleanup_proposal(
     skirt = analysis.get("skirt_stats", {})
     if skirt.get("loops_capped", 0) > 0:
         _emit_progress(
-            progress_cb, 8.0,
+            progress_cb, 5.0,
             f"Bottom hole-fill: {skirt['skirt_faces']} skirt"
             f" + {skirt['cap_faces']} cap faces",
         )
     else:
-        _emit_progress(progress_cb, 8.0, "Bottom hole-fill: no bottom loops")
+        _emit_progress(progress_cb, 5.0, "Bottom hole-fill: no bottom loops")
 
-    _emit_progress(progress_cb, 12.0, "Preparing cleanup geometry")
+    p8 = analysis.get("pass8_stats") or {}
+    _emit_progress(
+        progress_cb, 7.0,
+        f"Post-holefill noise removal: {p8.get('removed_components', 0)} components"
+        f" ({p8.get('removed_faces_total', 0)} faces)",
+    )
+
+    p9 = analysis.get("pass9_stats") or {}
+    _emit_progress(
+        progress_cb, 9.0,
+        f"General hole-fill: {p9.get('loops_capped', 0)}/{p9.get('loops_found', 0)} loops capped"
+        f" ({p9.get('cap_faces_added', 0)} faces)",
+    )
+
+    p10 = analysis.get("pass10_stats") or {}
+    _emit_progress(
+        progress_cb, 11.0,
+        f"Final cleanup: {p10.get('removed_components', 0)} components"
+        f" ({p10.get('removed_faces_total', 0)} faces)",
+    )
+
+    _emit_progress(progress_cb, 15.0, "Preparing cleanup geometry")
 
     obj_mesh: _ObjMesh = analysis["obj_mesh"]
     keep_original_face_mask = analysis["keep_original_face_mask"]

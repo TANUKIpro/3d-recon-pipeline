@@ -174,9 +174,24 @@ _CHECKPOINTS: dict[int, Any] = {
             patterns=_patterns(r"bottom hole-fill"),
         ),
         _checkpoint(
+            "s6.noise",
+            label="Post-holefill noise removal",
+            patterns=_patterns(r"post-holefill noise removal"),
+        ),
+        _checkpoint(
+            "s6.watertight",
+            label="General hole-fill (watertight)",
+            patterns=_patterns(r"general hole-fill"),
+        ),
+        _checkpoint(
+            "s6.finalclean",
+            label="Final component cleanup",
+            patterns=_patterns(r"final cleanup"),
+        ),
+        _checkpoint(
             "s6.apply",
-            label="Apply cleanup decision",
-            patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped"),
+            label="Write cleaned mesh",
+            patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped|preparing cleanup geometry"),
             cleanup_dirs=("post_texture_contact_cleanup",),
             cleanup_files=("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
         ),
