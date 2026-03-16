@@ -21,6 +21,12 @@ from typing import Any
 import cv2
 import numpy as np
 
+from scripts.repair.boundary import (
+    _apply_local_smoothing,
+    _extract_boundary_edges,
+    _extract_boundary_paths,
+    _fit_loop_normal,
+)
 from scripts.repair.ground_plane import (
     _cap_boundary_at_plane,
     _clip_mesh_at_plane,
@@ -28,7 +34,7 @@ from scripts.repair.ground_plane import (
     _generate_bottom_skirt_cap,
     _orient_ground_plane_toward_mesh,
 )
-from scripts.repair.triangulate import _loop_projection_uv
+from scripts.repair.triangulate import _loop_projection_uv, _triangulate_polygon_ear_clip
 from scripts.texture.conflict_region import _build_face_adjacency
 from scripts.texture.intrinsics import _make_K, _project_simple
 from scripts.texture.io_utils import _load_mask, _load_poses
@@ -1034,6 +1040,382 @@ def _pass_post_holefill_cleanup(
     }
 
 
+def _build_edge_counts(faces: np.ndarray) -> dict[tuple[int, int], int]:
+    """Build a mapping of (sorted) edge → face-use count."""
+    if faces.size == 0:
+        return {}
+    edges = np.vstack(
+        (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]),
+    ).astype(np.int64)
+    edges = np.sort(edges, axis=1)
+    uniq, counts = np.unique(edges, axis=0, return_counts=True)
+    return {(int(e[0]), int(e[1])): int(c) for e, c in zip(uniq, counts)}
+
+
+def _cap_would_create_non_manifold(
+    edge_counts: dict[tuple[int, int], int],
+    new_faces: np.ndarray,
+) -> bool:
+    """Check whether *new_faces* would push any edge above count 2.
+
+    Only edges incident to *new_faces* are inspected, so pre-existing
+    non-manifold edges elsewhere in the mesh are ignored.
+    """
+    nf_edges = np.vstack(
+        (new_faces[:, [0, 1]], new_faces[:, [1, 2]], new_faces[:, [2, 0]]),
+    ).astype(np.int64)
+    nf_edges = np.sort(nf_edges, axis=1)
+    new_edge_adds: dict[tuple[int, int], int] = {}
+    for e in nf_edges.tolist():
+        key = (e[0], e[1])
+        new_edge_adds[key] = new_edge_adds.get(key, 0) + 1
+    for key, add in new_edge_adds.items():
+        if edge_counts.get(key, 0) + add > 2:
+            return True
+    return False
+
+
+def _update_edge_counts(
+    edge_counts: dict[tuple[int, int], int],
+    faces: np.ndarray,
+) -> None:
+    """Add *faces*' edges into a running edge-count dict (in place)."""
+    fe = np.vstack(
+        (faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]),
+    ).astype(np.int64)
+    fe = np.sort(fe, axis=1)
+    for e in fe.tolist():
+        key = (e[0], e[1])
+        edge_counts[key] = edge_counts.get(key, 0) + 1
+
+
+def _split_self_touching_loop(loop_verts: list[int]) -> list[list[int]]:
+    """Split a self-touching loop at repeated vertices into simple sub-loops.
+
+    A self-touching loop visits some vertex more than once, forming a
+    figure-8 or more complex topology.  This function peels off simple
+    (non-self-touching) sub-loops at each repeated vertex until no
+    duplicates remain.
+
+    Returns a list of vertex lists, each representing a simple closed
+    sub-loop (without the closing duplicate — caller appends ``[0]``).
+    """
+    result: list[list[int]] = []
+    remaining = list(loop_verts)
+
+    while True:
+        seen: dict[int, int] = {}
+        dup_start = -1
+        dup_end = -1
+        for i, v in enumerate(remaining):
+            if v in seen:
+                dup_start = seen[v]
+                dup_end = i
+                break
+            seen[v] = i
+
+        if dup_start == -1:
+            # No duplicates — remaining is a clean simple loop.
+            if len(remaining) >= 3:
+                result.append(remaining)
+            break
+
+        # Extract the inner sub-loop between the two occurrences.
+        sub = remaining[dup_start:dup_end]
+        if len(sub) >= 3:
+            result.append(sub)
+
+        # Collapse the sub-loop out of remaining, keeping the junction
+        # vertex once so the outer chain stays connected.
+        remaining = remaining[: dup_start + 1] + remaining[dup_end + 1 :]
+
+    return result
+
+
+def _merge_open_boundary_paths(
+    open_paths: list[list[int]],
+    vertices: np.ndarray,
+    close_gap_tolerance: float,
+) -> list[list[int]]:
+    """Chain open boundary paths at shared endpoints to form closed loops.
+
+    Open paths arise when ``_extract_boundary_paths`` encounters junction
+    vertices (>2 boundary edges) and the greedy walk splits a single loop
+    into multiple open segments.  This function greedily concatenates
+    segments whose endpoints coincide, then optionally closes near-closed
+    chains whose remaining gap is within *close_gap_tolerance*.
+    """
+    if not open_paths:
+        return []
+
+    chains: list[list[int]] = [list(p) for p in open_paths]
+    used = [False] * len(chains)
+    closed: list[list[int]] = []
+
+    for seed in range(len(chains)):
+        if used[seed]:
+            continue
+        used[seed] = True
+        chain = list(chains[seed])
+
+        # Greedily extend chain by matching endpoints (exact vertex match).
+        progress = True
+        while progress:
+            progress = False
+            if chain[0] == chain[-1]:
+                break
+            for j in range(len(chains)):
+                if used[j]:
+                    continue
+                p = chains[j]
+                if chain[-1] == p[0]:
+                    chain.extend(p[1:])
+                    used[j] = True
+                    progress = True
+                    break
+                if chain[-1] == p[-1]:
+                    chain.extend(list(reversed(p))[1:])
+                    used[j] = True
+                    progress = True
+                    break
+                if chain[0] == p[-1]:
+                    chain = p[:-1] + chain
+                    used[j] = True
+                    progress = True
+                    break
+                if chain[0] == p[0]:
+                    chain = list(reversed(p))[:-1] + chain
+                    used[j] = True
+                    progress = True
+                    break
+
+        if chain[0] == chain[-1]:
+            closed.append(chain)
+        elif close_gap_tolerance > 0:
+            d = float(np.linalg.norm(vertices[chain[0]] - vertices[chain[-1]]))
+            if d <= close_gap_tolerance:
+                chain.append(chain[0])
+                closed.append(chain)
+
+    return closed
+
+
+def _pass_general_holefill(
+    keep_merged_mask: np.ndarray,
+    merged_faces: np.ndarray,
+    cleanup_faces: np.ndarray,
+    capped_vertices: np.ndarray,
+    *,
+    smooth_iterations: int = 3,
+    smooth_lambda: float = 0.18,
+    min_loop_vertices: int = 3,
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Pass 9: fill all remaining boundary loops to make the mesh watertight.
+
+    Unlike Pass 7 (bottom-only), this pass targets every remaining open
+    boundary regardless of location or normal direction.  In addition to
+    natively closed loops, open boundary paths are chained at shared
+    endpoints and near-closed gaps to recover additional fillable loops.
+    """
+    stats: dict[str, Any] = {
+        "loops_found": 0,
+        "loops_capped": 0,
+        "loops_skipped_small": 0,
+        "self_touching_splits": 0,
+        "loops_skipped_degenerate": 0,
+        "loops_skipped_non_manifold": 0,
+        "ear_clip_to_fan_fallbacks": 0,
+        "open_paths_found": 0,
+        "open_paths_merged": 0,
+        "cap_faces_added": 0,
+        "new_vertices": 0,
+        "smoothing_seed_count": 0,
+    }
+
+    # --- build combined mesh ---
+    kept_merged = merged_faces[keep_merged_mask]
+    parts = [arr for arr in (kept_merged, cleanup_faces) if arr.size > 0]
+    if not parts:
+        return capped_vertices, cleanup_faces, stats
+    combined_faces = np.vstack(parts)
+
+    # --- boundary detection ---
+    boundary_edges = _extract_boundary_edges(combined_faces)
+    if boundary_edges.size == 0:
+        return capped_vertices, cleanup_faces, stats
+
+    raw_paths = _extract_boundary_paths(boundary_edges)
+
+    # Separate closed loops from open paths
+    closed_paths = [p for p in raw_paths if len(p) >= 3 and p[0] == p[-1]]
+    open_paths = [p for p in raw_paths if len(p) >= 3 and p[0] != p[-1]]
+    stats["open_paths_found"] = len(open_paths)
+
+    # Try to merge open paths into closed loops
+    if open_paths:
+        bbox_diag = float(np.linalg.norm(
+            capped_vertices.max(axis=0) - capped_vertices.min(axis=0),
+        ))
+        gap_tolerance = 0.02 * bbox_diag  # 2 % of bounding-box diagonal
+        recovered = _merge_open_boundary_paths(open_paths, capped_vertices, gap_tolerance)
+        stats["open_paths_merged"] = len(recovered)
+        closed_paths.extend(recovered)
+
+    # Split self-touching loops (vertex appears >1 time) into simple
+    # sub-loops so each one can be triangulated independently.
+    sanitised_paths: list[list[int]] = []
+    n_split = 0
+    for cp in closed_paths:
+        verts = cp[:-1]  # strip closing duplicate
+        if len(set(verts)) == len(verts):
+            sanitised_paths.append(cp)
+        else:
+            subs = _split_self_touching_loop(verts)
+            n_split += len(subs)
+            for sub in subs:
+                # Re-close into [v0, ..., vN, v0]
+                sanitised_paths.append(sub + [sub[0]])
+    stats["self_touching_splits"] = n_split
+    closed_paths = sanitised_paths
+
+    stats["loops_found"] = len(closed_paths)
+    if not closed_paths:
+        return capped_vertices, cleanup_faces, stats
+
+    # mesh center for outward-normal orientation
+    used_verts = np.unique(combined_faces.ravel())
+    mesh_center = capped_vertices[used_verts].mean(axis=0)
+
+    # Incremental edge-count dict — ignores pre-existing non-manifold edges
+    # in combined_faces; only checks whether *new* cap faces would create new
+    # non-manifold problems.
+    edge_counts = _build_edge_counts(combined_faces)
+
+    all_new_faces: list[np.ndarray] = []
+    new_vertex_list: list[np.ndarray] = []
+    smooth_seed_vertices: set[int] = set()
+    next_vertex = int(capped_vertices.shape[0])
+
+    def _make_fan(loop_verts: list[int], centroid: np.ndarray) -> tuple[np.ndarray, bool]:
+        """Create a centroid-fan triangulation (always non-manifold safe)."""
+        nonlocal next_vertex
+        centroid_idx = next_vertex
+        new_vertex_list.append(centroid)
+        next_vertex += 1
+        n_lv = len(loop_verts)
+        fan = [[centroid_idx, loop_verts[i], loop_verts[(i + 1) % n_lv]] for i in range(n_lv)]
+        return np.asarray(fan, dtype=np.int64), True
+
+    for path in closed_paths:
+        loop_verts = path[:-1]  # strip duplicate closing vertex
+        n = len(loop_verts)
+        if n < min_loop_vertices:
+            stats["loops_skipped_small"] += 1
+            continue
+        if len(set(loop_verts)) != n:
+            continue  # safety: should not reach here after pre-split
+
+        loop_indices = np.asarray(loop_verts, dtype=np.int64)
+        loop_points = capped_vertices[loop_indices]
+        centroid = loop_points.mean(axis=0)
+        loop_normal = _fit_loop_normal(loop_points, centroid, mesh_center)
+
+        # --- triangulate: ear-clip → local NM check → fan fallback ---
+        uv = _loop_projection_uv(loop_points, loop_normal)
+        local_tris = _triangulate_polygon_ear_clip(uv)
+        used_fan = False
+
+        if local_tris is not None and len(local_tris) > 0:
+            new_faces = np.asarray(
+                [[loop_verts[a], loop_verts[b], loop_verts[c]] for a, b, c in local_tris],
+                dtype=np.int64,
+            )
+            # Ear-clip diagonals may coincide with existing interior edges;
+            # if so, fall back to fan (which uses only boundary + centroid
+            # edges and is inherently non-manifold safe).
+            if _cap_would_create_non_manifold(edge_counts, new_faces):
+                new_faces, used_fan = _make_fan(loop_verts, centroid)
+                stats["ear_clip_to_fan_fallbacks"] += 1
+        else:
+            new_faces, used_fan = _make_fan(loop_verts, centroid)
+
+        # resolve vertices for area / normal checks
+        if new_vertex_list:
+            all_verts = np.vstack((capped_vertices, np.asarray(new_vertex_list, dtype=np.float64)))
+        else:
+            all_verts = capped_vertices
+
+        # filter degenerate triangles
+        tri_pts = all_verts[new_faces]
+        tri_cross = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
+        tri_area = np.linalg.norm(tri_cross, axis=1) * 0.5
+        valid_mask = tri_area > 1e-10
+        new_faces = new_faces[valid_mask]
+        if new_faces.shape[0] == 0:
+            stats["loops_skipped_degenerate"] += 1
+            if used_fan and new_vertex_list:
+                new_vertex_list.pop()
+                next_vertex -= 1
+            continue
+
+        # orient normals outward (toward mesh exterior)
+        tri_pts = all_verts[new_faces]
+        tri_normals = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
+        tri_centers = tri_pts.mean(axis=1)
+        outward_dir = tri_centers - mesh_center
+        dots = np.sum(tri_normals * outward_dir, axis=1)
+        flip_mask = dots < 0.0
+        new_faces[flip_mask] = new_faces[flip_mask][:, ::-1]
+
+        # Final non-manifold safety check (should rarely trigger for fans)
+        if _cap_would_create_non_manifold(edge_counts, new_faces):
+            stats["loops_skipped_non_manifold"] += 1
+            if used_fan and new_vertex_list:
+                new_vertex_list.pop()
+                next_vertex -= 1
+            continue
+
+        # Accept — update running edge counts and collect faces
+        _update_edge_counts(edge_counts, new_faces)
+        all_new_faces.append(new_faces)
+        smooth_seed_vertices.update(loop_verts)
+        stats["loops_capped"] += 1
+        stats["cap_faces_added"] += int(new_faces.shape[0])
+
+    # append new vertices
+    if new_vertex_list:
+        new_verts_arr = np.asarray(new_vertex_list, dtype=np.float64)
+        if new_verts_arr.ndim == 1:
+            new_verts_arr = new_verts_arr.reshape(1, 3)
+        capped_vertices = np.vstack((capped_vertices, new_verts_arr))
+        stats["new_vertices"] = len(new_vertex_list)
+
+    # append new faces to cleanup_faces
+    if all_new_faces:
+        new_faces_arr = np.vstack(all_new_faces)
+        cleanup_faces = (
+            np.vstack((cleanup_faces, new_faces_arr))
+            if cleanup_faces.size > 0
+            else new_faces_arr
+        )
+
+    # local smoothing at junction edges
+    stats["smoothing_seed_count"] = len(smooth_seed_vertices)
+    if smooth_seed_vertices and smooth_iterations > 0:
+        smooth_parts = [arr for arr in (merged_faces[keep_merged_mask], cleanup_faces) if arr.size > 0]
+        if smooth_parts:
+            smooth_combined = np.vstack(smooth_parts)
+            capped_vertices = _apply_local_smoothing(
+                capped_vertices,
+                smooth_combined,
+                smooth_seed_vertices,
+                iterations=smooth_iterations,
+                lamb=smooth_lambda,
+            )
+
+    return capped_vertices, cleanup_faces, stats
+
+
 def _aggregate_pass_stats(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
@@ -1046,6 +1428,8 @@ def _aggregate_pass_stats(
     keep_merged_mask: np.ndarray,
     pass6: dict[str, Any] | None = None,
     pass8: dict[str, Any] | None = None,
+    pass9: dict[str, Any] | None = None,
+    pass10: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Aggregate per-pass statistics into the structures expected by _proposal_payload."""
     all_comp = [p.get("component_stats", {}) for p in (pass1, pass2, pass3, pass3b, pass4)]
@@ -1055,11 +1439,13 @@ def _aggregate_pass_stats(
         sum(c.get("removed_faces", 0) for c in all_comp)
         + pass5.get("removed_faces", 0)
         + (pass8.get("removed_faces_total", 0) if pass8 else 0)
+        + (pass10.get("removed_faces_total", 0) if pass10 else 0)
     )
     total_component_removed_components = (
         sum(c.get("removed_components", 0) for c in all_comp)
         + pass5.get("removed_islands", 0)
         + (pass8.get("removed_components", 0) if pass8 else 0)
+        + (pass10.get("removed_components", 0) if pass10 else 0)
     )
     component_stats: dict[str, Any] = {
         "applied": any(c.get("applied", False) for c in all_comp) or pass5.get("removed_islands", 0) > 0,
@@ -1110,10 +1496,18 @@ def _aggregate_pass_stats(
                 "removed_components": pass8.get("removed_components", 0) if pass8 else 0,
                 "removed_faces": pass8.get("removed_faces_total", 0) if pass8 else 0,
             },
+            "general_holefill": {
+                "loops_capped": pass9.get("loops_capped", 0) if pass9 else 0,
+                "cap_faces_added": pass9.get("cap_faces_added", 0) if pass9 else 0,
+            },
+            "final_cleanup": {
+                "removed_components": pass10.get("removed_components", 0) if pass10 else 0,
+                "removed_faces": pass10.get("removed_faces_total", 0) if pass10 else 0,
+            },
         }
     else:
         mask_filtering_stats = {"applied": False}
-        if pass5.get("removed_islands", 0) > 0 or (pass6 and pass6.get("flipped_removed", 0) > 0) or (pass8 and pass8.get("removed_faces_total", 0) > 0):
+        if pass5.get("removed_islands", 0) > 0 or (pass6 and pass6.get("flipped_removed", 0) > 0) or (pass8 and pass8.get("removed_faces_total", 0) > 0) or (pass9 and pass9.get("loops_capped", 0) > 0) or (pass10 and pass10.get("removed_faces_total", 0) > 0):
             mask_filtering_stats = {
                 "applied": True,
                 "floating_island_removal": {
@@ -1126,6 +1520,14 @@ def _aggregate_pass_stats(
                 "post_holefill_cleanup": {
                     "removed_components": pass8.get("removed_components", 0) if pass8 else 0,
                     "removed_faces": pass8.get("removed_faces_total", 0) if pass8 else 0,
+                },
+                "general_holefill": {
+                    "loops_capped": pass9.get("loops_capped", 0) if pass9 else 0,
+                    "cap_faces_added": pass9.get("cap_faces_added", 0) if pass9 else 0,
+                },
+                "final_cleanup": {
+                    "removed_components": pass10.get("removed_components", 0) if pass10 else 0,
+                    "removed_faces": pass10.get("removed_faces_total", 0) if pass10 else 0,
                 },
                 "component_filtering": component_stats,
             }
@@ -1342,11 +1744,33 @@ def _analyze_cleanup(
     print(f"  Pass 8 (post-holefill noise): {pass8['removed_components']} components"
           f" ({pass8['removed_faces_total']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
+    # === Pass 9: General hole-fill (watertight) ===
+    capped_vertices, cleanup_faces, pass9 = _pass_general_holefill(
+        keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
+    )
+    print(
+        f"  Pass 9 (general hole-fill): {pass9['loops_found']} loops"
+        f" ({pass9['open_paths_merged']} recovered from {pass9['open_paths_found']} open paths),"
+        f" {pass9['loops_capped']} capped,"
+        f" {pass9['cap_faces_added']} cap faces,"
+        f" {pass9['new_vertices']} new vertices"
+    )
+
+    # === Pass 10: Final disconnected component removal ===
+    cleanup_faces, pass10 = _pass_post_holefill_cleanup(
+        keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
+    )
+    print(
+        f"  Pass 10 (final cleanup): {pass10['removed_components']} components"
+        f" ({pass10['removed_faces_total']} faces)"
+        f"  ->  {int(keep_merged_mask.sum())}/{total_faces} kept"
+    )
+
     # Aggregate statistics
     mask_filtering_stats, component_stats = _aggregate_pass_stats(
         pass1, pass2, pass3, pass3b, pass4, pass5,
         outside_ratio_arr, ground_ratio_arr, keep_merged_mask,
-        pass6=pass6, pass8=pass8,
+        pass6=pass6, pass8=pass8, pass9=pass9, pass10=pass10,
     )
 
     removed_centroids = np.zeros((0, 3), dtype=np.float64)
@@ -1400,6 +1824,8 @@ def _analyze_cleanup(
         "matched_boundary_area": float(matched_boundary_area),
         "skirt_stats": skirt_stats,
         "pass8_stats": pass8,
+        "pass9_stats": pass9,
+        "pass10_stats": pass10,
         "has_candidate": bool(has_candidate),
         "recommended_decision": recommended_decision,
         "reason": reason,
@@ -1435,6 +1861,8 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "lower_half_removed_faces": analysis.get("mask_filtering", {}).get("lower_half_mask_noise", {}).get("removed_count", 0),
         "bottom_hole_fill": analysis.get("skirt_stats", {}),
         "post_holefill_cleanup": analysis.get("pass8_stats", {}),
+        "general_holefill": analysis.get("pass9_stats", {}),
+        "final_cleanup": analysis.get("pass10_stats", {}),
     }
     requires_review = bool(analysis["has_candidate"])
     return {
@@ -1468,6 +1896,7 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
             "cap_face_count": int(analysis["cap_faces"].shape[0]),
             "skirt_face_count": analysis.get("skirt_stats", {}).get("skirt_faces", 0),
             "floor_cap_face_count": analysis.get("skirt_stats", {}).get("cap_faces", 0),
+            "general_holefill_faces": analysis.get("pass9_stats", {}).get("cap_faces_added", 0),
             "confidence": float(mask_consistency_score) if mask_consistency_score is not None else 0.0,
         },
         "mask_consistency": {
