@@ -47,13 +47,19 @@ RUN pip install --no-cache-dir \
     wandb \
     && pip install --no-cache-dir scikit-image
 
+# CUDA arch list needed at build time (no GPU in Docker build context)
+ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
+
+# --- Layer 3b: nvdiffrast (GPU rasterization for texture baking) ---
+# Requires CUDA toolkit + PyTorch; not on PyPI, install from GitHub.
+RUN pip install --no-cache-dir --no-build-isolation git+https://github.com/NVlabs/nvdiffrast.git
+
 # --- Layer 4: SAM2 (editable install with CUDA extension for post-processing) ---
 RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
 # --- Layer 5a: gaussian-splatting CUDA extensions ---
-ENV TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
 
 RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
     && cd /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \

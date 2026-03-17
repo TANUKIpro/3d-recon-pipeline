@@ -12,12 +12,22 @@ def _rasterize_view_depth(
     K: np.ndarray,
     img_w: int,
     img_h: int,
+    device: str = "cpu",
 ) -> np.ndarray:
     """Rasterize mesh depth into camera image space for a simple z-test.
 
     Uses vectorized preprocessing to batch-filter faces before the per-face
-    rasterization loop (Optimization B).
+    rasterization loop (Optimization B).  When *device* is ``"cuda"`` the
+    function attempts GPU rasterization via nvdiffrast and falls back to CPU
+    on failure.
     """
+    if device == "cuda":
+        try:
+            from scripts.texture.gpu_raster import gpu_rasterize_depth
+            return gpu_rasterize_depth(vertices, faces, c2w, K, img_w, img_h)
+        except Exception:
+            pass  # fall through to CPU path
+
     uv_all, depth_all = _project_simple(vertices, c2w, K)
     depth_buffer = np.full((img_h, img_w), np.inf, dtype=np.float32)
     inside_eps = 1e-5
@@ -128,8 +138,19 @@ def _evaluate_view_samples(
     min_cos: float,
     angle_exp: float,
     dist_pow: float,
+    device: str = "cpu",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Evaluate which texels can be sampled from a view and return per-texel scores."""
+    if device == "cuda":
+        try:
+            from scripts.texture.gpu_raster import gpu_evaluate_view_samples
+            return gpu_evaluate_view_samples(
+                pos3d, normals, c2w, K, img_w, img_h,
+                mask_bool, depth_buffer, min_cos, angle_exp, dist_pow,
+            )
+        except Exception:
+            pass  # fall through to CPU path
+
     cam_pos = c2w[:3, 3]
     view_dirs = cam_pos[None, :] - pos3d
     dists = np.linalg.norm(view_dirs, axis=1)

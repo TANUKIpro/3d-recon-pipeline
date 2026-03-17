@@ -25,11 +25,21 @@ def _resolve_texture_device(requested: str | None = None) -> str:
         return "cpu"
     if mode == "cuda":
         if torch is not None and torch.cuda.is_available():
+            try:
+                import nvdiffrast  # noqa: F401
+                print("  nvdiffrast available: GPU rasterization enabled")
+            except ImportError:
+                print("  nvdiffrast not available: GPU rasterization disabled (Phase 1/2 CPU fallback)")
             return "cuda"
         print("Warning: TEXTURE_DEVICE=cuda requested but CUDA is unavailable; using CPU")
         return "cpu"
     # auto
     if torch is not None and torch.cuda.is_available():
+        try:
+            import nvdiffrast  # noqa: F401
+            print("  nvdiffrast available: GPU rasterization enabled")
+        except ImportError:
+            print("  nvdiffrast not available: GPU rasterization disabled (Phase 1/2 CPU fallback)")
         return "cuda"
     return "cpu"
 

@@ -327,46 +327,61 @@ def bake_texture(
         % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt, texture_view_assign_mode, texture_quality_boost)
     )
     if texture_device == "cuda":
-        print("  Projection backend request: CUDA (scoring currently uses CPU z-buffer)")
+        print("  Projection backend: CUDA (GPU rasterization + scoring)")
     else:
-        print("  Projection backend request: CPU")
+        print("  Projection backend: CPU")
     _emit_progress(progress_cb, 62.0, "Building texel mapping")
-    face_id_buf = np.full((tex_res, tex_res), -1, dtype=np.int32)
     uv_scaled = uvs * tex_res
 
-    # Pre-compute all triangle UV coords for fillConvexPoly (Optimization E)
-    tri_coords = np.stack([
-        uv_scaled[new_faces[:, 0]],
-        uv_scaled[new_faces[:, 1]],
-        uv_scaled[new_faces[:, 2]],
-    ], axis=1).astype(np.int32).reshape(-1, 3, 1, 2)
+    # Try GPU UV-space rasterization (Phase 2)
+    _used_gpu_uv = False
+    if texture_device == "cuda":
+        try:
+            from scripts.texture.gpu_raster import gpu_rasterize_uv_space
+            face_id_buf, bary_buf = gpu_rasterize_uv_space(uvs, new_faces, tex_res)
+            _used_gpu_uv = True
+            _emit_progress(progress_cb, 72.0, "Building texel mapping (GPU complete)")
+        except Exception:
+            _used_gpu_uv = False
 
-    emit_every_face = max(1, len(new_faces) // 40)
-    for fi in range(len(new_faces)):
-        cv2.fillConvexPoly(face_id_buf, tri_coords[fi], int(fi))
-        if fi % emit_every_face == 0 or fi == len(new_faces) - 1:
-            ratio = (fi + 1) / max(len(new_faces), 1)
-            _emit_progress(
-                progress_cb,
-                62.0 + ratio * 10.0,
-                f"Building texel mapping ({fi + 1}/{len(new_faces)} faces)",
-            )
+    if not _used_gpu_uv:
+        face_id_buf = np.full((tex_res, tex_res), -1, dtype=np.int32)
+
+        # Pre-compute all triangle UV coords for fillConvexPoly (Optimization E)
+        tri_coords = np.stack([
+            uv_scaled[new_faces[:, 0]],
+            uv_scaled[new_faces[:, 1]],
+            uv_scaled[new_faces[:, 2]],
+        ], axis=1).astype(np.int32).reshape(-1, 3, 1, 2)
+
+        emit_every_face = max(1, len(new_faces) // 40)
+        for fi in range(len(new_faces)):
+            cv2.fillConvexPoly(face_id_buf, tri_coords[fi], int(fi))
+            if fi % emit_every_face == 0 or fi == len(new_faces) - 1:
+                ratio = (fi + 1) / max(len(new_faces), 1)
+                _emit_progress(
+                    progress_cb,
+                    62.0 + ratio * 10.0,
+                    f"Building texel mapping ({fi + 1}/{len(new_faces)} faces)",
+                )
 
     valid_texels = face_id_buf >= 0
     ys, xs = np.where(valid_texels)
     fids = face_id_buf[ys, xs]
 
-    # Barycentric coords
-    px, py = xs + 0.5, ys + 0.5
-    fi0, fi1, fi2 = new_faces[fids, 0], new_faces[fids, 1], new_faces[fids, 2]
-    uv0, uv1, uv2 = uv_scaled[fi0], uv_scaled[fi1], uv_scaled[fi2]
-    denom = (uv1[:, 1] - uv2[:, 1]) * (uv0[:, 0] - uv2[:, 0]) + (uv2[:, 0] - uv1[:, 0]) * (uv0[:, 1] - uv2[:, 1])
-    denom = np.where(np.abs(denom) < 1e-10, 1e-10, denom)
-    w0 = ((uv1[:, 1] - uv2[:, 1]) * (px - uv2[:, 0]) + (uv2[:, 0] - uv1[:, 0]) * (py - uv2[:, 1])) / denom
-    w1 = ((uv2[:, 1] - uv0[:, 1]) * (px - uv2[:, 0]) + (uv0[:, 0] - uv2[:, 0]) * (py - uv2[:, 1])) / denom
-    w2 = 1.0 - w0 - w1
-
-    barys = np.column_stack([w0, w1, w2]).astype(np.float32)
+    if _used_gpu_uv:
+        barys = bary_buf[ys, xs]
+    else:
+        # Barycentric coords (CPU path)
+        px, py = xs + 0.5, ys + 0.5
+        fi0, fi1, fi2 = new_faces[fids, 0], new_faces[fids, 1], new_faces[fids, 2]
+        uv0, uv1, uv2 = uv_scaled[fi0], uv_scaled[fi1], uv_scaled[fi2]
+        denom = (uv1[:, 1] - uv2[:, 1]) * (uv0[:, 0] - uv2[:, 0]) + (uv2[:, 0] - uv1[:, 0]) * (uv0[:, 1] - uv2[:, 1])
+        denom = np.where(np.abs(denom) < 1e-10, 1e-10, denom)
+        w0 = ((uv1[:, 1] - uv2[:, 1]) * (px - uv2[:, 0]) + (uv2[:, 0] - uv1[:, 0]) * (py - uv2[:, 1])) / denom
+        w1 = ((uv2[:, 1] - uv0[:, 1]) * (px - uv2[:, 0]) + (uv0[:, 0] - uv2[:, 0]) * (py - uv2[:, 1])) / denom
+        w2 = 1.0 - w0 - w1
+        barys = np.column_stack([w0, w1, w2]).astype(np.float32)
 
     # 3D positions of texels
     tv0 = new_vertices[new_faces[fids, 0]]
@@ -405,7 +420,7 @@ def bake_texture(
         except FileNotFoundError:
             continue
 
-        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device)
         if max_depth_cache > 0:
             depth_cache[vidx] = depth_buffer
             while len(depth_cache) > max_depth_cache:
@@ -422,6 +437,7 @@ def bake_texture(
             min_cos=min_cos,
             angle_exp=angle_exp,
             dist_pow=dist_pow,
+            device=texture_device,
         )
         _update_topk_scores(best_scores, best_views, valid, score, vidx)
 
@@ -562,7 +578,7 @@ def bake_texture(
         if vidx in depth_cache:
             depth_buffer = depth_cache[vidx]
         else:
-            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h)
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device)
         valid, _score, px_proj, py_proj = _evaluate_view_samples(
             pos3d=pos3d,
             normals=normals,
@@ -575,6 +591,7 @@ def bake_texture(
             min_cos=min_cos,
             angle_exp=angle_exp,
             dist_pow=dist_pow,
+            device=texture_device,
         )
 
         ok = valid[all_tidx]
@@ -624,7 +641,7 @@ def bake_texture(
                 depth_buffer = depth_cache[vidx]
             else:
                 depth_buffer = _rasterize_view_depth(
-                    new_vertices, new_faces, c2w, K, img_w, img_h
+                    new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device,
                 )
             valid_fb, score_fb, _, _ = _evaluate_view_samples(
                 pos3d=pos3d[missing],
@@ -638,6 +655,7 @@ def bake_texture(
                 min_cos=fallback_min_cos,
                 angle_exp=angle_exp,
                 dist_pow=dist_pow,
+                device=texture_device,
             )
             better = valid_fb & (score_fb > fb_best_score)
             better_idx = np.where(better)[0]
@@ -665,7 +683,7 @@ def bake_texture(
                     depth_buffer = depth_cache[vidx_val]
                 else:
                     depth_buffer = _rasterize_view_depth(
-                        new_vertices, new_faces, c2w, K, img_w, img_h
+                        new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device,
                     )
                 valid_p, _, px_p, py_p = _evaluate_view_samples(
                     pos3d=pos3d[fb_global],
@@ -679,6 +697,7 @@ def bake_texture(
                     min_cos=fallback_min_cos,
                     angle_exp=angle_exp,
                     dist_pow=dist_pow,
+                    device=texture_device,
                 )
                 if np.any(valid_p):
                     fill_global = fb_global[valid_p]
@@ -773,6 +792,7 @@ def bake_texture(
                     min_cos=min_cos,
                     angle_exp=angle_exp,
                     dist_pow=dist_pow,
+                    device=texture_device,
                 )
                 print(
                     "  Region seam refinement: softened %d boundary texels, refined detail samples=%d"
@@ -784,6 +804,12 @@ def bake_texture(
     # Release caches to free memory before seam padding
     depth_cache.clear()
     del frame_cache
+    if texture_device == "cuda":
+        try:
+            from scripts.texture.gpu_raster import clear_cache
+            clear_cache()
+        except Exception:
+            pass
 
     cov = int(has_color.sum())
     print(f"Texture coverage before seam padding: {cov}/{n_valid} ({100*cov/max(n_valid,1):.1f}%)")
