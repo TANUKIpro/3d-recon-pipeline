@@ -786,6 +786,7 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
             session.mask_dir,
             session.ground_mask_dir,
             session.ground_plane_path,
+            session.config.cleanup_lower_half_threshold,
         )
 
         proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
@@ -825,16 +826,19 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
             detail=f"Applying cleanup decision ({decision})",
             checkpoint_id="s6.apply",
         )
-        finalize_fn = (
-            _stage_post_texture_contact_cleanup_apply
-            if decision == "apply"
-            else _stage_post_texture_contact_cleanup_skip
-        )
-        cleaned_obj = await asyncio.to_thread(
-            _run_blocking,
-            finalize_fn,
-            output_dir,
-        )
+        if decision == "apply":
+            cleaned_obj = await asyncio.to_thread(
+                _run_blocking,
+                _stage_post_texture_contact_cleanup_apply,
+                output_dir,
+                session.config.cleanup_lower_half_threshold,
+            )
+        else:
+            cleaned_obj = await asyncio.to_thread(
+                _run_blocking,
+                _stage_post_texture_contact_cleanup_skip,
+                output_dir,
+            )
         session.cleaned_obj_path = str(cleaned_obj)
     except _CancelledError:
         raise

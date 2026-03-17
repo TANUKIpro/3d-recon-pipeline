@@ -178,6 +178,7 @@ Examples:
                 if (Path(output_dir) / "masks_ground").is_dir()
                 else None
             ),
+            sam2_only=True,
         )
         decision = str(proposal.get("recommended_decision") or "skip").strip().lower()
         selection_json = str(args.post_texture_cleanup_selection_json or "").strip()
@@ -197,7 +198,7 @@ Examples:
             decision = "skip"
 
         if decision == "apply":
-            cleaned_obj_path = Path(apply_cleanup_proposal(output_dir))
+            cleaned_obj_path = Path(apply_cleanup_proposal(output_dir, sam2_only=True))
         else:
             cleaned_obj_path = Path(copy_stage5_as_cleaned(output_dir))
         print(f"  → Decision: {decision}")

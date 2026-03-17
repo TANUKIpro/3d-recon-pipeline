@@ -24,6 +24,7 @@ from scripts.config_defaults import (
     GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
     POST_TEXTURE_CLEANUP_ENABLED,
+    CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
@@ -160,6 +161,16 @@ def build_pipeline_config(
         post_texture_cleanup_enabled=parse_bool(
             raw.get("post_texture_cleanup_enabled"),
             env_bool("POST_TEXTURE_CLEANUP_ENABLED", POST_TEXTURE_CLEANUP_ENABLED, env_map),
+        ),
+        cleanup_lower_half_threshold=max(
+            0.0,
+            min(
+                1.0,
+                parse_float(
+                    raw.get("cleanup_lower_half_threshold"),
+                    env_float("CLEANUP_LOWER_HALF_THRESHOLD", CLEANUP_LOWER_HALF_THRESHOLD, env_map),
+                ),
+            ),
         ),
         ground_plane_enabled=parse_bool(
             raw.get("ground_plane_enabled"),
