@@ -25,6 +25,7 @@ from scripts.texture.config import (
     _resolve_texture_quality_boost,
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
+    _resolve_uv_face_budget,
 )
 from scripts.texture.conflict_region import (
     _compute_conflict_texels,
@@ -51,12 +52,6 @@ from scripts.texture.view_scoring import (
     _update_topk_scores,
 )
 
-# Dense stage-4 meshes can exhaust xatlas/native memory during UV generation.
-# Keep a conservative proxy budget by default; users can override upward via
-# TEXTURE_UV_MAX_FACES when they explicitly want a denser textured mesh.
-_TEXTURE_UV_MAX_FACES_DEFAULT = 50_000
-
-
 def _resolve_intrinsics_point_cloud(
     output_path: Path,
     mesh_vertices: np.ndarray,
@@ -75,17 +70,6 @@ def _resolve_intrinsics_point_cloud(
         "Missing colored point cloud for intrinsics estimation. "
         "Expected object_denoised.ply, object.ply, or vertex colors in mesh_ply."
     )
-
-
-def _resolve_uv_face_budget() -> int:
-    raw = os.environ.get(
-        "TEXTURE_UV_MAX_FACES",
-        str(_TEXTURE_UV_MAX_FACES_DEFAULT),
-    ).strip()
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return _TEXTURE_UV_MAX_FACES_DEFAULT
 
 
 def _simplify_mesh_for_uv(
@@ -278,7 +262,11 @@ def bake_texture(
         json.dump(intrinsics, f_out, indent=2)
 
     # --- UV Atlas ---
-    uv_face_budget = _resolve_uv_face_budget()
+    uv_face_budget, uv_budget_source = _resolve_uv_face_budget(len(faces))
+    if uv_face_budget == 0:
+        print(f"  UV face budget: unlimited (source={uv_budget_source})")
+    else:
+        print(f"  UV face budget: {uv_face_budget:,} faces (source={uv_budget_source})")
     uv_vertices, uv_faces, uv_simplified = _maybe_simplify_mesh_for_uv(
         vertices,
         faces,
@@ -288,14 +276,36 @@ def bake_texture(
         print(
             "  UV proxy simplification: "
             f"{len(faces)} -> {len(uv_faces)} faces "
-            f"(budget {uv_face_budget})"
+            f"(budget {uv_face_budget:,})"
         )
 
     print("Generating UV atlas...")
     _emit_progress(progress_cb, 58.0, "Generating UV atlas")
-    vmapping, new_faces, uvs = xatlas.parametrize(
-        uv_vertices.astype(np.float32), uv_faces.astype(np.uint32)
+
+    # Compute per-vertex normals for better chart segmentation
+    _face_n = np.cross(
+        uv_vertices[uv_faces[:, 1]] - uv_vertices[uv_faces[:, 0]],
+        uv_vertices[uv_faces[:, 2]] - uv_vertices[uv_faces[:, 0]],
     )
+    _vert_normals = np.zeros_like(uv_vertices)
+    for _k in range(3):
+        np.add.at(_vert_normals, uv_faces[:, _k], _face_n)
+    _vn_len = np.linalg.norm(_vert_normals, axis=1, keepdims=True)
+    _vert_normals /= np.maximum(_vn_len, 1e-10)
+
+    # Use Atlas API for chart/pack option tuning
+    _atlas = xatlas.Atlas()
+    _atlas.add_mesh(
+        uv_vertices.astype(np.float32),
+        uv_faces.astype(np.uint32),
+        normals=_vert_normals.astype(np.float32),
+    )
+    _chart_options = xatlas.ChartOptions()
+    _pack_options = xatlas.PackOptions()
+    _pack_options.blockAlign = True       # 4x4 block align — fewer packing candidates
+    _pack_options.padding = 1
+    _atlas.generate(chart_options=_chart_options, pack_options=_pack_options)
+    vmapping, new_faces, uvs = _atlas[0]
     new_vertices = uv_vertices[vmapping]
     new_faces, flipped_winding, ratio_before, ratio_after = orient_faces_outward(
         new_vertices,

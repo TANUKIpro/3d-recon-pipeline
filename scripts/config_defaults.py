@@ -114,6 +114,12 @@ _TEXTURE_FRAME_BUDGET_RATIO = 0.7
 _TEXTURE_MASK_BUDGET_RATIO = 0.3
 _TEXTURE_MEM_FALLBACK_MB = 4096.0
 
+# xatlas UV atlas face budget — auto-scaling parameters
+_TEXTURE_UV_MIN_FACES = 50_000       # 下限: これ以下には簡略化しない
+_TEXTURE_UV_MAX_FACES = 150_000      # 上限: xatlas処理時間を抑制しつつ品質を維持
+_TEXTURE_UV_BYTES_PER_FACE = 10_000  # xatlasの1面あたり推定メモリ (~10 KB)
+_TEXTURE_UV_RAM_RESERVE_MB = 2048.0  # xatlas以外のパイプライン用に確保するRAM (MB)
+
 # --- VRAM Management -------------------------------------
 _VRAM_GATE_MIN_FREE_MB = 12_000
 

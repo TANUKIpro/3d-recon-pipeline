@@ -31,6 +31,7 @@ from scripts.texture.config import (  # noqa: F401
     _resolve_texture_quality_boost,
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
+    _resolve_uv_face_budget,
 )
 from scripts.texture.image_utils import (  # noqa: F401
     _bilinear_sample,

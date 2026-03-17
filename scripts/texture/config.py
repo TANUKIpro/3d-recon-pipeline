@@ -5,7 +5,15 @@ import os
 
 import numpy as np
 
-from scripts.config_defaults import TEXTURE_VIEW_ASSIGN_MODE
+from scripts.texture.progress import _get_available_memory_mb
+
+from scripts.config_defaults import (
+    TEXTURE_VIEW_ASSIGN_MODE,
+    _TEXTURE_UV_BYTES_PER_FACE,
+    _TEXTURE_UV_MAX_FACES,
+    _TEXTURE_UV_MIN_FACES,
+    _TEXTURE_UV_RAM_RESERVE_MB,
+)
 
 try:
     import torch
@@ -92,3 +100,39 @@ def _resolve_texture_quality_boost(requested: bool | str | int | None = None) ->
         return bool(requested)
     text = str(requested).strip().lower()
     return text in {"1", "true", "yes", "on", "hq", "high"}
+
+
+def _resolve_uv_face_budget(n_input_faces: int) -> tuple[int, str]:
+    """Resolve the xatlas UV face budget.
+
+    The budget is driven by the input mesh size, not by available RAM.
+    RAM acts only as a hard constraint to prevent OOM.
+
+    Args:
+        n_input_faces: Number of faces in the input mesh.
+
+    Returns:
+        (budget, source) where source is ``"env"`` or ``"auto"``.
+        A budget of ``0`` means unlimited (skip simplification).
+    """
+    raw = os.environ.get("TEXTURE_UV_MAX_FACES", "").strip()
+    if raw:
+        try:
+            val = int(raw)
+        except ValueError:
+            val = -1  # fall through to auto
+        if val == 0:
+            return 0, "env"
+        if val > 0:
+            return val, "env"
+        # negative or unparseable → fall through to auto
+
+    # RAM hard limit: prevent xatlas OOM
+    available_mb = _get_available_memory_mb()
+    usable_mb = max(0.0, available_mb - _TEXTURE_UV_RAM_RESERVE_MB)
+    usable_bytes = usable_mb * 1024.0 * 1024.0
+    ram_limit = int(usable_bytes / _TEXTURE_UV_BYTES_PER_FACE)
+
+    # budget = min(input faces, time cap, RAM limit), floor at _TEXTURE_UV_MIN_FACES
+    budget = max(_TEXTURE_UV_MIN_FACES, min(n_input_faces, _TEXTURE_UV_MAX_FACES, ram_limit))
+    return budget, "auto"
