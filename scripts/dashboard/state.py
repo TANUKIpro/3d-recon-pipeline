@@ -29,6 +29,7 @@ from scripts.config_defaults import (
     GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
     POST_TEXTURE_CLEANUP_ENABLED,
+    CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
@@ -124,6 +125,7 @@ class PipelineConfig:
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
     post_texture_cleanup_enabled: bool = POST_TEXTURE_CLEANUP_ENABLED
+    cleanup_lower_half_threshold: float = CLEANUP_LOWER_HALF_THRESHOLD
     ground_plane_enabled: bool = GROUND_PLANE_ENABLED
     auto_accept: bool = False
 

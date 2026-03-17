@@ -55,7 +55,8 @@ _MASK_NEAR_PLANE_RATIO = 2.0
 _COMPONENT_MIN_FACE_RATIO = 0.02
 _MASK_ABOVE_PLANE_REMOVAL_THRESHOLD = 0.7
 _NEAR_PLANE_MIN_BBOX_RATIO = 0.005
-_MASK_LOWER_HALF_REMOVAL_THRESHOLD = 0.0
+_MASK_LOWER_HALF_REMOVAL_THRESHOLD = 0.2
+_MIN_VISIBLE_VIEWS = 3
 _NEIGHBOR_REMOVAL_RATIO_THRESHOLD = 0.6
 _CONVERGENCE_MAX_ITERATIONS = 3
 _ISLAND_FACE_RATIO = 0.1
@@ -493,6 +494,11 @@ def _compute_per_face_ground_score(
     with np.errstate(divide="ignore", invalid="ignore"):
         outside_ratio = np.where(visible_counts > 0, outside_counts / visible_counts, 0.0)
         ground_ratio = np.where(visible_counts > 0, ground_counts / visible_counts, 0.0)
+
+    # Faces visible in too few cameras have unreliable ratios — treat as safe
+    low_visibility = visible_counts < _MIN_VISIBLE_VIEWS
+    outside_ratio[low_visibility] = 0.0
+    ground_ratio[low_visibility] = 0.0
 
     return outside_ratio, ground_ratio
 
@@ -1626,6 +1632,8 @@ def _analyze_cleanup(
     masks_dir: str | Path | None = None,
     ground_masks_dir: str | Path | None = None,
     ground_plane_path: str | Path | None = None,
+    sam2_only: bool = False,
+    cleanup_lower_half_threshold: float | None = None,
 ) -> dict[str, Any]:
     output_root = Path(output_dir)
     obj_mesh = _parse_obj_mesh(output_root / "textured_mesh.obj")
@@ -1732,36 +1740,50 @@ def _analyze_cleanup(
 
     # === Pass 3b: Lower-half full-mask noise removal ===
     pass3b: dict[str, Any] = {"applied": False}
+    _p3b_threshold = cleanup_lower_half_threshold if cleanup_lower_half_threshold is not None else _MASK_LOWER_HALF_REMOVAL_THRESHOLD
     if outside_ratio_arr is not None and half_height > 0:
         pass3b = _pass_lower_half_mask_noise(
             keep_merged_mask, outside_ratio_arr, centroid_heights,
             half_height, adjacency, merged_faces,
+            threshold=_p3b_threshold,
         )
         p3b_comp = pass3b["component_stats"].get("removed_faces", 0)
         print(f"  Pass 3b (lower-half mask): {pass3b['lower_half_removed']} removed"
               f" + {p3b_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
     # === Pass 4: Neighbor erosion (peninsula removal) ===
-    pass4 = _pass_neighbor_erosion(keep_merged_mask, adjacency, merged_faces)
-    p4_comp = pass4["component_stats"].get("removed_faces", 0)
-    print(f"  Pass 4 (erosion): {pass4['total_eroded']} eroded in {pass4['iterations']} iter"
-          f" + {p4_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+    if sam2_only:
+        pass4 = {"total_eroded": 0, "iterations": 0, "component_stats": {}}
+        print(f"  Pass 4 (erosion): (skipped — sam2_only)")
+    else:
+        pass4 = _pass_neighbor_erosion(keep_merged_mask, adjacency, merged_faces)
+        p4_comp = pass4["component_stats"].get("removed_faces", 0)
+        print(f"  Pass 4 (erosion): {pass4['total_eroded']} eroded in {pass4['iterations']} iter"
+              f" + {p4_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
     # === Pass 5: Floating island removal ===
-    pass5 = _pass_floating_island_removal(
-        keep_merged_mask, merged_vertices, merged_faces, adjacency,
-    )
-    print(f"  Pass 5 (floating islands): {pass5['removed_islands']} islands"
-          f" ({pass5['removed_faces']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+    if sam2_only:
+        pass5 = {"removed_islands": 0, "removed_faces": 0}
+        print(f"  Pass 5 (floating islands): (skipped — sam2_only)")
+    else:
+        pass5 = _pass_floating_island_removal(
+            keep_merged_mask, merged_vertices, merged_faces, adjacency,
+        )
+        print(f"  Pass 5 (floating islands): {pass5['removed_islands']} islands"
+              f" ({pass5['removed_faces']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
     # === Pass 6: Flipped normals at ground plane ===
-    pass6 = _pass_flipped_ground_normals(
-        keep_merged_mask, merged_vertices, merged_faces, plane_normal,
-        orig_face_dist, adjacency,
-    )
-    p6_comp = pass6["component_stats"].get("removed_faces", 0)
-    print(f"  Pass 6 (flipped normals): {pass6['flipped_removed']} removed"
-          f" + {p6_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
+    if sam2_only:
+        pass6 = {"flipped_removed": 0, "component_stats": {}}
+        print(f"  Pass 6 (flipped normals): (skipped — sam2_only)")
+    else:
+        pass6 = _pass_flipped_ground_normals(
+            keep_merged_mask, merged_vertices, merged_faces, plane_normal,
+            orig_face_dist, adjacency,
+        )
+        p6_comp = pass6["component_stats"].get("removed_faces", 0)
+        print(f"  Pass 6 (flipped normals): {pass6['flipped_removed']} removed"
+              f" + {p6_comp} component-filter  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
 
     removed_merged_faces = merged_faces[~keep_merged_mask]
     removed_obj_face_indices = np.unique(merged_face_to_obj_face[~keep_merged_mask])
@@ -2061,6 +2083,8 @@ def prepare_cleanup_review(
     masks_dir: str | Path | None = None,
     ground_masks_dir: str | Path | None = None,
     ground_plane_path: str | Path | None = None,
+    sam2_only: bool = False,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
 ) -> dict[str, Any]:
@@ -2077,6 +2101,8 @@ def prepare_cleanup_review(
         masks_dir=masks_dir,
         ground_masks_dir=ground_masks_dir,
         ground_plane_path=ground_plane_path,
+        sam2_only=sam2_only,
+        cleanup_lower_half_threshold=cleanup_lower_half_threshold,
     )
     _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 55.0, "Scoring cleanup proposal")
@@ -2151,6 +2177,8 @@ def copy_stage5_as_cleaned(
 def apply_cleanup_proposal(
     output_dir: str | Path,
     *,
+    sam2_only: bool = False,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
 ) -> str:
@@ -2166,6 +2194,8 @@ def apply_cleanup_proposal(
         masks_dir=output_root / "masks",
         ground_masks_dir=(output_root / "masks_ground") if (output_root / "masks_ground").is_dir() else None,
         ground_plane_path=(output_root / "ground_plane.json") if (output_root / "ground_plane.json").is_file() else None,
+        sam2_only=sam2_only,
+        cleanup_lower_half_threshold=cleanup_lower_half_threshold,
     )
     if not analysis["has_candidate"]:
         return _copy_stage5_outputs(output_root)
@@ -2327,6 +2357,8 @@ def generate_post_texture_cleanup_proposal(
     masks_dir: str | Path | None = None,
     ground_masks_dir: str | Path | None = None,
     ground_plane_path: str | Path | None = None,
+    sam2_only: bool = False,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
 ) -> dict[str, Any]:
@@ -2338,6 +2370,8 @@ def generate_post_texture_cleanup_proposal(
         masks_dir=masks_dir,
         ground_masks_dir=ground_masks_dir,
         ground_plane_path=ground_plane_path,
+        sam2_only=sam2_only,
+        cleanup_lower_half_threshold=cleanup_lower_half_threshold,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )
@@ -2348,6 +2382,8 @@ def finalize_post_texture_cleanup(
     output_dir: str | Path,
     *,
     decision: str,
+    sam2_only: bool = False,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
 ) -> dict[str, Any]:
@@ -2362,6 +2398,8 @@ def finalize_post_texture_cleanup(
     if normalized == "apply":
         obj_path = apply_cleanup_proposal(
             output_dir,
+            sam2_only=sam2_only,
+            cleanup_lower_half_threshold=cleanup_lower_half_threshold,
             progress_cb=progress_cb,
             cancel_cb=cancel_cb,
         )

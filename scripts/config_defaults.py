@@ -73,6 +73,7 @@ TEXTURE_BLEND_HARD_RATIO = 2.0
 
 # --- Stage 6: PostTextureContactCleanup -------------------
 POST_TEXTURE_CLEANUP_ENABLED = True
+CLEANUP_LOWER_HALF_THRESHOLD = 0.2
 
 # --- Shared Repair Defaults -------------------------------
 # Contact-hole repair helpers are reused by post-texture cleanup.

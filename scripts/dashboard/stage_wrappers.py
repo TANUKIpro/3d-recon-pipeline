@@ -158,6 +158,7 @@ def _stage_post_texture_contact_cleanup_prepare(
     masks_dir: str | None = None,
     ground_masks_dir: str | None = None,
     ground_plane_path: str | None = None,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -173,6 +174,8 @@ def _stage_post_texture_contact_cleanup_prepare(
         masks_dir=masks_dir,
         ground_masks_dir=ground_masks_dir,
         ground_plane_path=ground_plane_path,
+        sam2_only=True,
+        cleanup_lower_half_threshold=cleanup_lower_half_threshold,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )
@@ -180,6 +183,7 @@ def _stage_post_texture_contact_cleanup_prepare(
 
 def _stage_post_texture_contact_cleanup_apply(
     output_dir: str,
+    cleanup_lower_half_threshold: float | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -189,6 +193,8 @@ def _stage_post_texture_contact_cleanup_apply(
     from scripts.stage_post_texture_contact_cleanup import apply_cleanup_proposal
     return apply_cleanup_proposal(
         output_dir,
+        sam2_only=True,
+        cleanup_lower_half_threshold=cleanup_lower_half_threshold,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )

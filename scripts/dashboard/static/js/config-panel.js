@@ -63,6 +63,7 @@ export class ConfigPanel {
 
       // Stage 6: Post-texture Cleanup
       post_texture_cleanup_enabled: document.getElementById('cfg-post-texture-cleanup-enabled'),
+      cleanup_lower_half_threshold: document.getElementById('cfg-cleanup-lower-half-threshold'),
     };
 
     this.onStart = null;  // callback(config)
@@ -201,6 +202,10 @@ export class ConfigPanel {
 
       // Stage 6: Post-texture Cleanup
       post_texture_cleanup_enabled: this._inputs.post_texture_cleanup_enabled?.checked ?? true,
+      cleanup_lower_half_threshold: this._parseNonNegativeFloat(
+        this._inputs.cleanup_lower_half_threshold?.value,
+        0.2,
+      ),
     };
   }
 
@@ -280,6 +285,13 @@ export class ConfigPanel {
     this._videoSelect.addEventListener('change', () => this._onVideoChange());
     this._inputs.frame_interval.addEventListener('input', () => this._onFrameIntervalInput());
     this._inputs.max_frames.addEventListener('input', () => this._onMaxFramesInput());
+
+    if (this._inputs.cleanup_lower_half_threshold) {
+      this._inputs.cleanup_lower_half_threshold.addEventListener('input', () => {
+        const display = document.getElementById('cfg-cleanup-lower-half-threshold-value');
+        if (display) display.textContent = this._inputs.cleanup_lower_half_threshold.value;
+      });
+    }
 
     this._objectSelect.addEventListener('change', () => {
       this._selectObject(this._objectSelect.value);
@@ -592,6 +604,11 @@ export class ConfigPanel {
     }
     if (cfg.post_texture_cleanup_enabled != null && this._inputs.post_texture_cleanup_enabled) {
       this._inputs.post_texture_cleanup_enabled.checked = cfg.post_texture_cleanup_enabled !== false;
+    }
+    if (cfg.cleanup_lower_half_threshold != null && this._inputs.cleanup_lower_half_threshold) {
+      this._inputs.cleanup_lower_half_threshold.value = String(cfg.cleanup_lower_half_threshold);
+      const display = document.getElementById('cfg-cleanup-lower-half-threshold-value');
+      if (display) display.textContent = String(cfg.cleanup_lower_half_threshold);
     }
 
     this._maxFramesAuto = false;
