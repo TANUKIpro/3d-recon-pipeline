@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import warnings
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -216,17 +217,34 @@ def parallel_xatlas_generate(
     pack_opts_dict = {"blockAlign": True, "padding": 1}
 
     try:
+        t_total = time.monotonic()
+
         # Step 1: spatial partition
+        t0 = time.monotonic()
         partitions = _spatial_partition_faces(uv_vertices, uv_faces, n_partitions)
         actual_parts = len(partitions)
+        dt_partition = time.monotonic() - t0
+        part_sizes = [len(p) for p in partitions]
         logger.info(
-            "Parallel UV: %d faces → %d partitions (%d workers)",
+            "Parallel UV: %d faces → %d partitions (%d workers) [%.2fs]",
             n_faces,
             actual_parts,
             n_workers,
+            dt_partition,
+        )
+        logger.info(
+            "  Partition sizes: min=%d, max=%d, avg=%d",
+            min(part_sizes),
+            max(part_sizes),
+            sum(part_sizes) // len(part_sizes),
+        )
+        print(
+            f"  Parallel UV: {n_faces:,} faces → {actual_parts} partitions "
+            f"(workers={n_workers}, sizes={min(part_sizes):,}..{max(part_sizes):,})"
         )
 
         # Step 2: extract sub-meshes
+        t0 = time.monotonic()
         sub_meshes = []
         vertex_remaps = []
         for part_indices in partitions:
@@ -235,25 +253,81 @@ def parallel_xatlas_generate(
             )
             sub_meshes.append((local_v, local_f, local_n))
             vertex_remaps.append(v_remap)
+        dt_extract = time.monotonic() - t0
+        logger.info("  Sub-mesh extraction: %.2fs", dt_extract)
 
         # Step 3: parallel xatlas generation
-        with ProcessPoolExecutor(max_workers=min(n_workers, actual_parts)) as pool:
-            futures = [
-                pool.submit(_xatlas_worker, v, f, n, pack_opts_dict)
-                for v, f, n in sub_meshes
-            ]
-            parallel_results = [fut.result() for fut in futures]
+        t0 = time.monotonic()
+        effective_workers = min(n_workers, actual_parts)
+        print(
+            f"  Running xatlas chart+pack on {actual_parts} partitions "
+            f"({effective_workers} parallel workers)..."
+        )
+        parallel_results: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = [
+            None
+        ] * len(sub_meshes)
+        with ProcessPoolExecutor(max_workers=effective_workers) as pool:
+            future_to_idx = {
+                pool.submit(_xatlas_worker, v, f, n, pack_opts_dict): i
+                for i, (v, f, n) in enumerate(sub_meshes)
+            }
+            done_count = 0
+            for fut in as_completed(future_to_idx):
+                idx = future_to_idx[fut]
+                parallel_results[idx] = fut.result()
+                done_count += 1
+                vm, nf, uv = parallel_results[idx]  # type: ignore[misc]
+                dt_so_far = time.monotonic() - t0
+                logger.info(
+                    "  Partition %d/%d done: %d faces → %d UV verts, %d UV faces [%.1fs elapsed]",
+                    done_count,
+                    actual_parts,
+                    len(sub_meshes[idx][1]),
+                    len(uv),
+                    len(nf),
+                    dt_so_far,
+                )
+                print(
+                    f"  Partition {done_count}/{actual_parts} complete "
+                    f"({len(sub_meshes[idx][1]):,} faces → {len(uv):,} UV verts) "
+                    f"[{dt_so_far:.1f}s]"
+                )
+                if progress_cb is not None:
+                    # Map partition progress to 58..68% range (UV atlas stage)
+                    from scripts.texture.progress import _emit_progress
+                    ratio = done_count / actual_parts
+                    _emit_progress(
+                        progress_cb,
+                        58.0 + ratio * 8.0,
+                        f"UV atlas: partition {done_count}/{actual_parts}",
+                    )
+        dt_generate = time.monotonic() - t0
+        print(f"  All partitions done in {dt_generate:.1f}s")
+        logger.info("  Parallel xatlas generation: %.2fs", dt_generate)
 
         # Step 4: repack into single atlas
+        t0 = time.monotonic()
+        print("  Repacking partitions into single atlas...")
         vmapping, new_faces, uvs = _repack_and_combine(
-            parallel_results, vertex_remaps, pack_opts_dict,
+            parallel_results, vertex_remaps, pack_opts_dict,  # type: ignore[arg-type]
         )
+        dt_repack = time.monotonic() - t0
+        dt_total = time.monotonic() - t_total
 
         logger.info(
-            "Parallel UV: done — %d UV vertices, %d faces",
+            "Parallel UV: done — %d UV vertices, %d faces [repack=%.2fs, total=%.2fs]",
             len(uvs),
             len(new_faces),
+            dt_repack,
+            dt_total,
         )
+        print(
+            f"  UV atlas complete: {len(uvs):,} UV vertices, {len(new_faces):,} faces "
+            f"[repack={dt_repack:.1f}s, total={dt_total:.1f}s]"
+        )
+        if progress_cb is not None:
+            from scripts.texture.progress import _emit_progress
+            _emit_progress(progress_cb, 68.0, "UV atlas generation complete")
         return vmapping, new_faces, uvs
 
     except Exception:

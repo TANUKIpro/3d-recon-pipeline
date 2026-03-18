@@ -296,6 +296,9 @@ def bake_texture(
     # Try parallel spatial-partition UV generation first
     from scripts.texture.parallel_uv import parallel_xatlas_generate
 
+    import time as _time
+
+    _uv_t0 = _time.monotonic()
     _parallel_result = parallel_xatlas_generate(
         uv_vertices, uv_faces, _vert_normals, progress_cb=progress_cb,
     )
@@ -303,6 +306,10 @@ def bake_texture(
         vmapping, new_faces, uvs = _parallel_result
     else:
         # Fallback: single-threaded xatlas
+        print(
+            f"  Single-threaded xatlas: {len(uv_faces):,} faces, "
+            f"{len(uv_vertices):,} vertices..."
+        )
         _atlas = xatlas.Atlas()
         _atlas.add_mesh(
             uv_vertices.astype(np.float32),
@@ -313,8 +320,11 @@ def bake_texture(
         _pack_options = xatlas.PackOptions()
         _pack_options.blockAlign = True       # 4x4 block align — fewer packing candidates
         _pack_options.padding = 1
+        print("  Running xatlas chart segmentation + packing...")
         _atlas.generate(chart_options=_chart_options, pack_options=_pack_options)
         vmapping, new_faces, uvs = _atlas[0]
+    _uv_dt = _time.monotonic() - _uv_t0
+    print(f"  UV atlas generated in {_uv_dt:.1f}s")
     new_vertices = uv_vertices[vmapping]
     new_faces, flipped_winding, ratio_before, ratio_after = orient_mesh_outward(
         new_vertices, new_faces
