@@ -87,7 +87,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
 
-    def test_texture_quality_boost_defaults_to_true(self) -> None:
+    def test_texture_quality_boost_defaults_to_false(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -96,7 +96,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertTrue(cfg.texture_quality_boost)
+        self.assertFalse(cfg.texture_quality_boost)
 
     def test_texture_quality_boost_accepts_true(self) -> None:
         cfg = build_pipeline_config(

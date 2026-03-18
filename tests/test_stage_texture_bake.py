@@ -288,24 +288,24 @@ class TextureUvProxyTests(unittest.TestCase):
 
     @patch("scripts.texture.config._get_available_memory_mb", return_value=8192.0)
     def test_auto_mesh_within_cap(self, _mock_mem) -> None:
-        """Mesh 100K + enough RAM → budget = input faces (no simplification)."""
+        """Mesh 55K + enough RAM → budget = input faces (no simplification)."""
         old = os.environ.pop("TEXTURE_UV_MAX_FACES", None)
         try:
-            budget, source = _resolve_uv_face_budget(100_000)
+            budget, source = _resolve_uv_face_budget(55_000)
             self.assertEqual(source, "auto")
-            self.assertEqual(budget, 100_000)
+            self.assertEqual(budget, 55_000)
         finally:
             if old is not None:
                 os.environ["TEXTURE_UV_MAX_FACES"] = old
 
     @patch("scripts.texture.config._get_available_memory_mb", return_value=8192.0)
     def test_auto_large_mesh_clamped_to_max(self, _mock_mem) -> None:
-        """Mesh 300K + enough RAM → budget capped at 150K."""
+        """Mesh 300K + enough RAM → budget capped at 60K."""
         old = os.environ.pop("TEXTURE_UV_MAX_FACES", None)
         try:
             budget, source = _resolve_uv_face_budget(300_000)
             self.assertEqual(source, "auto")
-            self.assertEqual(budget, 150_000)
+            self.assertEqual(budget, 60_000)
         finally:
             if old is not None:
                 os.environ["TEXTURE_UV_MAX_FACES"] = old
@@ -353,16 +353,16 @@ class TextureUvProxyTests(unittest.TestCase):
     @patch("scripts.texture.config._get_available_memory_mb", return_value=8192.0)
     def test_env_negative_falls_through_to_auto(self, _mock_mem) -> None:
         with patch.dict(os.environ, {"TEXTURE_UV_MAX_FACES": "-1"}, clear=False):
-            budget, source = _resolve_uv_face_budget(100_000)
+            budget, source = _resolve_uv_face_budget(55_000)
             self.assertEqual(source, "auto")
-            self.assertEqual(budget, 100_000)
+            self.assertEqual(budget, 55_000)
 
     @patch("scripts.texture.config._get_available_memory_mb", return_value=8192.0)
     def test_env_unparseable_falls_through_to_auto(self, _mock_mem) -> None:
         with patch.dict(os.environ, {"TEXTURE_UV_MAX_FACES": "bad"}, clear=False):
-            budget, source = _resolve_uv_face_budget(100_000)
+            budget, source = _resolve_uv_face_budget(55_000)
             self.assertEqual(source, "auto")
-            self.assertEqual(budget, 100_000)
+            self.assertEqual(budget, 55_000)
 
     @patch("scripts.texture.bake._simplify_mesh_for_uv")
     def test_skips_simplification_when_under_budget(self, mock_simplify) -> None:
