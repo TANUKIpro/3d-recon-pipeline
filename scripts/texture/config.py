@@ -145,6 +145,10 @@ def _resolve_uv_face_budget(n_input_faces: int) -> tuple[int, str]:
     usable_bytes = usable_mb * 1024.0 * 1024.0
     ram_limit = int(usable_bytes / _TEXTURE_UV_BYTES_PER_FACE)
 
-    # budget = min(input faces, time cap, RAM limit), floor at _TEXTURE_UV_MIN_FACES
-    budget = max(_TEXTURE_UV_MIN_FACES, min(n_input_faces, _TEXTURE_UV_MAX_FACES, ram_limit))
+    # _TEXTURE_UV_MAX_FACES=0 means unlimited (no time-based cap).
+    # Only RAM acts as a hard constraint; parallel UV generation handles large meshes.
+    caps = [n_input_faces, ram_limit]
+    if _TEXTURE_UV_MAX_FACES > 0:
+        caps.append(_TEXTURE_UV_MAX_FACES)
+    budget = max(_TEXTURE_UV_MIN_FACES, min(caps))
     return budget, "auto"

@@ -299,13 +299,13 @@ class TextureUvProxyTests(unittest.TestCase):
                 os.environ["TEXTURE_UV_MAX_FACES"] = old
 
     @patch("scripts.texture.config._get_available_memory_mb", return_value=8192.0)
-    def test_auto_large_mesh_clamped_to_max(self, _mock_mem) -> None:
-        """Mesh 300K + enough RAM → budget capped at 60K."""
+    def test_auto_large_mesh_uncapped_with_enough_ram(self, _mock_mem) -> None:
+        """Mesh 300K + enough RAM → budget = input faces (no time-based cap)."""
         old = os.environ.pop("TEXTURE_UV_MAX_FACES", None)
         try:
             budget, source = _resolve_uv_face_budget(300_000)
             self.assertEqual(source, "auto")
-            self.assertEqual(budget, 60_000)
+            self.assertEqual(budget, 300_000)
         finally:
             if old is not None:
                 os.environ["TEXTURE_UV_MAX_FACES"] = old
