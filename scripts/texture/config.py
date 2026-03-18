@@ -102,6 +102,18 @@ def _resolve_texture_quality_boost(requested: bool | str | int | None = None) ->
     return text in {"1", "true", "yes", "on", "hq", "high"}
 
 
+def _resolve_parallel_uv() -> str:
+    """Resolve parallel UV atlas mode from environment.
+
+    Returns:
+        ``"auto"`` (default) or ``"off"``.
+    """
+    raw = os.environ.get("TEXTURE_UV_PARALLEL", "auto").strip().lower()
+    if raw in {"off", "0", "false", "no", "disable", "disabled"}:
+        return "off"
+    return "auto"
+
+
 def _resolve_uv_face_budget(n_input_faces: int) -> tuple[int, str]:
     """Resolve the xatlas UV face budget.
 

@@ -293,19 +293,28 @@ def bake_texture(
     _vn_len = np.linalg.norm(_vert_normals, axis=1, keepdims=True)
     _vert_normals /= np.maximum(_vn_len, 1e-10)
 
-    # Use Atlas API for chart/pack option tuning
-    _atlas = xatlas.Atlas()
-    _atlas.add_mesh(
-        uv_vertices.astype(np.float32),
-        uv_faces.astype(np.uint32),
-        normals=_vert_normals.astype(np.float32),
+    # Try parallel spatial-partition UV generation first
+    from scripts.texture.parallel_uv import parallel_xatlas_generate
+
+    _parallel_result = parallel_xatlas_generate(
+        uv_vertices, uv_faces, _vert_normals, progress_cb=progress_cb,
     )
-    _chart_options = xatlas.ChartOptions()
-    _pack_options = xatlas.PackOptions()
-    _pack_options.blockAlign = True       # 4x4 block align — fewer packing candidates
-    _pack_options.padding = 1
-    _atlas.generate(chart_options=_chart_options, pack_options=_pack_options)
-    vmapping, new_faces, uvs = _atlas[0]
+    if _parallel_result is not None:
+        vmapping, new_faces, uvs = _parallel_result
+    else:
+        # Fallback: single-threaded xatlas
+        _atlas = xatlas.Atlas()
+        _atlas.add_mesh(
+            uv_vertices.astype(np.float32),
+            uv_faces.astype(np.uint32),
+            normals=_vert_normals.astype(np.float32),
+        )
+        _chart_options = xatlas.ChartOptions()
+        _pack_options = xatlas.PackOptions()
+        _pack_options.blockAlign = True       # 4x4 block align — fewer packing candidates
+        _pack_options.padding = 1
+        _atlas.generate(chart_options=_chart_options, pack_options=_pack_options)
+        vmapping, new_faces, uvs = _atlas[0]
     new_vertices = uv_vertices[vmapping]
     new_faces, flipped_winding, ratio_before, ratio_after = orient_mesh_outward(
         new_vertices, new_faces

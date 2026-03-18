@@ -120,6 +120,10 @@ _TEXTURE_UV_MAX_FACES = 60_000       # 上限: xatlas処理時間を抑制 (150K
 _TEXTURE_UV_BYTES_PER_FACE = 10_000  # xatlasの1面あたり推定メモリ (~10 KB)
 _TEXTURE_UV_RAM_RESERVE_MB = 2048.0  # xatlas以外のパイプライン用に確保するRAM (MB)
 
+# Parallel UV atlas generation — spatial partition parameters
+_TEXTURE_UV_PARALLEL_MIN_TOTAL_FACES = 10_000  # これ以下は並列化しない
+_TEXTURE_UV_PARALLEL_MAX_WORKERS = 8           # 最大ワーカー数
+
 # --- VRAM Management -------------------------------------
 _VRAM_GATE_MIN_FREE_MB = 12_000
 
