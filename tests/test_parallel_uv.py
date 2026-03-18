@@ -9,6 +9,7 @@ import numpy as np
 from scripts.texture.parallel_uv import (
     _extract_partition_mesh,
     _spatial_partition_faces,
+    _tile_and_combine,
     parallel_xatlas_generate,
 )
 
@@ -127,6 +128,61 @@ class ExtractPartitionMeshTests(unittest.TestCase):
             np.sort(global_faces_reconstructed, axis=1),
             np.sort(faces[face_indices], axis=1),
         )
+
+
+class TileAndCombineTests(unittest.TestCase):
+    def test_vmapping_single_hop_correctness(self) -> None:
+        """The tile-and-combine vmapping should map UV verts to correct global verts."""
+        # Simulate 2 partitions with trivial xatlas output (identity vmapping)
+        # Partition 0: 3 verts, 1 face; vertex_remap maps local [0,1,2] → global [10,20,30]
+        # Partition 1: 3 verts, 1 face; vertex_remap maps local [0,1,2] → global [40,50,60]
+        vm0 = np.array([0, 1, 2], dtype=np.uint32)  # UV vert → local mesh vert
+        nf0 = np.array([[0, 1, 2]], dtype=np.uint32)
+        uv0 = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], dtype=np.float32)
+        remap0 = np.array([10, 20, 30], dtype=np.int32)
+
+        vm1 = np.array([0, 1, 2], dtype=np.uint32)
+        nf1 = np.array([[0, 1, 2]], dtype=np.uint32)
+        uv1 = np.array([[0.7, 0.8], [0.9, 0.1], [0.2, 0.3]], dtype=np.float32)
+        remap1 = np.array([40, 50, 60], dtype=np.int32)
+
+        results = [(vm0, nf0, uv0), (vm1, nf1, uv1)]
+        remaps = [remap0, remap1]
+
+        vmapping, new_faces, uvs = _tile_and_combine(results, remaps)
+
+        # vmapping should be [10,20,30, 40,50,60]
+        np.testing.assert_array_equal(vmapping, [10, 20, 30, 40, 50, 60])
+        # Face count preserved
+        self.assertEqual(len(new_faces), 2)
+        # Second face's indices offset by 3
+        np.testing.assert_array_equal(new_faces[0], [0, 1, 2])
+        np.testing.assert_array_equal(new_faces[1], [3, 4, 5])
+        # All UVs in [0, 1]
+        self.assertTrue(np.all(uvs >= 0.0))
+        self.assertTrue(np.all(uvs <= 1.0))
+        # UVs from different partitions should be in different grid cells (no overlap)
+        # Partition 0 in col=0, Partition 1 in col=1 (2 cols for 2 partitions)
+        self.assertTrue(np.all(uvs[:3, 0] < 0.5))  # left half
+        self.assertTrue(np.all(uvs[3:, 0] >= 0.5))  # right half
+
+    def test_face_count_preserved(self) -> None:
+        """Total face count after tiling must equal sum of partition face counts."""
+        results = []
+        remaps = []
+        total_faces = 0
+        for i in range(4):
+            n_f = 10 + i * 5
+            total_faces += n_f
+            vm = np.arange(n_f * 3, dtype=np.uint32)  # worst case: all unique
+            nf = np.arange(n_f * 3, dtype=np.uint32).reshape(-1, 3)
+            uv = np.random.default_rng(i).random((n_f * 3, 2)).astype(np.float32)
+            remap = np.arange(n_f * 3, dtype=np.int32) + i * 1000
+            results.append((vm, nf, uv))
+            remaps.append(remap)
+
+        _, new_faces, _ = _tile_and_combine(results, remaps)
+        self.assertEqual(len(new_faces), total_faces)
 
 
 class ParallelXatlasGenerateTests(unittest.TestCase):

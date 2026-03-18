@@ -1,8 +1,8 @@
 """Spatial-partition parallel xatlas UV atlas generation.
 
 Splits a mesh into N partitions along the longest axis, runs
-xatlas chart generation in parallel processes, then repacks all
-partitions into a single atlas via ``add_uv_mesh``.
+xatlas chart generation in parallel processes, then tiles all
+partitions into a single atlas via grid-based UV placement.
 """
 
 from __future__ import annotations
@@ -128,42 +128,53 @@ def _xatlas_worker(
 
 
 # ---------------------------------------------------------------------------
-# Repack & combine
+# Tile & combine (grid-based UV placement)
 # ---------------------------------------------------------------------------
 
-def _repack_and_combine(
+def _tile_and_combine(
     parallel_results: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
     vertex_remaps: list[np.ndarray],
-    pack_opts_dict: dict,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Repack per-partition UVs into a single atlas and combine vmappings.
+    """Tile per-partition UVs into a single atlas using grid placement.
 
-    Uses ``add_uv_mesh`` to skip chart generation and only repack.
+    Each partition's UVs are scaled and offset into a grid cell, avoiding
+    the fragile triple-indirection of ``add_uv_mesh`` repacking.
+    Only one vmapping hop is needed: partition UV vert → global mesh vert.
     """
-    import xatlas
+    import math
 
-    repack_atlas = xatlas.Atlas()
-    for vm, nf, uv in parallel_results:
-        repack_atlas.add_uv_mesh(uv, nf.astype(np.uint32))
-
-    pack_options = xatlas.PackOptions()
-    for k, v in pack_opts_dict.items():
-        setattr(pack_options, k, v)
-    repack_atlas.generate(pack_options=pack_options)
+    n = len(parallel_results)
+    cols = max(1, math.ceil(math.sqrt(n)))
+    rows = max(1, math.ceil(n / cols))
+    cell_w = 1.0 / cols
+    cell_h = 1.0 / rows
+    # Leave a small margin within each cell to avoid bleeding
+    margin = 0.005
+    inner_w = cell_w * (1.0 - 2.0 * margin)
+    inner_h = cell_h * (1.0 - 2.0 * margin)
 
     all_vmapping = []
     all_new_faces = []
     all_uvs = []
     uv_vertex_offset = 0
 
-    for i, (per_part_vm, _per_part_nf, _per_part_uv) in enumerate(parallel_results):
-        repack_vm, repack_nf, repack_uv = repack_atlas[i]
-        # Chain: repack UV vertex → per-partition UV vertex → local mesh vertex → global mesh vertex
-        chained_vm = vertex_remaps[i][per_part_vm[repack_vm]]
+    for i, (per_part_vm, per_part_nf, per_part_uv) in enumerate(parallel_results):
+        # Map partition UV vertex → global mesh vertex (single hop)
+        chained_vm = vertex_remaps[i][per_part_vm]
         all_vmapping.append(chained_vm)
-        all_new_faces.append(repack_nf + uv_vertex_offset)
-        all_uvs.append(repack_uv)
-        uv_vertex_offset += len(repack_uv)
+
+        # Offset face indices into the combined UV vertex array
+        all_new_faces.append(per_part_nf + uv_vertex_offset)
+
+        # Scale UVs into this partition's grid cell
+        col = i % cols
+        row = i // cols
+        scaled_uv = per_part_uv.copy()
+        scaled_uv[:, 0] = scaled_uv[:, 0] * inner_w + col * cell_w + cell_w * margin
+        scaled_uv[:, 1] = scaled_uv[:, 1] * inner_h + row * cell_h + cell_h * margin
+        all_uvs.append(scaled_uv)
+
+        uv_vertex_offset += len(per_part_uv)
 
     return (
         np.concatenate(all_vmapping),
@@ -305,11 +316,11 @@ def parallel_xatlas_generate(
         print(f"  All partitions done in {dt_generate:.1f}s")
         logger.info("  Parallel xatlas generation: %.2fs", dt_generate)
 
-        # Step 4: repack into single atlas
+        # Step 4: tile partitions into single atlas (grid-based UV placement)
         t0 = time.monotonic()
-        print("  Repacking partitions into single atlas...")
-        vmapping, new_faces, uvs = _repack_and_combine(
-            parallel_results, vertex_remaps, pack_opts_dict,  # type: ignore[arg-type]
+        print("  Tiling partitions into single atlas...")
+        vmapping, new_faces, uvs = _tile_and_combine(
+            parallel_results, vertex_remaps,  # type: ignore[arg-type]
         )
         dt_repack = time.monotonic() - t0
         dt_total = time.monotonic() - t_total

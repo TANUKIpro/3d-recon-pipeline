@@ -284,8 +284,10 @@ def gpu_evaluate_view_samples(
     dists_np = dists.cpu().numpy().astype(np.float64)
     in_bounds_np = in_bounds.cpu().numpy()
 
-    pxi = np.clip(np.rint(u_np).astype(np.int32), 0, img_w - 1)
-    pyi = np.clip(np.rint(v_np).astype(np.int32), 0, img_h - 1)
+    # Replace NaN/Inf before int32 cast to avoid undefined behavior + RuntimeWarning.
+    # Out-of-range values are filtered by in_bounds_np below, so the fill value (0) is safe.
+    pxi = np.clip(np.rint(np.nan_to_num(u_np, nan=0.0, posinf=0.0, neginf=0.0)).astype(np.int32), 0, img_w - 1)
+    pyi = np.clip(np.rint(np.nan_to_num(v_np, nan=0.0, posinf=0.0, neginf=0.0)).astype(np.int32), 0, img_h - 1)
     mask_ok = mask_bool[pyi, pxi]
 
     depth_ref = depth_buffer[pyi, pxi].astype(np.float64)
