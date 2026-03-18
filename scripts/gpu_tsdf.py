@@ -201,6 +201,7 @@ def gpu_tsdf_reconstruct(
 
     # Undo the coordinate scaling applied during integration
     mesh.scale(tsdf_scale, (0, 0, 0))
+    mesh.orient_triangles()  # Edge-based winding consistency (guards against rare MC artifacts)
     mesh.compute_vertex_normals()
 
     n_verts = len(mesh.vertices)

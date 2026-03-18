@@ -18,7 +18,7 @@ from scripts.config_defaults import (
     TEXTURE_OVERSAMPLE,
     TEXTURE_SHARPEN,
 )
-from scripts.mesh_orientation import orient_faces_outward
+from scripts.mesh_orientation import orient_mesh_outward
 from scripts.texture.cap_region import _fill_cap_region, _identify_cap_texels, _seed_cap_border
 from scripts.texture.config import (
     _resolve_texture_device,
@@ -307,10 +307,8 @@ def bake_texture(
     _atlas.generate(chart_options=_chart_options, pack_options=_pack_options)
     vmapping, new_faces, uvs = _atlas[0]
     new_vertices = uv_vertices[vmapping]
-    new_faces, flipped_winding, ratio_before, ratio_after = orient_faces_outward(
-        new_vertices,
-        new_faces,
-        min_outward_ratio=0.5,
+    new_faces, flipped_winding, ratio_before, ratio_after = orient_mesh_outward(
+        new_vertices, new_faces
     )
     print(f"  {len(new_vertices)} verts, {len(new_faces)} faces")
     if flipped_winding:
