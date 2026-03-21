@@ -109,16 +109,25 @@ class SAM2Session:
 
     def release_model(self):
         """Release SAM2 model and free VRAM."""
+        import gc
+
         if self.predictor is not None:
             del self.predictor
             self.predictor = None
         if self.inference_state is not None:
             del self.inference_state
             self.inference_state = None
+        # gc.collect() MUST run before empty_cache(): nn.Module has cyclic
+        # references that prevent deallocation on `del` alone.  gc breaks
+        # those cycles, then empty_cache() returns the freed GPU blocks to
+        # the CUDA driver.  A second pass catches weak-ref callbacks.
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        import gc
+            torch.cuda.synchronize()
         gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         log_vram("after SAM2 release")
 
 

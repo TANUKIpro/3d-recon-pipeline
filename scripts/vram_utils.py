@@ -130,15 +130,28 @@ def get_free_vram_mb() -> int | None:
     return None
 
 
+def get_total_vram_mb() -> int | None:
+    """Return total GPU VRAM in MB via nvidia-smi, or None if unavailable."""
+    inventory = get_gpu_inventory()
+    if inventory:
+        first = inventory[0].get("memory_total_mb")
+        if isinstance(first, int):
+            return first
+    return None
+
+
 def ensure_vram_available(
     min_free_mb: int = _VRAM_GATE_MIN_FREE_MB,
     stage_name: str = "",
     max_retries: int = 3,
+    strict: bool = False,
 ) -> None:
     """Verify VRAM availability, retrying gc+empty_cache if insufficient.
 
-    Logs a WARNING if free VRAM stays below *min_free_mb* after retries,
-    but never blocks the pipeline.
+    When *strict* is False (default), logs a WARNING if free VRAM stays
+    below *min_free_mb* after retries.  When *strict* is True, raises
+    ``RuntimeError`` so the pipeline fails fast instead of wasting time
+    on a stage that will OOM.
     """
     import torch
 
@@ -163,13 +176,20 @@ def ensure_vram_available(
             torch.cuda.synchronize()
         time.sleep(1)
 
-    # Final check — warn but do not block
+    # Final check
     free = get_free_vram_mb()
     if free is not None and free < min_free_mb:
-        print(
-            f"WARNING: VRAM gate{label}: only {free}MB free after "
-            f"{max_retries} retries (wanted {min_free_mb}MB). Continuing anyway."
+        msg = (
+            f"VRAM gate{label}: only {free}MB free after "
+            f"{max_retries} retries (wanted {min_free_mb}MB)"
         )
+        if strict:
+            log_vram_detailed(f"VRAM gate FAIL {stage_name}")
+            raise RuntimeError(
+                f"{msg}. Cannot proceed — GPU memory from a previous "
+                f"stage was not fully released."
+            )
+        print(f"WARNING: {msg}. Continuing anyway.")
 
 
 def offload_module(module, target: str = "cpu") -> None:
@@ -202,3 +222,57 @@ def log_vram(stage_name: str = ""):
         return
     label = f" [{stage_name}]" if stage_name else ""
     print(f"VRAM{label}: {used}MB / {total}MB (free: {free}MB)", flush=True)
+
+
+def log_vram_detailed(stage_name: str = "") -> None:
+    """Log per-process GPU memory and PyTorch allocator stats.
+
+    Combines nvidia-smi per-process data with PyTorch's internal
+    memory tracking for diagnosing VRAM leaks between stages.
+    """
+    label = f" [{stage_name}]" if stage_name else ""
+
+    # Per-process GPU memory via nvidia-smi
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            lines = result.stdout.strip().splitlines()
+            proc_parts = []
+            for line in lines:
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 2:
+                    proc_parts.append(f"PID {parts[0]}: {parts[1]}MB")
+            if proc_parts:
+                print(
+                    f"VRAM processes{label}: {', '.join(proc_parts)}",
+                    flush=True,
+                )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # PyTorch allocator stats (only meaningful in processes that imported torch)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            alloc = torch.cuda.memory_allocated() / (1024 * 1024)
+            reserved = torch.cuda.memory_reserved() / (1024 * 1024)
+            print(
+                f"VRAM PyTorch{label}: "
+                f"allocated={alloc:.0f}MB, reserved={reserved:.0f}MB, "
+                f"reclaimable={reserved - alloc:.0f}MB",
+                flush=True,
+            )
+    except ImportError:
+        pass
+
+    log_vram(stage_name)

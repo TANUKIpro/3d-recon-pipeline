@@ -132,6 +132,15 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
     session.current_checkpoint_id = None
     session.pipeline_start_time = time.time()
 
+    # Clear residual GPU memory from previous pipeline runs before
+    # starting GPU-intensive stages.
+    try:
+        from scripts.vram_utils import cleanup_pytorch_vram, log_vram_detailed
+        await asyncio.to_thread(cleanup_pytorch_vram)
+        await asyncio.to_thread(log_vram_detailed, "pipeline start")
+    except Exception:
+        pass
+
     try:
         if start_stage <= int(PipelineStage.EXTRACT_FRAMES):
             # ── Stage 1: Frame Extraction ─────────────────────────
@@ -529,6 +538,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             pass
         try:
             await asyncio.to_thread(sam2_service.release)
+        except Exception:
+            pass
+        try:
+            from scripts.vram_utils import cleanup_pytorch_vram
+            await asyncio.to_thread(cleanup_pytorch_vram)
         except Exception:
             pass
         session.clear_next_stage_confirmation()

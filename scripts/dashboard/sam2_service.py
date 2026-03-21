@@ -172,6 +172,8 @@ class SAM2Service:
 
     def release(self) -> None:
         """Release model and free VRAM."""
+        import gc
+
         with self._lock:
             if self._session is not None:
                 self._session.release_model()
@@ -179,6 +181,21 @@ class SAM2Service:
             self._current_mask = None
             self._current_ground_mask = None
             self._segmentation_mode = "object"
+        # Dropping _session may be the last reference to the SAM2Session
+        # object; an extra gc+empty_cache cycle ensures its transitive GPU
+        # allocations are returned to the CUDA driver.
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except ImportError:
+            pass
+        from scripts.vram_utils import log_vram
+
+        log_vram("after SAM2Service.release")
 
     def get_frame_jpeg(self, idx: int) -> bytes:
         """Return frame at index as JPEG bytes."""

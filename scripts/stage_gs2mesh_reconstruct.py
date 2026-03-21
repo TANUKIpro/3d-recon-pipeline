@@ -196,6 +196,9 @@ def run_gs2mesh(
         print(f"Reusing existing 3DGS checkpoint: {final_point_cloud}")
         _report(50.0, "Reusing existing 3D Gaussian Splatting checkpoint")
     else:
+        from scripts.vram_utils import log_vram_detailed
+
+        log_vram_detailed("before 3DGS training subprocess")
         _run_subprocess(
             gs_train_args,
             prefix="3DGS",
@@ -214,6 +217,11 @@ def run_gs2mesh(
 
     if cancel_cb:
         cancel_cb()
+
+    from scripts.vram_utils import cleanup_pytorch_vram, log_vram
+
+    log_vram("after 3DGS training subprocess exit")
+    cleanup_pytorch_vram()
 
     # Step 2: Run gs2mesh (rendering + stereo depth only; TSDF on GPU below).
     _report(55.0, "Running gs2mesh stereo depth estimation")
@@ -236,6 +244,9 @@ def run_gs2mesh(
 
     if cancel_cb:
         cancel_cb()
+
+    log_vram("after stereo depth subprocess exit")
+    cleanup_pytorch_vram()
 
     # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
     _report(80.0, "GPU TSDF fusion")

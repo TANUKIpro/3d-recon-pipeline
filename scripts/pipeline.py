@@ -17,7 +17,7 @@ import json
 import time
 from pathlib import Path
 
-from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB
+from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB, _VRAM_GATE_STRICT
 from scripts.vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
 
 
@@ -108,7 +108,11 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 4/6: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
         print("=" * 60)
-        ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before gs2mesh")
+        ensure_vram_available(
+            min_free_mb=_VRAM_GATE_MIN_FREE_MB,
+            stage_name="before gs2mesh",
+            strict=_VRAM_GATE_STRICT,
+        )
 
         from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
 

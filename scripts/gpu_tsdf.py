@@ -87,6 +87,10 @@ def gpu_tsdf_reconstruct(
     # ------------------------------------------------------------------
     # Per-frame integration
     # ------------------------------------------------------------------
+    integrated_count = 0
+    skipped_count = 0
+    min_depth_thresh = tsdf_min_depth_baselines * baseline
+
     for step_i, cam_idx in enumerate(valid_indices):
         cam = left_cameras[cam_idx]
         cam_dir = root / f"{cam_idx:03d}"
@@ -138,8 +142,18 @@ def gpu_tsdf_reconstruct(
 
         # --- Depth thresholding (baselines) ---
         depth = np.where(
-            depth < tsdf_min_depth_baselines * baseline, 0.0, depth,
+            depth < min_depth_thresh, 0.0, depth,
         )
+
+        # Fast check: skip frame if no valid depth pixels remain after
+        # masking + thresholding.  This avoids Open3D's "No block is
+        # touched" error which aborts the entire integration.
+        valid_depth_count = int(np.count_nonzero(
+            (depth > min_depth_thresh) & (depth < depth_max)
+        ))
+        if valid_depth_count == 0:
+            skipped_count += 1
+            continue
 
         # --- Camera matrices ---
         extrinsic = np.array(cam["extrinsic"], dtype=np.float64)
@@ -170,24 +184,50 @@ def gpu_tsdf_reconstruct(
             o3c.Tensor(color_f, device=device),
         )
 
-        # Integrate
-        frustum_coords = vbg.compute_unique_block_coordinates(
-            depth_t,
-            intrinsic_t,
-            extrinsic_t,
-            depth_scale=tsdf_scale,
-            depth_max=depth_max,
+        # Integrate — guard against rare cases where
+        # compute_unique_block_coordinates finds no blocks despite the
+        # NumPy pre-check above (floating-point edge cases).
+        try:
+            frustum_coords = vbg.compute_unique_block_coordinates(
+                depth_t,
+                intrinsic_t,
+                extrinsic_t,
+                depth_scale=tsdf_scale,
+                depth_max=depth_max,
+            )
+            vbg.integrate(
+                frustum_coords,
+                depth_t,
+                color_t,
+                intrinsic_t,
+                intrinsic_t,
+                extrinsic_t,
+                depth_scale=tsdf_scale,
+                depth_max=depth_max,
+                trunc_voxel_multiplier=trunc_multiplier,
+            )
+            integrated_count += 1
+        except RuntimeError as e:
+            if "No block is touched" in str(e):
+                skipped_count += 1
+                print(
+                    f"GPU TSDF: skipping frame {cam_idx} "
+                    f"(no voxel blocks touched, {valid_depth_count} "
+                    f"valid depth pixels)"
+                )
+                continue
+            raise
+
+    if skipped_count > 0:
+        print(
+            f"GPU TSDF: integrated {integrated_count}/{n_valid} frames "
+            f"(skipped {skipped_count} with no valid depth)"
         )
-        vbg.integrate(
-            frustum_coords,
-            depth_t,
-            color_t,
-            intrinsic_t,
-            intrinsic_t,
-            extrinsic_t,
-            depth_scale=tsdf_scale,
-            depth_max=depth_max,
-            trunc_voxel_multiplier=trunc_multiplier,
+    if integrated_count == 0:
+        raise RuntimeError(
+            f"GPU TSDF: all {n_valid} frames skipped — no valid depth "
+            f"in range [{min_depth_thresh:.3f}, {depth_max:.2f}]. "
+            f"Check stereo depth output and mask coverage."
         )
 
     # ------------------------------------------------------------------

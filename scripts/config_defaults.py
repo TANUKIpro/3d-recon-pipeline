@@ -126,6 +126,7 @@ _TEXTURE_UV_PARALLEL_MAX_WORKERS = 8           # 最大ワーカー数
 
 # --- VRAM Management -------------------------------------
 _VRAM_GATE_MIN_FREE_MB = 12_000
+_VRAM_GATE_STRICT = True
 
 # --- Shared Repair Internals ------------------------------
 _REPAIR_SMOOTH_LAMBDA = 0.18

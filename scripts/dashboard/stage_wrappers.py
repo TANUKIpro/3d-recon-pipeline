@@ -79,23 +79,27 @@ def _stage_gs2mesh_reconstruct(
 ) -> str:
     from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
     from scripts.vram_utils import cleanup_pytorch_vram
-    result = run_gs2mesh(
-        frames_dir,
-        colmap_sparse_dir,
-        mask_dir,
-        output_dir,
-        gs_iterations=gs_iterations,
-        runtime_profile=runtime_profile,
-        stereo_model=stereo_model,
-        tsdf_voxel_size=tsdf_voxel_size,
-        tsdf_depth_trunc=tsdf_depth_trunc,
-        use_masks=use_masks,
-        progress_cb=progress_cb,
-        cancel_cb=cancel_cb,
-        register_process=register_process,
-        unregister_process=unregister_process,
-    )
-    cleanup_pytorch_vram()
+    try:
+        result = run_gs2mesh(
+            frames_dir,
+            colmap_sparse_dir,
+            mask_dir,
+            output_dir,
+            gs_iterations=gs_iterations,
+            runtime_profile=runtime_profile,
+            stereo_model=stereo_model,
+            tsdf_voxel_size=tsdf_voxel_size,
+            tsdf_depth_trunc=tsdf_depth_trunc,
+            use_masks=use_masks,
+            progress_cb=progress_cb,
+            cancel_cb=cancel_cb,
+            register_process=register_process,
+            unregister_process=unregister_process,
+        )
+    finally:
+        # Release GPU memory (Open3D VoxelBlockGrid, etc.) even on error.
+        # Without this, Python's traceback holds references to GPU objects.
+        cleanup_pytorch_vram()
     return result
 
 
@@ -217,7 +221,34 @@ def _stage_post_texture_contact_cleanup_skip(
 
 
 def _vram_gate() -> None:
-    from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB
-    from scripts.vram_utils import cleanup_pytorch_vram, ensure_vram_available
+    import os
+
+    from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB, _VRAM_GATE_STRICT
+    from scripts.vram_utils import (
+        cleanup_pytorch_vram,
+        ensure_vram_available,
+        get_total_vram_mb,
+        log_vram_detailed,
+    )
+
     cleanup_pytorch_vram()
-    ensure_vram_available(min_free_mb=_VRAM_GATE_MIN_FREE_MB, stage_name="before gs2mesh")
+    log_vram_detailed("vram gate pre-check")
+
+    # Adaptive threshold: use the configured value, but cap it at 75% of
+    # total GPU memory so the gate doesn't fail on GPUs where host
+    # processes consume a significant baseline.
+    env_override = os.environ.get("VRAM_GATE_MIN_FREE_MB")
+    if env_override is not None:
+        threshold = int(env_override)
+    else:
+        total = get_total_vram_mb()
+        if total is not None:
+            threshold = min(_VRAM_GATE_MIN_FREE_MB, int(total * 0.75))
+        else:
+            threshold = _VRAM_GATE_MIN_FREE_MB
+
+    ensure_vram_available(
+        min_free_mb=threshold,
+        stage_name="before gs2mesh",
+        strict=_VRAM_GATE_STRICT,
+    )
