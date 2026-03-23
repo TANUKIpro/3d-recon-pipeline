@@ -161,8 +161,8 @@ class TestListObjects(unittest.TestCase):
     def test_multiple_objects_sorted_by_updated_at_desc(self) -> None:
         with TemporaryDirectory() as tmp:
             base = Path(tmp)
-            objects_dir = base / "objects"
-            objects_dir.mkdir()
+            branch_dir = base / "objects" / "@main"
+            branch_dir.mkdir(parents=True)
 
             # Create 3 objects with staggered timestamps via os.utime so
             # _latest_update_ts (which reads file mtime) produces a
@@ -171,7 +171,7 @@ class TestListObjects(unittest.TestCase):
 
             names = ["alpha", "beta", "gamma"]
             for i, name in enumerate(names):
-                obj_dir = objects_dir / name
+                obj_dir = branch_dir / name
                 obj_dir.mkdir()
                 write_object_meta(name, obj_dir, f"/data/input/{name}.mp4")
                 # Force mtime: alpha=1000, beta=2000, gamma=3000
@@ -180,7 +180,7 @@ class TestListObjects(unittest.TestCase):
                 os.utime(meta_path, (ts, ts))
                 os.utime(obj_dir, (ts, ts))
 
-            result = list_objects(base)
+            result = list_objects(base, "main")
 
             self.assertEqual(len(result), 3)
             # Most recently updated first
@@ -189,7 +189,7 @@ class TestListObjects(unittest.TestCase):
 
     def test_empty_objects_dir(self) -> None:
         with TemporaryDirectory() as tmp:
-            result = list_objects(Path(tmp))
+            result = list_objects(Path(tmp), "main")
             self.assertEqual(result, [])
 
 

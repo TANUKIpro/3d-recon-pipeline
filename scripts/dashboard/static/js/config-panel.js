@@ -127,6 +127,7 @@ export class ConfigPanel {
     this._pi3xFrameTargetRecommended = null;
     this._pi3xPlanRequestId = 0;
     this._pi3xPlanDebounce = null;
+    this.currentBranchSlug = null;
 
     this._applyDenoisePreset(this._inputs.denoise_preset.value || 'balanced');
     this._updateMeshWrapSummary();
@@ -359,12 +360,13 @@ export class ConfigPanel {
       this._objects = objects;
       this._populateObjectSelect(objects);
 
+      const unlocked = (o) => o.name && !o.locked;
       let target = NEW_OBJECT_VALUE;
-      if (currentSelect && currentSelect !== NEW_OBJECT_VALUE && objects.some(o => o.name === currentSelect)) {
+      if (currentSelect && currentSelect !== NEW_OBJECT_VALUE && objects.some(o => unlocked(o) && o.name === currentSelect)) {
         target = currentSelect;
-      } else if (currentInput && objects.some(o => o.name === currentInput)) {
+      } else if (currentInput && objects.some(o => unlocked(o) && o.name === currentInput)) {
         target = currentInput;
-      } else if (data.active_object && objects.some(o => o.name === data.active_object)) {
+      } else if (data.active_object && objects.some(o => unlocked(o) && o.name === data.active_object)) {
         target = data.active_object;
       }
       this._selectObject(target, { keepInput: true, notify: false });
@@ -543,7 +545,7 @@ export class ConfigPanel {
     this._objectNameInput.addEventListener('input', () => {
       this._objectNameDirty = true;
       const normalized = this._normalizeObjectName(this._objectNameInput.value);
-      const matched = this._objects.find(o => o.name === normalized);
+      const matched = this._objects.find(o => o.name === normalized && !o.locked);
       if (matched) {
         this._objectSelect.value = matched.name;
         this._selectedObjectSummary = matched;
@@ -562,7 +564,7 @@ export class ConfigPanel {
     this._objectNameInput.addEventListener('change', () => {
       const normalized = this._normalizeObjectName(this._objectNameInput.value || this._suggestObjectNameFromVideo() || 'object');
       this._objectNameInput.value = normalized;
-      const matched = this._objects.find(o => o.name === normalized);
+      const matched = this._objects.find(o => o.name === normalized && !o.locked);
       if (matched) {
         this._objectSelect.value = matched.name;
         this._objectNameDirty = false;
@@ -589,21 +591,43 @@ export class ConfigPanel {
     createOpt.textContent = 'Create New Object';
     this._objectSelect.appendChild(createOpt);
 
-    for (const o of objects) {
+    // Group: current branch (selectable) first, then cross-branch (disabled)
+    const current = objects.filter(o => !o.locked);
+    const locked = objects.filter(o => o.locked);
+
+    for (const o of current) {
       const opt = document.createElement('option');
       opt.value = o.name;
       opt.textContent = `${o.name} (${o.complete_stages || 0}/8)`;
       this._objectSelect.appendChild(opt);
+    }
+
+    if (locked.length > 0) {
+      const sep = document.createElement('option');
+      sep.disabled = true;
+      sep.textContent = '\u2500\u2500 Other Branches \u2500\u2500';
+      this._objectSelect.appendChild(sep);
+
+      for (const o of locked) {
+        const opt = document.createElement('option');
+        opt.value = `locked:${o.branch}:${o.name}`;
+        opt.textContent = `[${o.branch}] ${o.name} (${o.complete_stages || 0}/6)`;
+        opt.disabled = true;
+        this._objectSelect.appendChild(opt);
+      }
     }
   }
 
   _selectObject(name, opts = {}) {
     const notify = opts.notify !== false;
     if (name && name !== NEW_OBJECT_VALUE) {
+      // Block selection of locked (cross-branch) objects
+      const summary = this._objects.find(o => o.name === name) || null;
+      if (summary && summary.locked) return;
+
       this._objectSelect.value = name;
       this._objectNameInput.value = name;
       this._objectNameDirty = false;
-      const summary = this._objects.find(o => o.name === name) || null;
       this._selectedObjectSummary = summary;
       this._renderObjectSummary(summary, name);
       this._renderArtifacts(summary);

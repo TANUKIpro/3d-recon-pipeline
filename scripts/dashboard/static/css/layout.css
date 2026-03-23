@@ -40,6 +40,7 @@ body[data-view="pipeline"] .header-breadcrumb { display: flex; }
 .badge-running { color: var(--accent); border-color: var(--accent); }
 .badge-complete { color: var(--success); border-color: var(--success); }
 .badge-error { color: var(--danger); border-color: var(--danger); }
+.badge-branch { color: var(--accent); border-color: var(--accent); font-size: 10px; }
 
 /* ── View Switching ───────────────────────────────────────── */
 body[data-view="overview"] #stage-bar,

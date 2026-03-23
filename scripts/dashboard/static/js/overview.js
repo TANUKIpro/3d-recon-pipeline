@@ -16,8 +16,9 @@ export class OverviewPanel {
     this._objects = [];
     this._stale = true;
     this._activeObject = null;
+    this.currentBranchSlug = null;
 
-    /** @type {((name: string) => void) | null} */
+    /** @type {((name: string, branch?: string) => void) | null} */
     this.onOpenObject = null;
     /** @type {(() => void) | null} */
     this.onNewPipeline = null;
@@ -81,11 +82,14 @@ export class OverviewPanel {
     card.dataset.objectName = obj.name;
     if (obj.name === this._activeObject) card.classList.add('overview-card-active');
 
+    if (obj.locked) card.classList.add('overview-card-locked');
+
     // ── Thumbnail ──
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'overview-thumb';
     const img = document.createElement('img');
-    img.src = `/api/preview/object-file/${encodeURIComponent(obj.name)}/frames/00000.jpg`;
+    const branchParam = obj.branch ? `?branch=${encodeURIComponent(obj.branch)}` : '';
+    img.src = `/api/preview/object-file/${encodeURIComponent(obj.name)}/frames/00000.jpg${branchParam}`;
     img.alt = obj.name;
     img.loading = 'lazy';
     img.onerror = () => {
@@ -113,6 +117,18 @@ export class OverviewPanel {
       video.textContent = obj.video_name;
       video.title = obj.video_path || '';
       body.appendChild(video);
+    }
+
+    // Branch badge
+    if (obj.branch) {
+      const branchBadge = document.createElement('span');
+      branchBadge.className = 'overview-branch-badge';
+      if (obj.locked) branchBadge.classList.add('overview-branch-locked');
+      branchBadge.textContent = obj.branch;
+      branchBadge.title = obj.locked
+        ? `Read-only (branch: ${obj.branch})`
+        : `Branch: ${obj.branch}`;
+      body.appendChild(branchBadge);
     }
 
     // Stage dots
@@ -178,19 +194,29 @@ export class OverviewPanel {
     const actions = document.createElement('div');
     actions.className = 'overview-card-actions';
     const openBtn = document.createElement('button');
-    openBtn.className = 'btn-primary btn-small';
-    openBtn.textContent = 'Open';
-    openBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (this.onOpenObject) this.onOpenObject(obj.name);
-    });
+
+    if (obj.locked) {
+      openBtn.className = 'btn-small btn-locked';
+      openBtn.textContent = 'Locked';
+      openBtn.disabled = true;
+      // Prevent all interaction on locked cards
+      card.style.cursor = 'default';
+      card.addEventListener('click', (e) => e.stopPropagation());
+    } else {
+      openBtn.className = 'btn-primary btn-small';
+      openBtn.textContent = 'Open';
+      openBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (this.onOpenObject) this.onOpenObject(obj.name, obj.branch);
+      });
+      // Entire card clickable
+      card.addEventListener('click', () => {
+        if (this.onOpenObject) this.onOpenObject(obj.name, obj.branch);
+      });
+    }
+
     actions.appendChild(openBtn);
     card.appendChild(actions);
-
-    // Entire card clickable
-    card.addEventListener('click', () => {
-      if (this.onOpenObject) this.onOpenObject(obj.name);
-    });
 
     return card;
   }

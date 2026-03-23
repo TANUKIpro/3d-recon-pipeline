@@ -518,7 +518,8 @@ class TestPreviewObjectFilePathEscape(unittest.IsolatedAsyncioTestCase):
         self._orig_output_dir = state.output_dir
         state.output_dir = self._tmp.name
         # Create the object directory so the endpoint doesn't 404 early
-        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        slug = get_state().branch_slug
+        obj_dir = Path(self._tmp.name) / "objects" / f"@{slug}" / "test-obj"
         obj_dir.mkdir(parents=True)
 
     def tearDown(self) -> None:
@@ -637,22 +638,20 @@ class TestPipelineVideosEndpoint(unittest.IsolatedAsyncioTestCase):
 
 
 class TestPipelineObjectsEndpoint(unittest.IsolatedAsyncioTestCase):
-    @patch("scripts.dashboard.routes.pipeline.list_objects", return_value=[
+    @patch("scripts.dashboard.routes.pipeline.resolve_output_root")
+    @patch("scripts.dashboard.routes.pipeline.list_all_objects", return_value=[
         {"name": "obj1", "updated_at": "2026-01-01"},
     ])
-    async def test_returns_objects_and_active(self, mock_list: MagicMock) -> None:
-        state = get_state()
-        old = state.output_dir
-        state.output_dir = "/tmp/test-out"
-        try:
+    async def test_returns_objects_and_active(self, mock_list: MagicMock, mock_root: MagicMock) -> None:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            mock_root.return_value = Path(tmp)
             response = await pipeline_objects()
             self.assertEqual(response.status_code, 200)
             payload = _json_payload(response)
             self.assertIn("objects", payload)
             self.assertIn("active_object", payload)
             self.assertEqual(len(payload["objects"]), 1)
-        finally:
-            state.output_dir = old
 
 
 # ── Pipeline object-info endpoint (8.1.10–8.1.12) ────────────────
@@ -671,7 +670,8 @@ class TestPipelineObjectInfoEndpoint(unittest.IsolatedAsyncioTestCase):
 
     @patch("scripts.dashboard.routes.pipeline.summarize_object")
     async def test_valid_name_returns_info(self, mock_summarize: MagicMock) -> None:
-        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        slug = get_state().branch_slug
+        obj_dir = Path(self._tmp.name) / "objects" / f"@{slug}" / "test-obj"
         obj_dir.mkdir(parents=True)
         mock_summarize.return_value = {"name": "test-obj"}
         response = await pipeline_object_info(name="test-obj")
@@ -712,7 +712,8 @@ class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
     @patch("scripts.dashboard.dependencies.AppState.load_object_into_session", return_value={"name": "test-obj"})
     async def test_load_success(self, mock_load: MagicMock, mock_broadcast: AsyncMock) -> None:
         session.running = False
-        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        slug = get_state().branch_slug
+        obj_dir = Path(self._tmp.name) / "objects" / f"@{slug}" / "test-obj"
         obj_dir.mkdir(parents=True)
         response = await pipeline_load_object({"name": "test-obj"})
         self.assertEqual(response.status_code, 200)
@@ -777,7 +778,8 @@ class TestPipelineStartEndpoint(unittest.IsolatedAsyncioTestCase):
     async def test_missing_prereqs_returns_400(self) -> None:
         session.running = False
         # Create object dir so it exists but is empty
-        obj_dir = Path(self._tmp.name) / "objects" / "test-obj"
+        slug = get_state().branch_slug
+        obj_dir = Path(self._tmp.name) / "objects" / f"@{slug}" / "test-obj"
         obj_dir.mkdir(parents=True)
         response = await pipeline_start({
             "video_path": "/data/input/test.mp4",
@@ -1242,7 +1244,8 @@ class TestPreviewObjectFileNormal(unittest.IsolatedAsyncioTestCase):
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            obj_dir = base / "objects" / "test-obj"
+            slug = get_state().branch_slug
+            obj_dir = base / "objects" / f"@{slug}" / "test-obj"
             obj_dir.mkdir(parents=True)
             (obj_dir / "test.ply").write_bytes(b"ply data")
             mock_root.return_value = base
@@ -1339,10 +1342,11 @@ class TestVramInfo(unittest.IsolatedAsyncioTestCase):
 class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
     """8.8.1-8.8.3 — _startup installs LogBroadcaster and auto-loads."""
 
+    @patch("scripts.dashboard.app.migrate_legacy_objects", return_value=[])
     @patch("scripts.dashboard.app.list_objects", return_value=[])
     @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
-    async def test_startup_installs_broadcaster(self, mock_lb_cls, mock_root, mock_list) -> None:
+    async def test_startup_installs_broadcaster(self, mock_lb_cls, mock_root, mock_list, mock_migrate) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             mock_root.return_value = Path(tmp)
@@ -1358,14 +1362,16 @@ class TestLifecycleStartup(unittest.IsolatedAsyncioTestCase):
             finally:
                 app_mod.log_broadcaster = old_broadcaster
 
+    @patch("scripts.dashboard.app.migrate_legacy_objects", return_value=[])
     @patch("scripts.dashboard.app.list_objects")
     @patch("scripts.dashboard.app.resolve_output_root")
     @patch("scripts.dashboard.app.LogBroadcaster")
-    async def test_startup_auto_loads_latest_object(self, mock_lb_cls, mock_root, mock_list) -> None:
+    async def test_startup_auto_loads_latest_object(self, mock_lb_cls, mock_root, mock_list, mock_migrate) -> None:
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
-            obj_dir = base / "objects" / "latest-obj"
+            slug = get_state().branch_slug
+            obj_dir = base / "objects" / f"@{slug}" / "latest-obj"
             obj_dir.mkdir(parents=True)
             mock_root.return_value = base
             mock_list.return_value = [{"name": "latest-obj"}]
