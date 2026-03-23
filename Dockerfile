@@ -88,8 +88,9 @@ RUN JAX_V=$(python3 -c "import jax; print(jax.__version__)") \
 # --- Layer 8: Application code ---
 COPY scripts/ /app/scripts/
 
-# Branch identity for object isolation (written by host before build)
-COPY .git_branch /app/.git_branch
+# Branch identity for object isolation (passed via docker-compose build arg)
+ARG GIT_BRANCH=main
+RUN echo "${GIT_BRANCH}" > /app/.git_branch
 
 # --- Layer 9: Test dependencies & test files ---
 COPY tests/ /app/tests/

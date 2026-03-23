@@ -1,6 +1,9 @@
 services:
   pipeline:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_BRANCH: ${GIT_BRANCH:-main}
     deploy:
       resources:
         reservations:

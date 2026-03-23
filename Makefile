@@ -1,14 +1,14 @@
 .PHONY: build up down
 
-# Write current git branch to .git_branch (read by the dashboard at runtime)
-.git_branch:
-	@git rev-parse --abbrev-ref HEAD > .git_branch
-	@echo "Branch: $$(cat .git_branch)"
+GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+export GIT_BRANCH
 
-build: .git_branch
+build:
+	@echo "Branch: $(GIT_BRANCH)"
 	docker compose build
 
-up: .git_branch
+up:
+	@echo "Branch: $(GIT_BRANCH)"
 	docker compose up
 
 down:
