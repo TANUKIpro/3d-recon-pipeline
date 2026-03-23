@@ -78,6 +78,7 @@ export class ConfigPanel {
     this._running = false;
     this._selectedObjectSummary = null;
     this._startStage = 1;
+    this.currentBranchSlug = null;
 
     this._updateTextureAutoOption(null);
     this._bindEvents();
@@ -344,11 +345,30 @@ export class ConfigPanel {
     createOpt.textContent = 'Create New Object';
     this._objectSelect.appendChild(createOpt);
 
-    for (const o of objects) {
+    // Group: current branch (selectable) first, then cross-branch (disabled)
+    const current = objects.filter(o => !o.locked);
+    const locked = objects.filter(o => o.locked);
+
+    for (const o of current) {
       const opt = document.createElement('option');
       opt.value = o.name;
       opt.textContent = `${o.name} (${o.complete_stages || 0}/6)`;
       this._objectSelect.appendChild(opt);
+    }
+
+    if (locked.length > 0) {
+      const sep = document.createElement('option');
+      sep.disabled = true;
+      sep.textContent = '\u2500\u2500 Other Branches \u2500\u2500';
+      this._objectSelect.appendChild(sep);
+
+      for (const o of locked) {
+        const opt = document.createElement('option');
+        opt.value = `locked:${o.branch}:${o.name}`;
+        opt.textContent = `[${o.branch}] ${o.name} (${o.complete_stages || 0}/6)`;
+        opt.disabled = true;
+        this._objectSelect.appendChild(opt);
+      }
     }
   }
 
