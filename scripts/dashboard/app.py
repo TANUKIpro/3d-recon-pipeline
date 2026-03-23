@@ -33,6 +33,7 @@ from scripts.dashboard.object_store import (
     infer_resume_stage,
     list_objects,
     list_preview_files,  # noqa: F401
+    migrate_legacy_objects,
     object_dir,
     prepare_object_output_dir,  # noqa: F401
     reset_outputs_from_stage,  # noqa: F401
@@ -92,11 +93,26 @@ async def _startup() -> None:
     log_broadcaster.install()
     asyncio.create_task(log_broadcaster.drain(session.ws_clients))
     try:
+        import logging as _logging
+        _log = _logging.getLogger("clip2mesh.dashboard")
+
         base_output = resolve_output_root(_app_state.output_dir)
-        objects = list_objects(base_output)
+        # Migrate legacy (non-branch-namespaced) objects on first startup
+        migrated = migrate_legacy_objects(base_output, _app_state.branch_slug)
+        if migrated:
+            _log.info(
+                "Migrated %d legacy object(s) to branch @%s: %s",
+                len(migrated), _app_state.branch_slug, ", ".join(migrated),
+            )
+        _log.info("Dashboard branch: %s (slug: @%s)", _app_state.current_branch, _app_state.branch_slug)
+        # Auto-load latest object from current branch only
+        objects = list_objects(base_output, _app_state.branch_slug)
         if objects:
             latest = objects[0]["name"]
-            _load_object_into_session(latest, object_dir(latest, base_output))
+            _load_object_into_session(
+                latest,
+                object_dir(latest, base_output, _app_state.branch_slug),
+            )
     except Exception:
         # Best-effort auto-load only.
         pass

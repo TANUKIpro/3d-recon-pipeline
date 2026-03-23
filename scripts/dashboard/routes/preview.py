@@ -17,15 +17,21 @@ router = APIRouter()
 
 
 @router.get("/api/preview/object-file/{object_name}/{path:path}")
-async def preview_object_file(object_name: str, path: str):
-    """Serve a file from any object's directory (not just active session)."""
+async def preview_object_file(object_name: str, path: str, branch: str | None = None):
+    """Serve a file from any object's directory (not just active session).
+
+    The optional ``?branch=`` query parameter selects the branch namespace.
+    Defaults to the current branch.
+    """
     try:
         object_name = validate_object_name(object_name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = resolve_output_root(get_state().output_dir)
-    out = object_dir(object_name, base_output)
+    state = get_state()
+    slug = branch or state.branch_slug
+    base_output = resolve_output_root(state.output_dir)
+    out = object_dir(object_name, base_output, slug)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
 

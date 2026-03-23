@@ -90,6 +90,8 @@ const overallProgressBadge = document.getElementById('overall-progress-badge');
 
 let _extractedFrameCount = 0;
 let _objectLoadRequestId = 0;
+let _currentBranch = null;
+let _currentBranchSlug = null;
 
 // ── Init controllers ─────────────────────────────────────────
 
@@ -507,7 +509,10 @@ router.onChange = (view) => {
 };
 
 // Overview: open an existing object
-overview.onOpenObject = async (objectName) => {
+overview.onOpenObject = async (objectName, branchSlug) => {
+  if (branchSlug && _currentBranchSlug && branchSlug !== _currentBranchSlug) {
+    return;  // Cross-branch object — blocked by UI (card is locked)
+  }
   router.navigate('pipeline');
   await config.onObjectSelected?.(objectName);
   overview.setActiveObject(objectName);
@@ -525,6 +530,23 @@ overview.onNewPipeline = () => {
 // ── Boot ─────────────────────────────────────────────────────
 
 ws.connect();
+
+// Fetch branch info and propagate to overview / config
+(async () => {
+  try {
+    const res = await fetch('/api/pipeline/objects');
+    const data = await res.json();
+    _currentBranch = data.current_branch || null;
+    _currentBranchSlug = data.branch_slug || null;
+    overview.currentBranchSlug = _currentBranchSlug;
+    config.currentBranchSlug = _currentBranchSlug;
+    const branchBadge = document.getElementById('branch-badge');
+    if (branchBadge && _currentBranch) {
+      branchBadge.textContent = _currentBranch;
+      branchBadge.title = `Branch: ${_currentBranch}`;
+    }
+  } catch (e) { /* best-effort */ }
+})();
 
 // Trigger initial overview refresh if landing on overview
 if (router.view === 'overview') overview.refresh();

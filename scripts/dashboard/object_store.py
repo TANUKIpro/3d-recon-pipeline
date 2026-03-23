@@ -8,6 +8,7 @@ discovery, metadata, stage reset, resume validation).  Extracted from
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from datetime import datetime, timezone
@@ -15,7 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from scripts.dashboard.configuration import build_pipeline_config
+from scripts.dashboard.git_utils import BRANCH_DIR_PREFIX
 from scripts.dashboard.state import PipelineStage, detect_stage_outputs
+
+_log = logging.getLogger("clip2mesh.dashboard")
 
 # ── Data constants ────────────────────────────────────────────────
 
@@ -125,8 +129,16 @@ def _objects_root(base_output: Path) -> Path:
     return root
 
 
-def object_dir(object_name: str, base_output: Path) -> Path:
-    return _objects_root(base_output) / object_name
+def branch_objects_root(base_output: Path, slug: str) -> Path:
+    """Return the branch-namespaced objects directory: ``{base}/objects/@{slug}/``."""
+    root = _objects_root(base_output) / f"{BRANCH_DIR_PREFIX}{slug}"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def object_dir(object_name: str, base_output: Path, slug: str) -> Path:
+    """Return path to a single object: ``{base}/objects/@{slug}/{object_name}/``."""
+    return branch_objects_root(base_output, slug) / object_name
 
 
 def list_preview_files(out: Path) -> list[dict[str, Any]]:
@@ -223,6 +235,7 @@ def write_object_meta(
     video_path: str,
     *,
     config: dict[str, Any] | None = None,
+    branch: str | None = None,
 ) -> None:
     meta_path = object_dir / OBJECT_META_FILE
     existing = safe_json_load(meta_path)
@@ -235,6 +248,10 @@ def write_object_meta(
         "updated_at": now,
         "config": config if isinstance(config, dict) else existing.get("config", {}),
     }
+    if branch is not None:
+        payload["branch"] = branch
+    elif "branch" in existing:
+        payload["branch"] = existing["branch"]
     with meta_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
@@ -281,12 +298,77 @@ def summarize_object(
     return item
 
 
-def list_objects(base_output: Path) -> list[dict[str, Any]]:
+def list_objects(base_output: Path, slug: str) -> list[dict[str, Any]]:
+    """List objects for a specific branch."""
     objects: list[dict[str, Any]] = []
-    root = _objects_root(base_output)
+    root = branch_objects_root(base_output, slug)
     for d in root.iterdir():
         if not d.is_dir():
             continue
-        objects.append(summarize_object(d.name, d, include_files=False))
+        item = summarize_object(d.name, d, include_files=False)
+        item["branch"] = slug
+        item["locked"] = False
+        objects.append(item)
     objects.sort(key=lambda o: o.get("updated_at") or "", reverse=True)
     return objects
+
+
+def list_all_objects(base_output: Path, current_slug: str) -> list[dict[str, Any]]:
+    """List objects across all branches, marking cross-branch objects as locked."""
+    objects: list[dict[str, Any]] = []
+    root = _objects_root(base_output)
+    if not root.is_dir():
+        return objects
+    for branch_dir in root.iterdir():
+        if not branch_dir.is_dir():
+            continue
+        if not branch_dir.name.startswith(BRANCH_DIR_PREFIX):
+            continue  # skip non-branch directories (should be migrated already)
+        slug = branch_dir.name[len(BRANCH_DIR_PREFIX):]
+        is_current = slug == current_slug
+        for obj_dir in branch_dir.iterdir():
+            if not obj_dir.is_dir():
+                continue
+            item = summarize_object(obj_dir.name, obj_dir, include_files=False)
+            item["branch"] = slug
+            item["locked"] = not is_current
+            objects.append(item)
+    objects.sort(key=lambda o: o.get("updated_at") or "", reverse=True)
+    return objects
+
+
+def migrate_legacy_objects(base_output: Path, current_slug: str) -> list[str]:
+    """Move legacy non-namespaced objects into the current branch namespace.
+
+    Called once at startup.  Idempotent — no-op when no legacy dirs remain.
+    Returns list of migrated object names.
+    """
+    root = _objects_root(base_output)
+    migrated: list[str] = []
+    target_root = branch_objects_root(base_output, current_slug)
+
+    for entry in list(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name.startswith(BRANCH_DIR_PREFIX):
+            continue  # already a branch namespace directory
+        # Legacy object directory — migrate it
+        dest = target_root / entry.name
+        if dest.exists():
+            _log.warning(
+                "Skipping legacy migration for '%s': name collision in @%s",
+                entry.name,
+                current_slug,
+            )
+            continue
+        entry.rename(dest)
+        # Update object_meta.json with branch field and new output_dir
+        meta_path = dest / OBJECT_META_FILE
+        meta = safe_json_load(meta_path)
+        if meta:
+            meta["branch"] = current_slug
+            meta["output_dir"] = str(dest)
+            with meta_path.open("w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+        migrated.append(entry.name)
+    return migrated

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.dashboard.configuration import build_pipeline_config
+from scripts.dashboard.git_utils import branch_slug as _branch_slug, detect_branch
 from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
     infer_resume_stage,
@@ -35,7 +36,8 @@ MESH_POSTPROCESS_METHODS = {"laplacian", "taubin"}
 class AppState:
     """Holds the mutable singletons that route handlers need."""
 
-    __slots__ = ("session", "sam2_service", "input_dir", "output_dir")
+    __slots__ = ("session", "sam2_service", "input_dir", "output_dir",
+                 "current_branch", "branch_slug")
 
     def __init__(
         self,
@@ -44,11 +46,15 @@ class AppState:
         sam2_service: SAM2Service | None = None,
         input_dir: str | None = None,
         output_dir: str | None = None,
+        current_branch: str | None = None,
     ) -> None:
         self.session = session or PipelineSession()
         self.sam2_service = sam2_service or SAM2Service()
         self.input_dir = input_dir or os.environ.get("INPUT_DIR", "/data/input")
         self.output_dir = output_dir or os.environ.get("OUTPUT_DIR", "/data/output")
+        branch = current_branch or detect_branch()
+        self.current_branch = branch
+        self.branch_slug = _branch_slug(branch)
 
     def active_output_dir(self) -> Path:
         """Return the effective output directory for the active object."""

@@ -17,6 +17,7 @@ from scripts.dashboard.dependencies import VIDEO_EXTENSIONS, get_state
 from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
     infer_resume_stage,
+    list_all_objects,
     list_objects,
     object_dir,
     prepare_object_output_dir,
@@ -62,27 +63,35 @@ async def pipeline_videos():
 async def pipeline_objects():
     state = get_state()
     base_output = resolve_output_root(state.output_dir)
-    objects = list_objects(base_output)
+    objects = list_all_objects(base_output, state.branch_slug)
     return JSONResponse(
         {
             "objects": objects,
             "active_object": state.session.config.object_name or None,
+            "current_branch": state.current_branch,
+            "branch_slug": state.branch_slug,
         }
     )
 
 
 @router.get("/api/pipeline/object-info")
-async def pipeline_object_info(name: str):
+async def pipeline_object_info(name: str, branch: str | None = None):
     try:
         obj_name = validate_object_name(name)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
-    base_output = resolve_output_root(get_state().output_dir)
-    out = object_dir(obj_name, base_output)
+    state = get_state()
+    slug = branch or state.branch_slug
+    base_output = resolve_output_root(state.output_dir)
+    out = object_dir(obj_name, base_output, slug)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
-    return JSONResponse({"object": summarize_object(obj_name, out, include_files=True)})
+    is_locked = slug != state.branch_slug
+    info = summarize_object(obj_name, out, include_files=True)
+    info["branch"] = slug
+    info["locked"] = is_locked
+    return JSONResponse({"object": info})
 
 
 @router.post("/api/pipeline/load-object")
@@ -98,8 +107,15 @@ async def pipeline_load_object(body: dict | None = None):
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
+    req_branch = str(raw.get("branch", "")).strip() or state.branch_slug
+    if req_branch != state.branch_slug:
+        return JSONResponse(
+            {"error": "Cannot load cross-branch object for editing"},
+            status_code=403,
+        )
+
     base_output = resolve_output_root(str(raw.get("output_dir", state.output_dir)))
-    out = object_dir(obj_name, base_output)
+    out = object_dir(obj_name, base_output, state.branch_slug)
     if not out.is_dir():
         return JSONResponse({"error": "Object not found"}, status_code=404)
 
@@ -186,7 +202,7 @@ async def pipeline_start(body: dict | None = None):
         obj_name = suggest_object_name(video_path)
 
     output_root = resolve_output_root(str(raw.get("output_dir", state.output_dir)))
-    object_output_dir = object_dir(obj_name, output_root)
+    object_output_dir = object_dir(obj_name, output_root, state.branch_slug)
     existing_meta = safe_json_load(object_output_dir / OBJECT_META_FILE)
     if not video_path:
         video_path = str(existing_meta.get("video_path", "")).strip()
@@ -244,6 +260,7 @@ async def pipeline_start(body: dict | None = None):
         object_output_dir,
         cfg.video_path,
         config=cfg.to_dict(),
+        branch=state.branch_slug,
     )
 
     # Launch pipeline as background task
