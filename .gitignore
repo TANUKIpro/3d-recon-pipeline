@@ -1,4 +1,5 @@
 .env
+.git_branch
 data/input/*
 data/output/*
 !data/input/.gitkeep

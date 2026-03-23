@@ -5,21 +5,36 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from pathlib import Path
 
 BRANCH_DIR_PREFIX = "@"
+
+# Written by the host before ``docker compose build`` and COPY'd into the image.
+_BRANCH_FILE_PATHS = (
+    Path("/app/.git_branch"),   # inside Docker container
+    Path(".git_branch"),        # local dev (project root)
+)
 
 
 def detect_branch() -> str:
     """Return the current git branch name.
 
     Priority:
-    1. ``GIT_BRANCH`` environment variable (set in docker-compose.yml)
-    2. ``git rev-parse --abbrev-ref HEAD`` (local dev with .git present)
-    3. Fallback to ``"main"``
+    1. ``GIT_BRANCH`` environment variable
+    2. ``.git_branch`` file (baked into Docker image at build time)
+    3. ``git rev-parse --abbrev-ref HEAD`` (local dev with .git present)
+    4. Fallback to ``"main"``
     """
     env_branch = os.environ.get("GIT_BRANCH", "").strip()
     if env_branch:
         return env_branch
+    for p in _BRANCH_FILE_PATHS:
+        try:
+            content = p.read_text().strip()
+            if content:
+                return content
+        except Exception:
+            pass
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
