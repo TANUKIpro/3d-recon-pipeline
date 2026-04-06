@@ -249,6 +249,7 @@ async def pipeline_start(body: dict | None = None):
         video_path=video_path,
         object_name=obj_name,
         output_dir=object_output_dir,
+        explicit_keys=set(raw.keys()),
     )
 
     session.reset()

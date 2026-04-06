@@ -410,12 +410,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session.colmap_sparse_path or str(Path(output_dir) / "colmap_sparse"),
                 session.mask_dir,
                 output_dir,
-                cfg.gs2mesh_gs_iterations,
-                cfg.gs2mesh_runtime_profile,
-                cfg.gs2mesh_stereo_model,
-                cfg.gs2mesh_tsdf_voxel_size,
-                cfg.gs2mesh_tsdf_depth_trunc,
-                cfg.gs2mesh_use_masks,
+                cfg.to_gs2mesh_settings(),
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)

@@ -222,7 +222,12 @@ export function buildConfigPanelDOM() {
       <input type="checkbox" id="cfg-classical-downsample" checked>
       <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
 
-      <input type="number" id="cfg-gs2mesh-gs-iterations" value="30000">
+      <select id="cfg-gs2mesh-preset">
+        <option value="default" selected>Default</option>
+        <option value="high">High</option>
+        <option value="custom">Custom</option>
+      </select>
+      <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000">
       <select id="cfg-gs2mesh-runtime-profile">
         <option value="auto" selected>Auto</option>
         <option value="compat">Compat</option>

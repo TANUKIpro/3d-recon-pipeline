@@ -180,7 +180,7 @@ describe('ConfigPanel', () => {
         'frame_interval', 'max_frames',
         'colmap_matcher', 'colmap_max_features', 'colmap_image_size',
         'sam2_model', 'ground_plane_enabled',
-        'gs2mesh_gs_iterations', 'gs2mesh_runtime_profile',
+        'gs2mesh_preset', 'gs2mesh_gs_iterations', 'gs2mesh_runtime_profile',
         'gs2mesh_stereo_model', 'gs2mesh_tsdf_voxel_size',
         'gs2mesh_tsdf_depth_trunc', 'gs2mesh_use_masks',
         'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
@@ -201,6 +201,7 @@ describe('ConfigPanel', () => {
       // Numeric fields should have fallback defaults (positive numbers)
       expect(config.frame_interval).toBeGreaterThan(0);
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
+      expect(config.gs2mesh_preset).toBe('default');
       expect(config.gs2mesh_runtime_profile).toBe('auto');
       expect(config.texture_view_assign_mode).toBe('legacy');
       expect(config.texture_quality_boost).toBe(false);
@@ -222,6 +223,37 @@ describe('ConfigPanel', () => {
       document.getElementById('cfg-gs2mesh-runtime-profile').value = 'compat';
       const config = panel.getConfig();
       expect(config.gs2mesh_runtime_profile).toBe('compat');
+    });
+
+    it('reads the selected gs2mesh preset', () => {
+      document.getElementById('cfg-gs2mesh-preset').value = 'high';
+      const config = panel.getConfig();
+      expect(config.gs2mesh_preset).toBe('high');
+    });
+  });
+
+  describe('gs2mesh presets', () => {
+    it('applies High preset values to public Stage 4 inputs', () => {
+      const presetSelect = document.getElementById('cfg-gs2mesh-preset');
+      presetSelect.value = 'high';
+      presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+      expect(document.getElementById('cfg-gs2mesh-gs-iterations').value).toBe('15000');
+      expect(document.getElementById('cfg-gs2mesh-tsdf-voxel-size').value).toBe('0.005');
+      expect(document.getElementById('cfg-gs2mesh-tsdf-depth-trunc').value).toBe('0.03');
+    });
+
+    it('marks the preset as custom after a Stage 4 public input edit', () => {
+      const presetSelect = document.getElementById('cfg-gs2mesh-preset');
+      presetSelect.value = 'high';
+      presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+      const iterations = document.getElementById('cfg-gs2mesh-gs-iterations');
+      iterations.value = '24000';
+      iterations.dispatchEvent(new Event('input', { bubbles: true }));
+
+      expect(presetSelect.value).toBe('custom');
+      expect(panel.getConfig().gs2mesh_preset_base).toBe('high');
     });
   });
 

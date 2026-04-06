@@ -8,12 +8,15 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from scripts.gs2mesh_config import Gs2meshSettings
 from scripts.stage_gs2mesh_reconstruct import (
     _Gs2meshRuntimeStack,
+    _build_gpu_tsdf_attempts,
     _build_gs_train_args,
     _build_pythonpath,
     _build_stereo_runtime_stacks,
     _classify_gs2mesh_failure,
+    _is_gpu_tsdf_oom_error,
     _materialize_tsdf_masks,
     _patch_gaussian_renderer_init,
     _normalize_runtime_profile,
@@ -422,6 +425,28 @@ class TestGs2meshRuntimeHelpers(unittest.TestCase):
 
         self.assertEqual(reason, "renderer_signature_mismatch")
 
+    def test_detects_gpu_tsdf_oom_error(self) -> None:
+        self.assertTrue(
+            _is_gpu_tsdf_oom_error(
+                RuntimeError(
+                    "[Open3D Error] CUDA runtime error: out of memory"
+                )
+            )
+        )
+
+    def test_build_gpu_tsdf_attempts_adds_vram_reduction_steps(self) -> None:
+        attempts = _build_gpu_tsdf_attempts(
+            Gs2meshSettings.from_preset("high")
+        )
+
+        self.assertEqual([name for name, _ in attempts], [
+            "requested", "reduced_vram", "safe_vram",
+        ])
+        self.assertEqual(attempts[1][1].block_count, 100000)
+        self.assertEqual(attempts[1][1].tsdf_dilate, 2)
+        self.assertEqual(attempts[2][1].block_count, 75000)
+        self.assertEqual(attempts[2][1].tsdf_dilate, 3)
+
     def test_validate_stereo_outputs_requires_camera_data_and_depth(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -527,7 +552,7 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
     @patch("scripts.stage_gs2mesh_reconstruct._run_colmap_cmd")
     @patch("scripts.stage_gs2mesh_reconstruct._find_recon_dir")
     @patch("scripts.stage_gs2mesh_reconstruct._resolve_training_runtime_stack")
-    def test_run_gs2mesh_materializes_masks_before_tsdf(
+    def test_run_gs2mesh_does_not_force_mask_materialization(
         self,
         mock_resolve_stack,
         mock_find_recon_dir,
@@ -568,25 +593,171 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
                 None,
             )
 
-            call_order: list[str] = []
-            mock_materialize_masks.side_effect = (
-                lambda *args, **kwargs: call_order.append("mask")
-            )
-            mock_gpu_tsdf.side_effect = (
-                lambda *args, **kwargs: call_order.append("tsdf") or "/tmp/gpu_mesh.ply"
-            )
+            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+                run_gs2mesh(
+                    str(frames_dir),
+                    str(colmap_sparse),
+                    str(Path(tmp) / "masks"),
+                    str(out),
+                    use_masks=True,
+                )
 
-            run_gs2mesh(
-                str(frames_dir),
-                str(colmap_sparse),
-                str(Path(tmp) / "masks"),
-                str(out),
-                use_masks=True,
-            )
-
-            self.assertEqual(call_order, ["mask", "tsdf"])
             mock_run_stereo.assert_called_once()
-            mock_materialize_masks.assert_called_once()
+            mock_materialize_masks.assert_not_called()
+
+    @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
+    @patch("scripts.gpu_tsdf.gpu_tsdf_reconstruct", return_value="/tmp/gpu_mesh.ply")
+    @patch("scripts.stage_gs2mesh_reconstruct._materialize_tsdf_masks")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_gs2mesh_stereo_with_retries")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gaussian_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs2mesh_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_subprocess")
+    @patch("scripts.stage_gs2mesh_reconstruct._build_gs_train_args")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs_model_output_link")
+    @patch("scripts.stage_gs2mesh_reconstruct._setup_gs2mesh_dirs")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_sparse_0")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_colmap_cmd")
+    @patch("scripts.stage_gs2mesh_reconstruct._find_recon_dir")
+    @patch("scripts.stage_gs2mesh_reconstruct._resolve_training_runtime_stack")
+    def test_run_gs2mesh_forwards_hidden_tsdf_settings(
+        self,
+        mock_resolve_stack,
+        mock_find_recon_dir,
+        mock_run_colmap_cmd,
+        mock_ensure_sparse_0,
+        mock_setup_dirs,
+        mock_output_link,
+        mock_build_train_args,
+        mock_run_subprocess,
+        mock_renderer_compat,
+        mock_gaussian_compat,
+        mock_run_stereo,
+        mock_materialize_masks,
+        mock_gpu_tsdf,
+        mock_copy2,
+    ) -> None:
+        del mock_run_colmap_cmd, mock_ensure_sparse_0, mock_setup_dirs
+        del mock_output_link, mock_run_subprocess, mock_copy2
+        del mock_renderer_compat, mock_gaussian_compat, mock_run_stereo
+        del mock_materialize_masks
+
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            frames_dir = Path(tmp) / "frames"
+            colmap_sparse = Path(tmp) / "colmap_sparse"
+            frames_dir.mkdir(parents=True)
+            colmap_sparse.mkdir(parents=True)
+            mock_find_recon_dir.return_value = colmap_sparse
+            mock_resolve_stack.return_value = _Gs2meshRuntimeStack(
+                name="accel",
+                python_executable="python3",
+                gaussian_splatting_root=Path("/tmp/gs"),
+                env_overrides={},
+            )
+            mock_build_train_args.return_value = (
+                ["python3", "train.py"],
+                "auto",
+                "default",
+                None,
+            )
+            settings = Gs2meshSettings.from_preset("high")
+
+            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+                run_gs2mesh(
+                    str(frames_dir),
+                    str(colmap_sparse),
+                    str(Path(tmp) / "masks"),
+                    str(out),
+                    settings=settings,
+                )
+
+            kwargs = mock_gpu_tsdf.call_args.kwargs
+            self.assertEqual(kwargs["tsdf_scale"], 1.0)
+            self.assertEqual(kwargs["tsdf_min_depth_baselines"], 4)
+            self.assertEqual(kwargs["tsdf_max_depth_baselines"], 20)
+            self.assertEqual(kwargs["tsdf_cleaning_threshold"], 50000)
+            self.assertEqual(kwargs["tsdf_erosion_kernel_size"], 8)
+            self.assertEqual(kwargs["tsdf_closing_kernel_size"], 8)
+            self.assertEqual(kwargs["block_count"], 100000)
+
+    @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
+    @patch(
+        "scripts.gpu_tsdf.gpu_tsdf_reconstruct",
+        side_effect=[
+            RuntimeError(
+                "[Open3D Error] CUDA runtime error: out of memory"
+            ),
+            "/tmp/gpu_mesh.ply",
+        ],
+    )
+    @patch("scripts.stage_gs2mesh_reconstruct._run_gs2mesh_stereo_with_retries")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gaussian_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs2mesh_renderer_compat")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_subprocess")
+    @patch("scripts.stage_gs2mesh_reconstruct._build_gs_train_args")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs_model_output_link")
+    @patch("scripts.stage_gs2mesh_reconstruct._setup_gs2mesh_dirs")
+    @patch("scripts.stage_gs2mesh_reconstruct._ensure_sparse_0")
+    @patch("scripts.stage_gs2mesh_reconstruct._run_colmap_cmd")
+    @patch("scripts.stage_gs2mesh_reconstruct._find_recon_dir")
+    @patch("scripts.stage_gs2mesh_reconstruct._resolve_training_runtime_stack")
+    def test_run_gs2mesh_retries_gpu_tsdf_with_reduced_vram_settings(
+        self,
+        mock_resolve_stack,
+        mock_find_recon_dir,
+        mock_run_colmap_cmd,
+        mock_ensure_sparse_0,
+        mock_setup_dirs,
+        mock_output_link,
+        mock_build_train_args,
+        mock_run_subprocess,
+        mock_renderer_compat,
+        mock_gaussian_compat,
+        mock_run_stereo,
+        mock_gpu_tsdf,
+        mock_copy2,
+    ) -> None:
+        del mock_run_colmap_cmd, mock_ensure_sparse_0, mock_setup_dirs
+        del mock_output_link, mock_run_subprocess, mock_copy2
+        del mock_renderer_compat, mock_gaussian_compat, mock_run_stereo
+
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            frames_dir = Path(tmp) / "frames"
+            colmap_sparse = Path(tmp) / "colmap_sparse"
+            frames_dir.mkdir(parents=True)
+            colmap_sparse.mkdir(parents=True)
+            mock_find_recon_dir.return_value = colmap_sparse
+            mock_resolve_stack.return_value = _Gs2meshRuntimeStack(
+                name="accel",
+                python_executable="python3",
+                gaussian_splatting_root=Path("/tmp/gs"),
+                env_overrides={},
+            )
+            mock_build_train_args.return_value = (
+                ["python3", "train.py"],
+                "auto",
+                "default",
+                None,
+            )
+
+            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+                run_gs2mesh(
+                    str(frames_dir),
+                    str(colmap_sparse),
+                    str(Path(tmp) / "masks"),
+                    str(out),
+                    settings=Gs2meshSettings.from_preset("high"),
+                )
+
+            first_kwargs = mock_gpu_tsdf.call_args_list[0].kwargs
+            second_kwargs = mock_gpu_tsdf.call_args_list[1].kwargs
+            self.assertEqual(first_kwargs["tsdf_voxel"], 3)
+            self.assertEqual(first_kwargs["block_count"], 100000)
+            self.assertEqual(second_kwargs["tsdf_voxel"], 3)
+            self.assertEqual(second_kwargs["block_count"], 100000)
+            self.assertEqual(second_kwargs["tsdf_max_depth_baselines"], 20)
+            self.assertEqual(second_kwargs["tsdf_dilate"], 2)
 
 
 if __name__ == "__main__":

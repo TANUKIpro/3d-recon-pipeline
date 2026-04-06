@@ -134,10 +134,10 @@ class TestStageGs2meshVRAMCleanup(_WrapperTestBase):
             use_masks=True,
         )
         self.mock_gs2mesh.assert_called_once()
-        self.assertEqual(
-            self.mock_gs2mesh.call_args.kwargs.get("runtime_profile"),
-            "compat",
-        )
+        settings = self.mock_gs2mesh.call_args.kwargs.get("settings")
+        self.assertIsNotNone(settings)
+        self.assertEqual(settings.runtime_profile, "compat")
+        self.assertEqual(settings.gs_iterations, 30000)
         self.mock_cleanup.assert_called_once()
 
 

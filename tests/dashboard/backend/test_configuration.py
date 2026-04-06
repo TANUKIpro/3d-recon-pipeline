@@ -18,7 +18,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
             output_dir=Path("/tmp/sample"),
             env={},
         )
-        self.assertEqual(cfg.colmap_matcher, "sequential")
+        self.assertEqual(cfg.colmap_matcher, "exhaustive")
 
     def test_colmap_max_features_clamp(self) -> None:
         cfg = build_pipeline_config(
@@ -120,12 +120,14 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 30000)
+        self.assertEqual(cfg.gs2mesh_preset, "default")
+        self.assertEqual(cfg.gs2mesh_gs_iterations, 5000)
         self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
         self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
         self.assertTrue(cfg.gs2mesh_use_masks)
+        self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 100000)
 
     def test_gs2mesh_fields_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
@@ -147,6 +149,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
         self.assertFalse(cfg.gs2mesh_use_masks)
+        self.assertEqual(cfg.gs2mesh_preset, "custom")
 
 
 class DetectStageOutputsTests(unittest.TestCase):

@@ -10,7 +10,13 @@
  *   6. Post-texture Cleanup
  */
 
-import { NEW_OBJECT_VALUE, STAGE_LABELS } from './config/presets.js';
+import {
+  GS2MESH_PRESET_CUSTOM,
+  GS2MESH_PRESET_DEFAULT,
+  GS2MESH_PUBLIC_PRESETS,
+  NEW_OBJECT_VALUE,
+  STAGE_LABELS,
+} from './config/presets.js';
 import * as FormHelpers from './config/form-helpers.js';
 
 export class ConfigPanel {
@@ -49,6 +55,7 @@ export class ConfigPanel {
       ground_plane_enabled: document.getElementById('cfg-ground-plane-enabled'),
 
       // Stage 4: gs2mesh Reconstruction
+      gs2mesh_preset: document.getElementById('cfg-gs2mesh-preset'),
       gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
       gs2mesh_runtime_profile: document.getElementById('cfg-gs2mesh-runtime-profile'),
       gs2mesh_stereo_model: document.getElementById('cfg-gs2mesh-stereo-model'),
@@ -79,6 +86,8 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this.currentBranchSlug = null;
+    this._suppressGs2meshPresetSync = false;
+    this._gs2meshPresetBase = GS2MESH_PRESET_DEFAULT;
 
     this._updateTextureAutoOption(null);
     this._bindEvents();
@@ -180,6 +189,8 @@ export class ConfigPanel {
       ground_plane_enabled: this._inputs.ground_plane_enabled?.checked ?? true,
 
       // Stage 4: gs2mesh Reconstruction
+      gs2mesh_preset: this._inputs.gs2mesh_preset?.value || GS2MESH_PRESET_DEFAULT,
+      gs2mesh_preset_base: this._gs2meshPresetBase,
       gs2mesh_gs_iterations: this._parsePositiveInt(
         this._inputs.gs2mesh_gs_iterations?.value,
         5000,
@@ -188,11 +199,11 @@ export class ConfigPanel {
       gs2mesh_stereo_model: this._inputs.gs2mesh_stereo_model?.value || 'DLNR',
       gs2mesh_tsdf_voxel_size: this._parsePositiveFloat(
         this._inputs.gs2mesh_tsdf_voxel_size?.value,
-        0.004,
+        0.005,
       ),
       gs2mesh_tsdf_depth_trunc: this._parsePositiveFloat(
         this._inputs.gs2mesh_tsdf_depth_trunc?.value,
-        0.12,
+        0.04,
       ),
       gs2mesh_use_masks: this._inputs.gs2mesh_use_masks?.checked ?? true,
 
@@ -292,6 +303,27 @@ export class ConfigPanel {
         const display = document.getElementById('cfg-cleanup-lower-half-threshold-value');
         if (display) display.textContent = this._inputs.cleanup_lower_half_threshold.value;
       });
+    }
+
+    if (this._inputs.gs2mesh_preset) {
+      this._inputs.gs2mesh_preset.addEventListener('change', () => {
+        if (this._suppressGs2meshPresetSync) return;
+        const preset = this._inputs.gs2mesh_preset.value || GS2MESH_PRESET_DEFAULT;
+        this._applyGs2meshPreset(preset);
+      });
+    }
+    for (const key of [
+      'gs2mesh_gs_iterations',
+      'gs2mesh_runtime_profile',
+      'gs2mesh_stereo_model',
+      'gs2mesh_tsdf_voxel_size',
+      'gs2mesh_tsdf_depth_trunc',
+      'gs2mesh_use_masks',
+    ]) {
+      const input = this._inputs[key];
+      if (!input) continue;
+      input.addEventListener('input', () => this._markGs2meshPresetCustom());
+      input.addEventListener('change', () => this._markGs2meshPresetCustom());
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -594,6 +626,21 @@ export class ConfigPanel {
     }
 
     // Stage 4: gs2mesh Reconstruction
+    this._suppressGs2meshPresetSync = true;
+    if (cfg.gs2mesh_preset != null && this._inputs.gs2mesh_preset) {
+      this._setSelectValue(this._inputs.gs2mesh_preset, String(cfg.gs2mesh_preset));
+    } else if (this._inputs.gs2mesh_preset) {
+      this._inputs.gs2mesh_preset.value = GS2MESH_PRESET_DEFAULT;
+    }
+    const presetBase = String(
+      cfg.gs2mesh_preset_base
+      || (cfg.gs2mesh_preset && cfg.gs2mesh_preset !== GS2MESH_PRESET_CUSTOM
+        ? cfg.gs2mesh_preset
+        : GS2MESH_PRESET_DEFAULT)
+    );
+    this._gs2meshPresetBase = Object.prototype.hasOwnProperty.call(GS2MESH_PUBLIC_PRESETS, presetBase)
+      ? presetBase
+      : GS2MESH_PRESET_DEFAULT;
     for (const key of [
       'gs2mesh_gs_iterations',
       'gs2mesh_tsdf_voxel_size',
@@ -603,7 +650,10 @@ export class ConfigPanel {
       this._inputs[key].value = String(cfg[key]);
     }
     if (cfg.gs2mesh_stereo_model != null) {
-      this._setSelectValue(this._inputs.gs2mesh_stereo_model, String(cfg.gs2mesh_stereo_model));
+      const stereoModel = String(cfg.gs2mesh_stereo_model) === 'DLNR_Middlebury'
+        ? 'DLNR'
+        : String(cfg.gs2mesh_stereo_model);
+      this._setSelectValue(this._inputs.gs2mesh_stereo_model, stereoModel);
     }
     if (cfg.gs2mesh_runtime_profile != null && this._inputs.gs2mesh_runtime_profile) {
       this._setSelectValue(this._inputs.gs2mesh_runtime_profile, String(cfg.gs2mesh_runtime_profile));
@@ -611,6 +661,7 @@ export class ConfigPanel {
     if (cfg.gs2mesh_use_masks != null && this._inputs.gs2mesh_use_masks) {
       this._inputs.gs2mesh_use_masks.checked = cfg.gs2mesh_use_masks !== false;
     }
+    this._suppressGs2meshPresetSync = false;
 
     // Stage 5: Texture Bake
     if (cfg.texture_size != null && this._inputs.texture_size) {
@@ -679,6 +730,31 @@ export class ConfigPanel {
         this._extractDefaults.max_frames,
       ),
     );
+  }
+
+  _applyGs2meshPreset(preset) {
+    const values = GS2MESH_PUBLIC_PRESETS[preset];
+    if (!values) return;
+    this._suppressGs2meshPresetSync = true;
+    this._gs2meshPresetBase = preset;
+    for (const [key, value] of Object.entries(values)) {
+      const input = this._inputs[key];
+      if (!input) continue;
+      if (input.type === 'checkbox') {
+        input.checked = Boolean(value);
+      } else {
+        input.value = String(value);
+      }
+    }
+    if (this._inputs.gs2mesh_preset) {
+      this._inputs.gs2mesh_preset.value = preset;
+    }
+    this._suppressGs2meshPresetSync = false;
+  }
+
+  _markGs2meshPresetCustom() {
+    if (this._suppressGs2meshPresetSync || !this._inputs.gs2mesh_preset) return;
+    this._inputs.gs2mesh_preset.value = GS2MESH_PRESET_CUSTOM;
   }
 }
 

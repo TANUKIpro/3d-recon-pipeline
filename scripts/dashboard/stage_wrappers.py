@@ -66,6 +66,7 @@ def _stage_gs2mesh_reconstruct(
     colmap_sparse_dir: str,
     mask_dir: str | None,
     output_dir: str,
+    gs2mesh_settings=None,
     gs_iterations: int = 5000,
     runtime_profile: str = "auto",
     stereo_model: str = "DLNR_Middlebury",
@@ -77,20 +78,34 @@ def _stage_gs2mesh_reconstruct(
     register_process=None,
     unregister_process=None,
 ) -> str:
+    from scripts.gs2mesh_config import Gs2meshSettings
     from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
     from scripts.vram_utils import cleanup_pytorch_vram
+
+    if isinstance(gs2mesh_settings, Gs2meshSettings):
+        settings = gs2mesh_settings
+    else:
+        if gs2mesh_settings is not None:
+            gs_iterations = gs2mesh_settings
+        settings = Gs2meshSettings.from_preset()
+        settings = Gs2meshSettings(
+            **{
+                **settings.__dict__,
+                "gs_iterations": gs_iterations,
+                "runtime_profile": runtime_profile,
+                "stereo_model": stereo_model,
+                "tsdf_voxel_size": tsdf_voxel_size,
+                "tsdf_depth_trunc": tsdf_depth_trunc,
+                "use_masks": use_masks,
+            }
+        )
     try:
         result = run_gs2mesh(
             frames_dir,
             colmap_sparse_dir,
             mask_dir,
             output_dir,
-            gs_iterations=gs_iterations,
-            runtime_profile=runtime_profile,
-            stereo_model=stereo_model,
-            tsdf_voxel_size=tsdf_voxel_size,
-            tsdf_depth_trunc=tsdf_depth_trunc,
-            use_masks=use_masks,
+            settings=settings,
             progress_cb=progress_cb,
             cancel_cb=cancel_cb,
             register_process=register_process,

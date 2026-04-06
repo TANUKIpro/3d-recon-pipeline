@@ -7,18 +7,20 @@ Takes COLMAP output + optional SAM2 masks, produces object_mesh.ply.
 from __future__ import annotations
 
 import importlib
+import gc
 import json
 import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from scripts.config_defaults import (
     GS2MESH_RUNTIME_PROFILE,
     GS2MESH_RUNTIME_PROFILES,
 )
+from scripts.gs2mesh_config import Gs2meshSettings
 
 _GS2MESH_BASE = Path("/opt/gs2mesh")
 _GAUSSIAN_SPLATTING_ACCEL = Path("/opt/gaussian-splatting")
@@ -64,11 +66,106 @@ class _SubprocessFailure(RuntimeError):
         self.output_text = output_text
 
 
+def _is_gpu_tsdf_oom_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return (
+        "out of memory" in text
+        and ("cuda" in text or "open3d" in text)
+    )
+
+
+def _build_gpu_tsdf_attempts(
+    settings: Gs2meshSettings,
+) -> list[tuple[str, Gs2meshSettings]]:
+    attempts: list[tuple[str, Gs2meshSettings]] = [("requested", settings)]
+
+    reduced_vram = replace(
+        settings,
+        tsdf_voxel_size=max(settings.tsdf_voxel_size, 0.005),
+        tsdf_depth_trunc=max(settings.tsdf_depth_trunc, 0.04),
+        tsdf_max_depth_baselines=min(settings.tsdf_max_depth_baselines, 20),
+        tsdf_dilate=max(settings.tsdf_dilate, 2),
+        block_count=min(settings.block_count, 100_000),
+    )
+    if reduced_vram != settings:
+        attempts.append(("reduced_vram", reduced_vram))
+
+    safe_vram = replace(
+        reduced_vram,
+        tsdf_max_depth_baselines=min(reduced_vram.tsdf_max_depth_baselines, 16),
+        tsdf_dilate=max(reduced_vram.tsdf_dilate, 3),
+        block_count=min(reduced_vram.block_count, 75_000),
+    )
+    if safe_vram != reduced_vram:
+        attempts.append(("safe_vram", safe_vram))
+
+    return attempts
+
+
+def _run_gpu_tsdf_with_fallbacks(
+    *,
+    settings: Gs2meshSettings,
+    gs2mesh_output: Path,
+    stereo_model: str,
+    report,
+) -> str:
+    from scripts.gpu_tsdf import gpu_tsdf_reconstruct
+    from scripts.vram_utils import cleanup_pytorch_vram
+
+    attempts = _build_gpu_tsdf_attempts(settings)
+    last_exc: RuntimeError | None = None
+
+    for idx, (label, attempt_settings) in enumerate(attempts, start=1):
+        tsdf_voxel = max(1, round(attempt_settings.tsdf_voxel_size * 512))
+        if idx > 1:
+            print(
+                "Retrying GPU TSDF with reduced VRAM settings: "
+                f"attempt={label} voxel={tsdf_voxel}/512 "
+                f"block_count={attempt_settings.block_count} "
+                f"depth_baselines<={attempt_settings.tsdf_max_depth_baselines} "
+                f"dilate={attempt_settings.tsdf_dilate}"
+            )
+            report(80.0, f"GPU TSDF fusion retry ({label})")
+        try:
+            return gpu_tsdf_reconstruct(
+                output_dir_root=str(gs2mesh_output),
+                stereo_model=stereo_model,
+                tsdf_voxel=tsdf_voxel,
+                tsdf_sdf_trunc=attempt_settings.tsdf_depth_trunc,
+                tsdf_scale=attempt_settings.tsdf_scale,
+                tsdf_min_depth_baselines=attempt_settings.tsdf_min_depth_baselines,
+                tsdf_max_depth_baselines=attempt_settings.tsdf_max_depth_baselines,
+                tsdf_dilate=attempt_settings.tsdf_dilate,
+                tsdf_cleaning_threshold=attempt_settings.tsdf_cleaning_threshold,
+                tsdf_use_mask=attempt_settings.use_masks,
+                tsdf_erode_mask=attempt_settings.tsdf_erode_mask,
+                tsdf_use_occlusion_mask=attempt_settings.tsdf_use_occlusion_mask,
+                tsdf_invert_mask=attempt_settings.tsdf_invert_mask,
+                tsdf_erosion_kernel_size=attempt_settings.tsdf_erosion_kernel_size,
+                tsdf_closing_kernel_size=attempt_settings.tsdf_closing_kernel_size,
+                block_count=attempt_settings.block_count,
+                progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
+            )
+        except RuntimeError as exc:
+            last_exc = exc
+            if idx >= len(attempts) or not _is_gpu_tsdf_oom_error(exc):
+                raise
+            print(f"GPU TSDF OOM detected on attempt={label}: {exc}")
+            cleanup_pytorch_vram()
+            gc.collect()
+
+    assert last_exc is not None
+    raise RuntimeError(
+        "GPU TSDF fusion failed after VRAM-reduction retries"
+    ) from last_exc
+
+
 def run_gs2mesh(
     frames_dir: str,
     colmap_sparse_dir: str,
     mask_dir: str | None,
     output_dir: str,
+    settings: Gs2meshSettings | None = None,
     gs_iterations: int = 5000,
     runtime_profile: str = GS2MESH_RUNTIME_PROFILE,
     stereo_model: str = "DLNR_Middlebury",
@@ -89,6 +186,26 @@ def run_gs2mesh(
     debug_dir = gs2mesh_workdir / "debug"
     gs2mesh_workdir.mkdir(parents=True, exist_ok=True)
     debug_dir.mkdir(parents=True, exist_ok=True)
+
+    if settings is None:
+        settings = Gs2meshSettings.from_preset()
+        settings = Gs2meshSettings(
+            **{
+                **settings.__dict__,
+                "gs_iterations": gs_iterations,
+                "runtime_profile": runtime_profile,
+                "stereo_model": stereo_model,
+                "tsdf_voxel_size": tsdf_voxel_size,
+                "tsdf_depth_trunc": tsdf_depth_trunc,
+                "use_masks": use_masks,
+            }
+        )
+    gs_iterations = settings.gs_iterations
+    runtime_profile = settings.runtime_profile
+    stereo_model = settings.stereo_model
+    tsdf_voxel_size = settings.tsdf_voxel_size
+    tsdf_depth_trunc = settings.tsdf_depth_trunc
+    use_masks = settings.use_masks
 
     # Map shortened stereo model names for backward compatibility
     if stereo_model == "DLNR":
@@ -251,15 +368,11 @@ def run_gs2mesh(
     # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
     _report(80.0, "GPU TSDF fusion")
 
-    from scripts.gpu_tsdf import gpu_tsdf_reconstruct
-
-    gpu_mesh_path = gpu_tsdf_reconstruct(
-        output_dir_root=str(gs2mesh_output),
+    gpu_mesh_path = _run_gpu_tsdf_with_fallbacks(
+        settings=settings,
+        gs2mesh_output=gs2mesh_output,
         stereo_model=stereo_model,
-        tsdf_voxel=tsdf_voxel,
-        tsdf_sdf_trunc=tsdf_depth_trunc,
-        tsdf_use_mask=use_masks,
-        progress_cb=lambda pct, msg: _report(80.0 + pct * 15.0, msg),
+        report=_report,
     )
 
     # Step 4: Copy output mesh

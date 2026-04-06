@@ -323,6 +323,15 @@
         <!-- Stage 4: gs2mesh Reconstruction -->
         <div class="config-section" data-stages="4">
           <div class="form-group">
+            <label for="cfg-gs2mesh-preset">Quality Preset</label>
+            <select id="cfg-gs2mesh-preset">
+              <option value="default" selected>Default</option>
+              <option value="high">High</option>
+              <option value="custom">Custom</option>
+            </select>
+            <div class="config-note">Preset applies both UI-exposed knobs and hidden Stage 4 fusion settings.</div>
+          </div>
+          <div class="form-group">
             <label for="cfg-gs2mesh-gs-iterations">3DGS Training Iterations</label>
             <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000" min="1000" step="1000">
           </div>
