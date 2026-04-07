@@ -280,94 +280,75 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         self.assertGreaterEqual(cfg.max_frames, 2)
         self.assertEqual(cfg.video_path, "input.mp4")
 
-    # -- gs2mesh fields ---
+    # -- milo fields ---
 
-    def test_gs2mesh_iterations_clamped(self) -> None:
-        cfg = _build({"gs2mesh_gs_iterations": 500})
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+    def test_milo_iterations_clamped(self) -> None:
+        cfg = _build({"milo_iterations": 500})
+        self.assertEqual(cfg.milo_iterations, 1000)
+        self.assertEqual(cfg.milo_preset, "custom")
 
-    def test_gs2mesh_tsdf_voxel_size_clamped(self) -> None:
-        cfg = _build({"gs2mesh_tsdf_voxel_size": 0.0001})
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+    def test_milo_use_masks_parsed(self) -> None:
+        cfg = _build({"milo_use_masks": False})
+        self.assertFalse(cfg.milo_use_masks)
+        self.assertEqual(cfg.milo_preset, "custom")
 
-    def test_gs2mesh_tsdf_depth_trunc_clamped(self) -> None:
-        cfg = _build({"gs2mesh_tsdf_depth_trunc": 0.001})
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+    def test_milo_scene_type_parse_and_env(self) -> None:
+        cfg_raw = _build({"milo_scene_type": "outdoor"})
+        self.assertEqual(cfg_raw.milo_scene_type, "outdoor")
 
-    def test_gs2mesh_use_masks_parsed(self) -> None:
-        cfg = _build({"gs2mesh_use_masks": False})
-        self.assertFalse(cfg.gs2mesh_use_masks)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+        cfg_env = _build({}, env={"MILO_SCENE_TYPE": "outdoor"})
+        self.assertEqual(cfg_env.milo_scene_type, "outdoor")
 
-    def test_gs2mesh_runtime_profile_parse_and_env(self) -> None:
-        cfg_raw = _build({"gs2mesh_runtime_profile": "compat"})
-        self.assertEqual(cfg_raw.gs2mesh_runtime_profile, "compat")
-        self.assertEqual(cfg_raw.gs2mesh_preset, "custom")
+        cfg_invalid = _build({"milo_scene_type": "invalid"})
+        self.assertEqual(cfg_invalid.milo_scene_type, "indoor")
 
-        cfg_env = _build({}, env={"GS2MESH_RUNTIME_PROFILE": "compat"})
-        self.assertEqual(cfg_env.gs2mesh_runtime_profile, "compat")
+    def test_milo_high_preset_applies_values(self) -> None:
+        cfg = _build({"milo_preset": "high"})
+        self.assertEqual(cfg.milo_preset, "high")
+        self.assertEqual(cfg.milo_preset_base, "high")
+        self.assertEqual(cfg.milo_iterations, 30000)
 
-        cfg_invalid = _build({"gs2mesh_runtime_profile": "invalid"})
-        self.assertEqual(cfg_invalid.gs2mesh_runtime_profile, "auto")
-
-    def test_gs2mesh_high_preset_applies_hidden_values(self) -> None:
-        cfg = _build({"gs2mesh_preset": "high"})
-        self.assertEqual(cfg.gs2mesh_preset, "high")
-        self.assertEqual(cfg.gs2mesh_preset_base, "high")
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 15000)
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.03)
-        self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 50000)
-        self.assertEqual(cfg.gs2mesh_tsdf_block_count, 100000)
-
-    def test_gs2mesh_explicit_override_forces_custom_while_preserving_hidden_values(self) -> None:
+    def test_milo_explicit_override_forces_custom_while_preserving_base(self) -> None:
         cfg = build_pipeline_config(
             {
-                "gs2mesh_preset": "high",
-                "gs2mesh_gs_iterations": 24000,
+                "milo_preset": "high",
+                "milo_iterations": 24000,
             },
-            explicit_keys={"gs2mesh_preset", "gs2mesh_gs_iterations"},
+            explicit_keys={"milo_preset", "milo_iterations"},
             **_COMMON_BUILD_KW,
         )
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
-        self.assertEqual(cfg.gs2mesh_preset_base, "high")
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 24000)
-        self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 50000)
+        self.assertEqual(cfg.milo_preset, "custom")
+        self.assertEqual(cfg.milo_preset_base, "high")
+        self.assertEqual(cfg.milo_iterations, 24000)
 
-    def test_gs2mesh_default_preset_survives_full_ui_payload(self) -> None:
+    def test_milo_default_preset_survives_full_ui_payload(self) -> None:
         raw = {
-            "gs2mesh_preset": "default",
-            "gs2mesh_preset_base": "default",
-            "gs2mesh_gs_iterations": 5000,
-            "gs2mesh_runtime_profile": "auto",
-            "gs2mesh_stereo_model": "DLNR",
-            "gs2mesh_tsdf_voxel_size": 0.005,
-            "gs2mesh_tsdf_depth_trunc": 0.04,
-            "gs2mesh_use_masks": True,
+            "milo_preset": "default",
+            "milo_preset_base": "default",
+            "milo_iterations": 18000,
+            "milo_scene_type": "indoor",
+            "milo_mesh_config": "default",
+            "milo_extraction_method": "sdf",
+            "milo_use_masks": True,
         }
         cfg = build_pipeline_config(
             raw,
             explicit_keys=set(raw.keys()),
             **_COMMON_BUILD_KW,
         )
-        self.assertEqual(cfg.gs2mesh_preset, "default")
-        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
+        self.assertEqual(cfg.milo_preset, "default")
 
-    def test_gs2mesh_legacy_values_infer_high_preset(self) -> None:
+    def test_milo_values_infer_high_preset(self) -> None:
         cfg = _build(
             {
-                "gs2mesh_gs_iterations": 15000,
-                "gs2mesh_runtime_profile": "auto",
-                "gs2mesh_stereo_model": "DLNR_Middlebury",
-                "gs2mesh_tsdf_voxel_size": 0.005,
-                "gs2mesh_tsdf_depth_trunc": 0.03,
-                "gs2mesh_use_masks": True,
+                "milo_iterations": 30000,
+                "milo_scene_type": "indoor",
+                "milo_mesh_config": "highres",
+                "milo_extraction_method": "sdf",
+                "milo_use_masks": True,
             }
         )
-        self.assertEqual(cfg.gs2mesh_preset, "high")
+        self.assertEqual(cfg.milo_preset, "high")
 
     # -- colmap fields ---
 

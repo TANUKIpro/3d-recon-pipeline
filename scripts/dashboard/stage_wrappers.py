@@ -61,59 +61,36 @@ def _stage_colmap_sfm(
     )
 
 
-def _stage_gs2mesh_reconstruct(
+def _stage_milo_reconstruct(
     frames_dir: str,
     colmap_sparse_dir: str,
     mask_dir: str | None,
     output_dir: str,
-    gs2mesh_settings=None,
-    gs_iterations: int = 5000,
-    runtime_profile: str = "auto",
-    stereo_model: str = "DLNR_Middlebury",
-    tsdf_voxel_size: float = 0.005,
-    tsdf_depth_trunc: float = 0.04,
-    use_masks: bool = True,
+    milo_settings=None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
     unregister_process=None,
 ) -> str:
-    from scripts.gs2mesh_config import Gs2meshSettings
-    from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
+    from scripts.milo_config import MiloSettings
+    from scripts.stage_milo_reconstruct import run_milo
     from scripts.vram_utils import cleanup_pytorch_vram
 
-    if isinstance(gs2mesh_settings, Gs2meshSettings):
-        settings = gs2mesh_settings
-    else:
-        if gs2mesh_settings is not None:
-            gs_iterations = gs2mesh_settings
-        settings = Gs2meshSettings.from_preset()
-        settings = Gs2meshSettings(
-            **{
-                **settings.__dict__,
-                "gs_iterations": gs_iterations,
-                "runtime_profile": runtime_profile,
-                "stereo_model": stereo_model,
-                "tsdf_voxel_size": tsdf_voxel_size,
-                "tsdf_depth_trunc": tsdf_depth_trunc,
-                "use_masks": use_masks,
-            }
-        )
+    if not isinstance(milo_settings, MiloSettings):
+        milo_settings = MiloSettings.from_preset()
     try:
-        result = run_gs2mesh(
+        result = run_milo(
             frames_dir,
             colmap_sparse_dir,
             mask_dir,
             output_dir,
-            settings=settings,
+            settings=milo_settings,
             progress_cb=progress_cb,
             cancel_cb=cancel_cb,
             register_process=register_process,
             unregister_process=unregister_process,
         )
     finally:
-        # Release GPU memory (Open3D VoxelBlockGrid, etc.) even on error.
-        # Without this, Python's traceback holds references to GPU objects.
         cleanup_pytorch_vram()
     return result
 
@@ -264,6 +241,6 @@ def _vram_gate() -> None:
 
     ensure_vram_available(
         min_free_mb=threshold,
-        stage_name="before gs2mesh",
+        stage_name="before MILo",
         strict=_VRAM_GATE_STRICT,
     )

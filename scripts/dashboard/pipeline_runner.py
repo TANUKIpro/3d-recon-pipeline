@@ -20,7 +20,7 @@ from scripts.dashboard.stage_wrappers import (
     _stage_colmap_sfm,
     _stage_extract_frames,
     _stage_extract_ground_plane,
-    _stage_gs2mesh_reconstruct,
+    _stage_milo_reconstruct,
     _stage_post_texture_contact_cleanup_apply,
     _stage_post_texture_contact_cleanup_prepare,
     _stage_post_texture_contact_cleanup_skip,
@@ -389,36 +389,36 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.SAM2_SEGMENT,
-                PipelineStage.GS2MESH_RECONSTRUCT,
-                "SAM2 Segmentation complete. Continue to gs2mesh Reconstruction?",
+                PipelineStage.MILO_RECONSTRUCT,
+                "SAM2 Segmentation complete. Continue to MILo Reconstruction?",
             )
 
-        if start_stage <= int(PipelineStage.GS2MESH_RECONSTRUCT):
+        if start_stage <= int(PipelineStage.MILO_RECONSTRUCT):
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
             _require_file(session.poses_path, "Camera poses file")
 
-            # VRAM gate: ensure sufficient free VRAM before gs2mesh
-            with stage_log_scope(int(PipelineStage.GS2MESH_RECONSTRUCT)):
+            # VRAM gate: ensure sufficient free VRAM before MILo
+            with stage_log_scope(int(PipelineStage.MILO_RECONSTRUCT)):
                 await asyncio.to_thread(_vram_gate)
 
-            # ── Stage 4: gs2mesh Reconstruction ──────────────────
+            # ── Stage 4: MILo Reconstruction ────────────────────
             await _run_stage(
                 session,
-                PipelineStage.GS2MESH_RECONSTRUCT,
-                _stage_gs2mesh_reconstruct,
+                PipelineStage.MILO_RECONSTRUCT,
+                _stage_milo_reconstruct,
                 session.frames_dir,
                 session.colmap_sparse_path or str(Path(output_dir) / "colmap_sparse"),
                 session.mask_dir,
                 output_dir,
-                cfg.to_gs2mesh_settings(),
+                cfg.to_milo_settings(),
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
                 session,
-                PipelineStage.GS2MESH_RECONSTRUCT,
+                PipelineStage.MILO_RECONSTRUCT,
                 PipelineStage.TEXTURE_BAKE,
-                "gs2mesh Reconstruction complete. Continue to Texture Bake?",
+                "MILo Reconstruction complete. Continue to Texture Bake?",
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):

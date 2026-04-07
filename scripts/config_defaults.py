@@ -49,70 +49,58 @@ SAM2_MODEL_CONFIGS: dict[str, dict[str, str]] = {
     },
 }
 
-# --- Stage 4: gs2mesh Reconstruction -----------------------
-GS2MESH_PRESET = "default"
-GS2MESH_PRESET_CUSTOM = "custom"
-GS2MESH_GS_ITERATIONS = 5000
-GS2MESH_RUNTIME_PROFILE = "auto"
-GS2MESH_RUNTIME_PROFILES: set[str] = {"auto", "compat"}
-GS2MESH_STEREO_MODEL = "DLNR_Middlebury"
-GS2MESH_TSDF_VOXEL_SIZE = 0.005
-GS2MESH_TSDF_DEPTH_TRUNC = 0.04
-GS2MESH_USE_MASKS = True
-GS2MESH_TSDF_SCALE = 1.0
-GS2MESH_TSDF_MIN_DEPTH_BASELINES = 4
-GS2MESH_TSDF_MAX_DEPTH_BASELINES = 20
-GS2MESH_TSDF_DILATE = 1
-GS2MESH_TSDF_CLEANING_THRESHOLD = 100_000
-GS2MESH_TSDF_USE_OCCLUSION_MASK = True
-GS2MESH_TSDF_INVERT_MASK = False
-GS2MESH_TSDF_ERODE_MASK = True
-GS2MESH_TSDF_EROSION_KERNEL_SIZE = 10
-GS2MESH_TSDF_CLOSING_KERNEL_SIZE = 10
-GS2MESH_TSDF_BLOCK_COUNT = 100_000
-GS2MESH_PRESETS: dict[str, dict[str, object]] = {
+# --- Stage 4: MILo Reconstruction -------------------------
+MILO_PRESET = "default"
+MILO_PRESET_CUSTOM = "custom"
+MILO_ITERATIONS = 18000
+MILO_SCENE_TYPE = "indoor"
+MILO_SCENE_TYPES: set[str] = {"indoor", "outdoor"}
+MILO_MESH_CONFIG = "default"
+MILO_MESH_CONFIGS: set[str] = {"default", "highres", "veryhighres", "lowres", "verylowres"}
+MILO_EXTRACTION_METHOD = "sdf"
+MILO_EXTRACTION_METHODS: set[str] = {"sdf", "integration", "regular_tsdf"}
+MILO_RASTERIZER = "radegs"
+MILO_RASTERIZERS: set[str] = {"radegs", "gof"}
+MILO_USE_MASKS = True
+MILO_DENSE_GAUSSIANS = False
+MILO_DATA_DEVICE = "cuda"
+MILO_MESH_RES = 1024
+MILO_PRESETS: dict[str, dict[str, object]] = {
     "default": {
-        "gs_iterations": GS2MESH_GS_ITERATIONS,
-        "runtime_profile": GS2MESH_RUNTIME_PROFILE,
-        "stereo_model": GS2MESH_STEREO_MODEL,
-        "tsdf_voxel_size": GS2MESH_TSDF_VOXEL_SIZE,
-        "tsdf_depth_trunc": GS2MESH_TSDF_DEPTH_TRUNC,
-        "use_masks": GS2MESH_USE_MASKS,
-        "tsdf_scale": GS2MESH_TSDF_SCALE,
-        "tsdf_min_depth_baselines": GS2MESH_TSDF_MIN_DEPTH_BASELINES,
-        "tsdf_max_depth_baselines": GS2MESH_TSDF_MAX_DEPTH_BASELINES,
-        "tsdf_dilate": GS2MESH_TSDF_DILATE,
-        "tsdf_cleaning_threshold": GS2MESH_TSDF_CLEANING_THRESHOLD,
-        "tsdf_use_occlusion_mask": GS2MESH_TSDF_USE_OCCLUSION_MASK,
-        "tsdf_invert_mask": GS2MESH_TSDF_INVERT_MASK,
-        "tsdf_erode_mask": GS2MESH_TSDF_ERODE_MASK,
-        "tsdf_erosion_kernel_size": GS2MESH_TSDF_EROSION_KERNEL_SIZE,
-        "tsdf_closing_kernel_size": GS2MESH_TSDF_CLOSING_KERNEL_SIZE,
-        "block_count": GS2MESH_TSDF_BLOCK_COUNT,
+        "iterations": MILO_ITERATIONS,
+        "scene_type": MILO_SCENE_TYPE,
+        "mesh_config": MILO_MESH_CONFIG,
+        "extraction_method": MILO_EXTRACTION_METHOD,
+        "rasterizer": MILO_RASTERIZER,
+        "use_masks": MILO_USE_MASKS,
+        "dense_gaussians": MILO_DENSE_GAUSSIANS,
+        "data_device": MILO_DATA_DEVICE,
+        "mesh_res": MILO_MESH_RES,
     },
     "high": {
-        "gs_iterations": 15000,
-        "runtime_profile": "auto",
-        "stereo_model": "DLNR_Middlebury",
-        "tsdf_voxel_size": 0.005,
-        "tsdf_depth_trunc": 0.03,
+        "iterations": 30000,
+        "scene_type": "indoor",
+        "mesh_config": "highres",
+        "extraction_method": "sdf",
+        "rasterizer": "radegs",
         "use_masks": True,
-        "tsdf_scale": 1.0,
-        "tsdf_min_depth_baselines": 4,
-        "tsdf_max_depth_baselines": 20,
-        "tsdf_dilate": 1,
-        "tsdf_cleaning_threshold": 50_000,
-        "tsdf_use_occlusion_mask": True,
-        "tsdf_invert_mask": False,
-        "tsdf_erode_mask": True,
-        "tsdf_erosion_kernel_size": 8,
-        "tsdf_closing_kernel_size": 8,
-        "block_count": 100_000,
+        "dense_gaussians": True,
+        "data_device": "cuda",
+        "mesh_res": 1024,
+    },
+    "fast": {
+        "iterations": 7000,
+        "scene_type": "indoor",
+        "mesh_config": "lowres",
+        "extraction_method": "sdf",
+        "rasterizer": "radegs",
+        "use_masks": True,
+        "dense_gaussians": False,
+        "data_device": "cuda",
+        "mesh_res": 512,
     },
 }
-GS2MESH_PRESET_CHOICES: set[str] = set(GS2MESH_PRESETS) | {
-    GS2MESH_PRESET_CUSTOM
-}
+MILO_PRESET_CHOICES: set[str] = set(MILO_PRESETS) | {MILO_PRESET_CUSTOM}
 
 # --- Stage 5: TextureBake --------------------------------
 TEXTURE_SIZE = 0

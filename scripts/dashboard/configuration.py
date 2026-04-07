@@ -15,27 +15,13 @@ from scripts.config_defaults import (
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
-    GS2MESH_PRESET,
-    GS2MESH_PRESETS,
-    GS2MESH_GS_ITERATIONS,
-    GS2MESH_RUNTIME_PROFILE,
-    GS2MESH_RUNTIME_PROFILES,
-    GS2MESH_STEREO_MODEL,
-    GS2MESH_TSDF_BLOCK_COUNT,
-    GS2MESH_TSDF_CLEANING_THRESHOLD,
-    GS2MESH_TSDF_CLOSING_KERNEL_SIZE,
-    GS2MESH_TSDF_DEPTH_TRUNC,
-    GS2MESH_TSDF_DILATE,
-    GS2MESH_TSDF_ERODE_MASK,
-    GS2MESH_TSDF_EROSION_KERNEL_SIZE,
-    GS2MESH_TSDF_INVERT_MASK,
-    GS2MESH_TSDF_MAX_DEPTH_BASELINES,
-    GS2MESH_TSDF_MIN_DEPTH_BASELINES,
-    GS2MESH_TSDF_SCALE,
-    GS2MESH_TSDF_USE_OCCLUSION_MASK,
-    GS2MESH_TSDF_VOXEL_SIZE,
-    GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
+    MILO_EXTRACTION_METHODS,
+    MILO_MESH_CONFIGS,
+    MILO_PRESET,
+    MILO_PRESETS,
+    MILO_RASTERIZERS,
+    MILO_SCENE_TYPES,
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
@@ -46,10 +32,10 @@ from scripts.config_defaults import (
     _COLMAP_MATCHERS,
 )
 from scripts.dashboard.state import PipelineConfig
-from scripts.gs2mesh_config import (
-    GS2MESH_CONFIG_FIELDS,
-    GS2MESH_INTERNAL_CONFIG_FIELDS,
-    GS2MESH_PUBLIC_CONFIG_FIELDS,
+from scripts.milo_config import (
+    MILO_CONFIG_FIELDS,
+    MILO_INTERNAL_CONFIG_FIELDS,
+    MILO_PUBLIC_CONFIG_FIELDS,
     config_fields_from_preset,
     fields_match_preset,
     infer_preset_from_public_fields,
@@ -104,56 +90,43 @@ def env_bool(name: str, fallback: bool, env: Mapping[str, str] | None = None) ->
     return parse_bool(env_map.get(name), fallback)
 
 
-_GS2MESH_ENV_FIELD_MAP: dict[str, str] = {
-    "gs2mesh_gs_iterations": "GS2MESH_GS_ITERATIONS",
-    "gs2mesh_runtime_profile": "GS2MESH_RUNTIME_PROFILE",
-    "gs2mesh_stereo_model": "GS2MESH_STEREO_MODEL",
-    "gs2mesh_tsdf_voxel_size": "GS2MESH_TSDF_VOXEL_SIZE",
-    "gs2mesh_tsdf_depth_trunc": "GS2MESH_TSDF_DEPTH_TRUNC",
-    "gs2mesh_use_masks": "GS2MESH_USE_MASKS",
+_MILO_ENV_FIELD_MAP: dict[str, str] = {
+    "milo_iterations": "MILO_ITERATIONS",
+    "milo_scene_type": "MILO_SCENE_TYPE",
+    "milo_mesh_config": "MILO_MESH_CONFIG",
+    "milo_extraction_method": "MILO_EXTRACTION_METHOD",
+    "milo_use_masks": "MILO_USE_MASKS",
 }
-_GS2MESH_PRESET_CHOICES = set(GS2MESH_PRESETS) | {"custom"}
+_MILO_PRESET_CHOICES = set(MILO_PRESETS) | {"custom"}
 
 
-def _parse_gs2mesh_field_value(
+def _parse_milo_field_value(
     field_name: str,
     value: Any,
     fallback: Any,
 ) -> Any:
-    if field_name == "gs2mesh_gs_iterations":
+    if field_name == "milo_iterations":
         return max(1000, parse_int(value, int(fallback)))
-    if field_name == "gs2mesh_runtime_profile":
-        return parse_choice(value, GS2MESH_RUNTIME_PROFILES, str(fallback))
-    if field_name == "gs2mesh_stereo_model":
-        candidate = str(value or fallback).strip()
-        if candidate == "DLNR":
-            return "DLNR_Middlebury"
-        return candidate or str(fallback)
-    if field_name == "gs2mesh_tsdf_voxel_size":
-        return max(0.001, parse_float(value, float(fallback)))
-    if field_name == "gs2mesh_tsdf_depth_trunc":
-        return max(0.005, parse_float(value, float(fallback)))
-    if field_name == "gs2mesh_use_masks":
+    if field_name == "milo_scene_type":
+        return parse_choice(value, MILO_SCENE_TYPES, str(fallback))
+    if field_name == "milo_mesh_config":
+        return parse_choice(value, MILO_MESH_CONFIGS, str(fallback))
+    if field_name == "milo_extraction_method":
+        return parse_choice(value, MILO_EXTRACTION_METHODS, str(fallback))
+    if field_name == "milo_use_masks":
         return parse_bool(value, bool(fallback))
-    if field_name == "gs2mesh_tsdf_scale":
-        return max(1e-6, parse_float(value, float(fallback)))
-    if field_name in {
-        "gs2mesh_tsdf_min_depth_baselines",
-        "gs2mesh_tsdf_max_depth_baselines",
-        "gs2mesh_tsdf_dilate",
-        "gs2mesh_tsdf_erosion_kernel_size",
-        "gs2mesh_tsdf_closing_kernel_size",
-        "gs2mesh_tsdf_block_count",
-    }:
-        return max(1, parse_int(value, int(fallback)))
-    if field_name == "gs2mesh_tsdf_cleaning_threshold":
-        return max(0, parse_int(value, int(fallback)))
-    if field_name in GS2MESH_INTERNAL_CONFIG_FIELDS:
+    if field_name == "milo_rasterizer":
+        return parse_choice(value, MILO_RASTERIZERS, str(fallback))
+    if field_name == "milo_dense_gaussians":
         return parse_bool(value, bool(fallback))
-    raise KeyError(f"Unknown gs2mesh field: {field_name}")
+    if field_name == "milo_data_device":
+        return parse_choice(value, {"cuda", "cpu"}, str(fallback))
+    if field_name == "milo_mesh_res":
+        return max(64, parse_int(value, int(fallback)))
+    raise KeyError(f"Unknown milo field: {field_name}")
 
 
-def _apply_gs2mesh_overrides(
+def _apply_milo_overrides(
     values: dict[str, Any],
     source: Mapping[str, Any],
     field_names: set[str] | tuple[str, ...],
@@ -161,26 +134,22 @@ def _apply_gs2mesh_overrides(
     for field_name in field_names:
         if field_name not in source:
             continue
-        values[field_name] = _parse_gs2mesh_field_value(
+        values[field_name] = _parse_milo_field_value(
             field_name,
             source.get(field_name),
             values[field_name],
         )
-    values["gs2mesh_tsdf_max_depth_baselines"] = max(
-        int(values["gs2mesh_tsdf_min_depth_baselines"]),
-        int(values["gs2mesh_tsdf_max_depth_baselines"]),
-    )
     return values
 
 
-def _apply_gs2mesh_env_fallbacks(
+def _apply_milo_env_fallbacks(
     values: dict[str, Any],
     env_map: Mapping[str, str],
 ) -> dict[str, Any]:
-    for field_name, env_name in _GS2MESH_ENV_FIELD_MAP.items():
+    for field_name, env_name in _MILO_ENV_FIELD_MAP.items():
         if env_name not in env_map:
             continue
-        values[field_name] = _parse_gs2mesh_field_value(
+        values[field_name] = _parse_milo_field_value(
             field_name,
             env_map.get(env_name),
             values[field_name],
@@ -188,36 +157,36 @@ def _apply_gs2mesh_env_fallbacks(
     return values
 
 
-def _resolve_gs2mesh_config(
+def _resolve_milo_config(
     raw: Mapping[str, Any],
     env_map: Mapping[str, str],
     *,
     explicit_keys: set[str] | None,
 ) -> dict[str, Any]:
-    raw_preset = normalize_preset(raw.get("gs2mesh_preset"), fallback="")
-    raw_preset_base = normalize_preset(raw.get("gs2mesh_preset_base"), fallback="")
-    env_preset = normalize_preset(env_map.get("GS2MESH_PRESET"), fallback="")
+    raw_preset = normalize_preset(raw.get("milo_preset"), fallback="")
+    raw_preset_base = normalize_preset(raw.get("milo_preset_base"), fallback="")
+    env_preset = normalize_preset(env_map.get("MILO_PRESET"), fallback="")
     preserve_all_raw = explicit_keys is None
-    stage4_keys_present = {key for key in GS2MESH_CONFIG_FIELDS if key in raw}
+    stage4_keys_present = {key for key in MILO_CONFIG_FIELDS if key in raw}
 
     if preserve_all_raw:
-        selected_preset = raw_preset or env_preset or GS2MESH_PRESET
-        base_preset = raw_preset_base if raw_preset_base in GS2MESH_PRESETS else ""
-        if raw_preset in GS2MESH_PRESETS:
+        selected_preset = raw_preset or env_preset or MILO_PRESET
+        base_preset = raw_preset_base if raw_preset_base in MILO_PRESETS else ""
+        if raw_preset in MILO_PRESETS:
             base_preset = raw_preset
-        elif raw_preset == "custom" and base_preset not in GS2MESH_PRESETS:
+        elif raw_preset == "custom" and base_preset not in MILO_PRESETS:
             inferred = infer_preset_from_public_fields(raw)
-            base_preset = inferred if inferred in GS2MESH_PRESETS else GS2MESH_PRESET
-        elif selected_preset not in GS2MESH_PRESETS:
+            base_preset = inferred if inferred in MILO_PRESETS else MILO_PRESET
+        elif selected_preset not in MILO_PRESETS:
             inferred = infer_preset_from_public_fields(raw)
-            base_preset = inferred if inferred in GS2MESH_PRESETS else GS2MESH_PRESET
+            base_preset = inferred if inferred in MILO_PRESETS else MILO_PRESET
         else:
             base_preset = selected_preset
         values = config_fields_from_preset(base_preset)
-        values = _apply_gs2mesh_overrides(values, raw, GS2MESH_CONFIG_FIELDS)
+        values = _apply_milo_overrides(values, raw, MILO_CONFIG_FIELDS)
         if not stage4_keys_present and not raw_preset and not env_preset:
-            values = _apply_gs2mesh_env_fallbacks(values, env_map)
-        if raw_preset in GS2MESH_PRESETS:
+            values = _apply_milo_env_fallbacks(values, env_map)
+        if raw_preset in MILO_PRESETS:
             final_preset = (
                 raw_preset
                 if fields_match_preset(values, raw_preset)
@@ -225,7 +194,7 @@ def _resolve_gs2mesh_config(
             )
         elif raw_preset == "custom":
             final_preset = "custom"
-        elif env_preset in GS2MESH_PRESETS and not stage4_keys_present:
+        elif env_preset in MILO_PRESETS and not stage4_keys_present:
             final_preset = (
                 env_preset
                 if fields_match_preset(values, env_preset)
@@ -233,37 +202,37 @@ def _resolve_gs2mesh_config(
             )
         else:
             final_preset = infer_preset_from_public_fields(values)
-        values["gs2mesh_preset"] = final_preset
-        values["gs2mesh_preset_base"] = (
-            final_preset if final_preset in GS2MESH_PRESETS else base_preset
+        values["milo_preset"] = final_preset
+        values["milo_preset_base"] = (
+            final_preset if final_preset in MILO_PRESETS else base_preset
         )
         return values
 
     explicit = set(explicit_keys)
     selected_preset = raw_preset or env_preset
-    if selected_preset not in _GS2MESH_PRESET_CHOICES:
+    if selected_preset not in _MILO_PRESET_CHOICES:
         inferred = infer_preset_from_public_fields(raw)
-        selected_preset = inferred if inferred in _GS2MESH_PRESET_CHOICES else GS2MESH_PRESET
-    selected_base = raw_preset_base if raw_preset_base in GS2MESH_PRESETS else ""
+        selected_preset = inferred if inferred in _MILO_PRESET_CHOICES else MILO_PRESET
+    selected_base = raw_preset_base if raw_preset_base in MILO_PRESETS else ""
     if not selected_base:
-        selected_base = selected_preset if selected_preset in GS2MESH_PRESETS else GS2MESH_PRESET
+        selected_base = selected_preset if selected_preset in MILO_PRESETS else MILO_PRESET
 
-    if "gs2mesh_preset" in explicit and selected_preset in GS2MESH_PRESETS:
+    if "milo_preset" in explicit and selected_preset in MILO_PRESETS:
         values = config_fields_from_preset(selected_preset)
     else:
         if selected_preset == "custom":
             base_preset = selected_base
         else:
-            base_preset = selected_preset if selected_preset in GS2MESH_PRESETS else GS2MESH_PRESET
+            base_preset = selected_preset if selected_preset in MILO_PRESETS else MILO_PRESET
         values = config_fields_from_preset(base_preset)
-        values = _apply_gs2mesh_overrides(values, raw, GS2MESH_CONFIG_FIELDS)
+        values = _apply_milo_overrides(values, raw, MILO_CONFIG_FIELDS)
 
     explicit_stage4_fields = {
-        key for key in explicit if key in GS2MESH_CONFIG_FIELDS
+        key for key in explicit if key in MILO_CONFIG_FIELDS
     }
-    values = _apply_gs2mesh_overrides(values, raw, explicit_stage4_fields)
+    values = _apply_milo_overrides(values, raw, explicit_stage4_fields)
 
-    if "gs2mesh_preset" in explicit and selected_preset in GS2MESH_PRESETS:
+    if "milo_preset" in explicit and selected_preset in MILO_PRESETS:
         final_preset = (
             selected_preset
             if fields_match_preset(values, selected_preset)
@@ -271,16 +240,16 @@ def _resolve_gs2mesh_config(
         )
     elif explicit_stage4_fields:
         final_preset = "custom"
-    elif selected_preset in GS2MESH_PRESETS and fields_match_preset(values, selected_preset):
+    elif selected_preset in MILO_PRESETS and fields_match_preset(values, selected_preset):
         final_preset = selected_preset
     elif selected_preset == "custom":
         final_preset = "custom"
     else:
         final_preset = infer_preset_from_public_fields(values)
 
-    values["gs2mesh_preset"] = final_preset
-    values["gs2mesh_preset_base"] = (
-        final_preset if final_preset in GS2MESH_PRESETS else selected_base
+    values["milo_preset"] = final_preset
+    values["milo_preset_base"] = (
+        final_preset if final_preset in MILO_PRESETS else selected_base
     )
     return values
 
@@ -297,7 +266,7 @@ def build_pipeline_config(
     env_map = os.environ if env is None else env
 
     max_frames = max(2, parse_int(raw.get("max_frames"), env_int("MAX_FRAMES", EXTRACT_MAX_FRAMES, env_map)))
-    gs2mesh_cfg = _resolve_gs2mesh_config(
+    milo_cfg = _resolve_milo_config(
         raw,
         env_map,
         explicit_keys=explicit_keys,
@@ -335,25 +304,17 @@ def build_pipeline_config(
             raw.get("colmap_first_octave"),
             env_int("COLMAP_FIRST_OCTAVE", COLMAP_FIRST_OCTAVE, env_map),
         ),
-        gs2mesh_preset=str(gs2mesh_cfg["gs2mesh_preset"]),
-        gs2mesh_preset_base=str(gs2mesh_cfg["gs2mesh_preset_base"]),
-        gs2mesh_gs_iterations=int(gs2mesh_cfg["gs2mesh_gs_iterations"]),
-        gs2mesh_runtime_profile=str(gs2mesh_cfg["gs2mesh_runtime_profile"]),
-        gs2mesh_stereo_model=str(gs2mesh_cfg["gs2mesh_stereo_model"]),
-        gs2mesh_tsdf_voxel_size=float(gs2mesh_cfg["gs2mesh_tsdf_voxel_size"]),
-        gs2mesh_tsdf_depth_trunc=float(gs2mesh_cfg["gs2mesh_tsdf_depth_trunc"]),
-        gs2mesh_use_masks=bool(gs2mesh_cfg["gs2mesh_use_masks"]),
-        gs2mesh_tsdf_scale=float(gs2mesh_cfg["gs2mesh_tsdf_scale"]),
-        gs2mesh_tsdf_min_depth_baselines=int(gs2mesh_cfg["gs2mesh_tsdf_min_depth_baselines"]),
-        gs2mesh_tsdf_max_depth_baselines=int(gs2mesh_cfg["gs2mesh_tsdf_max_depth_baselines"]),
-        gs2mesh_tsdf_dilate=int(gs2mesh_cfg["gs2mesh_tsdf_dilate"]),
-        gs2mesh_tsdf_cleaning_threshold=int(gs2mesh_cfg["gs2mesh_tsdf_cleaning_threshold"]),
-        gs2mesh_tsdf_use_occlusion_mask=bool(gs2mesh_cfg["gs2mesh_tsdf_use_occlusion_mask"]),
-        gs2mesh_tsdf_invert_mask=bool(gs2mesh_cfg["gs2mesh_tsdf_invert_mask"]),
-        gs2mesh_tsdf_erode_mask=bool(gs2mesh_cfg["gs2mesh_tsdf_erode_mask"]),
-        gs2mesh_tsdf_erosion_kernel_size=int(gs2mesh_cfg["gs2mesh_tsdf_erosion_kernel_size"]),
-        gs2mesh_tsdf_closing_kernel_size=int(gs2mesh_cfg["gs2mesh_tsdf_closing_kernel_size"]),
-        gs2mesh_tsdf_block_count=int(gs2mesh_cfg["gs2mesh_tsdf_block_count"]),
+        milo_preset=str(milo_cfg["milo_preset"]),
+        milo_preset_base=str(milo_cfg["milo_preset_base"]),
+        milo_iterations=int(milo_cfg["milo_iterations"]),
+        milo_scene_type=str(milo_cfg["milo_scene_type"]),
+        milo_mesh_config=str(milo_cfg["milo_mesh_config"]),
+        milo_extraction_method=str(milo_cfg["milo_extraction_method"]),
+        milo_use_masks=bool(milo_cfg["milo_use_masks"]),
+        milo_rasterizer=str(milo_cfg["milo_rasterizer"]),
+        milo_dense_gaussians=bool(milo_cfg["milo_dense_gaussians"]),
+        milo_data_device=str(milo_cfg["milo_data_device"]),
+        milo_mesh_res=int(milo_cfg["milo_mesh_res"]),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", TEXTURE_SIZE, env_map)),
         texture_view_assign_mode=parse_choice(
             raw.get("texture_view_assign_mode") or env_map.get("TEXTURE_VIEW_ASSIGN_MODE"),

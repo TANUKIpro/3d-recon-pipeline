@@ -37,7 +37,7 @@ class TestCheckpointSpecs(unittest.TestCase):
         for spec in specs:
             self.assertTrue(required.issubset(spec.keys()), f"Missing keys in {spec}")
 
-    def test_stage4_has_gs2mesh_checkpoints(self) -> None:
+    def test_stage4_has_milo_checkpoints(self) -> None:
         specs = checkpoint_specs(4)
         ids = [s["id"] for s in specs]
         self.assertIn("s4.train_gs", ids)

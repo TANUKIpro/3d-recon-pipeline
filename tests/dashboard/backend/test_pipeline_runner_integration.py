@@ -1,7 +1,7 @@
 """Integration tests for pipeline_runner: run_pipeline, _run_stage, callbacks.
 
 Covers the 5-stage pipeline: ExtractFrames, COLMAP SfM, SAM2 Segment,
-gs2mesh Reconstruct, Texture Bake.
+MILo Reconstruct, Texture Bake.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
         return {
             "extract_frames": lambda *a, **kw: _populate_frames(d),
             "colmap_sfm": lambda *a, **kw: _populate_colmap(d),
-            "gs2mesh_reconstruct": lambda *a, **kw: _populate_mesh(d),
+            "milo_reconstruct": lambda *a, **kw: _populate_mesh(d),
             "texture_bake": lambda *a, **kw: (
                 Path(d) / "textured_mesh.obj"
             ).write_bytes(b"obj"),
@@ -200,7 +200,7 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             (f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)),
             (f"{_MODULE}._stage_extract_frames", MagicMock(side_effect=effects["extract_frames"])),
             (f"{_MODULE}._stage_colmap_sfm", MagicMock(side_effect=effects["colmap_sfm"])),
-            (f"{_MODULE}._stage_gs2mesh_reconstruct", MagicMock(side_effect=effects["gs2mesh_reconstruct"])),
+            (f"{_MODULE}._stage_milo_reconstruct", MagicMock(side_effect=effects["milo_reconstruct"])),
             (f"{_MODULE}._stage_texture_bake", MagicMock(side_effect=effects["texture_bake"])),
             (f"{_MODULE}._stage_post_texture_contact_cleanup_prepare", MagicMock(side_effect=effects["post_texture_prepare"])),
             (f"{_MODULE}._stage_post_texture_contact_cleanup_apply", MagicMock(side_effect=effects["post_texture_apply"])),
@@ -279,7 +279,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
              patch(f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)):
-            await _run_stage(self.session, PipelineStage.GS2MESH_RECONSTRUCT, mock_fn)
+            await _run_stage(self.session, PipelineStage.MILO_RECONSTRUCT, mock_fn)
 
         mock_fn.assert_called_once()
         kw = mock_fn.call_args.kwargs
@@ -294,9 +294,9 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
              patch(f"{_MODULE}.stage_log_scope", mock_scope):
-            await _run_stage(self.session, PipelineStage.GS2MESH_RECONSTRUCT, mock_fn)
+            await _run_stage(self.session, PipelineStage.MILO_RECONSTRUCT, mock_fn)
 
-        mock_scope.assert_called_once_with(int(PipelineStage.GS2MESH_RECONSTRUCT))
+        mock_scope.assert_called_once_with(int(PipelineStage.MILO_RECONSTRUCT))
         mock_fn.assert_called_once()
 
 
@@ -359,7 +359,7 @@ class TestRunPipelineFullFlow(_PipelineIntegrationBase):
         # All stage functions called once
         mocks["_stage_extract_frames"].assert_called_once()
         mocks["_stage_colmap_sfm"].assert_called_once()
-        mocks["_stage_gs2mesh_reconstruct"].assert_called_once()
+        mocks["_stage_milo_reconstruct"].assert_called_once()
         mocks["_stage_texture_bake"].assert_called_once()
 
         # Broadcast checks: 6 stage_starts (non-SAM2 via _run_stage, SAM2 inline, stage 6 inline)
@@ -379,7 +379,7 @@ class TestRunPipelineFullFlow(_PipelineIntegrationBase):
 
 
 class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
-    """Resume from GS2MESH_RECONSTRUCT (stage 4)."""
+    """Resume from MILO_RECONSTRUCT (stage 4)."""
 
     auto_accept = True
 
@@ -390,7 +390,7 @@ class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
         _populate_masks(self.tmpdir)
 
         # Set session paths that stages 1-3 would have set
-        self.session.resume_from_stage = PipelineStage.GS2MESH_RECONSTRUCT
+        self.session.resume_from_stage = PipelineStage.MILO_RECONSTRUCT
         self.session.frames_dir = str(Path(self.tmpdir) / "frames")
         self.session.colmap_sparse_path = str(Path(self.tmpdir) / "colmap_sparse")
         self.session.poses_path = str(Path(self.tmpdir) / "camera_poses.json")
@@ -406,7 +406,7 @@ class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
         mocks["_stage_colmap_sfm"].assert_not_called()
 
         # Stages 4-5 called
-        mocks["_stage_gs2mesh_reconstruct"].assert_called_once()
+        mocks["_stage_milo_reconstruct"].assert_called_once()
         mocks["_stage_texture_bake"].assert_called_once()
 
         # Broadcast stage_starts are only for stage 4+

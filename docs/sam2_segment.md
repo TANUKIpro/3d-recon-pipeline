@@ -27,7 +27,7 @@
 
 後段利用:
 
-- Stage 4 (`gs2mesh_reconstruct`) が `masks/` を TSDF 用 `left_mask.npy` へ変換
+- Stage 4 (`milo_reconstruct`) が `masks/` を背景マスク処理に利用
 - Stage 5 (`texture_bake`) が `masks/` を利用
 
 ## 詳細フロー

@@ -21,25 +21,17 @@ from scripts.config_defaults import (
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
-    GS2MESH_PRESET,
-    GS2MESH_GS_ITERATIONS,
-    GS2MESH_RUNTIME_PROFILE,
-    GS2MESH_STEREO_MODEL,
-    GS2MESH_TSDF_BLOCK_COUNT,
-    GS2MESH_TSDF_CLEANING_THRESHOLD,
-    GS2MESH_TSDF_CLOSING_KERNEL_SIZE,
-    GS2MESH_TSDF_DEPTH_TRUNC,
-    GS2MESH_TSDF_DILATE,
-    GS2MESH_TSDF_ERODE_MASK,
-    GS2MESH_TSDF_EROSION_KERNEL_SIZE,
-    GS2MESH_TSDF_INVERT_MASK,
-    GS2MESH_TSDF_MAX_DEPTH_BASELINES,
-    GS2MESH_TSDF_MIN_DEPTH_BASELINES,
-    GS2MESH_TSDF_SCALE,
-    GS2MESH_TSDF_USE_OCCLUSION_MASK,
-    GS2MESH_TSDF_VOXEL_SIZE,
-    GS2MESH_USE_MASKS,
     GROUND_PLANE_ENABLED,
+    MILO_DATA_DEVICE,
+    MILO_DENSE_GAUSSIANS,
+    MILO_EXTRACTION_METHOD,
+    MILO_ITERATIONS,
+    MILO_MESH_CONFIG,
+    MILO_MESH_RES,
+    MILO_PRESET,
+    MILO_RASTERIZER,
+    MILO_SCENE_TYPE,
+    MILO_USE_MASKS,
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
@@ -63,7 +55,7 @@ class PipelineStage(IntEnum):
     EXTRACT_FRAMES = 1
     COLMAP_SFM = 2
     SAM2_SEGMENT = 3
-    GS2MESH_RECONSTRUCT = 4
+    MILO_RECONSTRUCT = 4
     TEXTURE_BAKE = 5
     POST_TEXTURE_CONTACT_CLEANUP = 6
     COMPLETE = 7
@@ -73,7 +65,7 @@ STAGE_LABELS: dict[int, str] = {
     PipelineStage.EXTRACT_FRAMES: "Extract Frames",
     PipelineStage.COLMAP_SFM: "COLMAP SfM",
     PipelineStage.SAM2_SEGMENT: "SAM2 Segmentation",
-    PipelineStage.GS2MESH_RECONSTRUCT: "gs2mesh Reconstruction",
+    PipelineStage.MILO_RECONSTRUCT: "MILo Reconstruction",
     PipelineStage.TEXTURE_BAKE: "Texture Bake",
     PipelineStage.POST_TEXTURE_CONTACT_CLEANUP: "PostTextureContactCleanup",
 }
@@ -127,25 +119,17 @@ class PipelineConfig:
     colmap_use_gpu: bool = COLMAP_USE_GPU
     colmap_dsp_sift: bool = COLMAP_DSP_SIFT
     colmap_first_octave: int = COLMAP_FIRST_OCTAVE
-    gs2mesh_preset: str = GS2MESH_PRESET
-    gs2mesh_preset_base: str = GS2MESH_PRESET
-    gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS
-    gs2mesh_runtime_profile: str = GS2MESH_RUNTIME_PROFILE
-    gs2mesh_stereo_model: str = GS2MESH_STEREO_MODEL
-    gs2mesh_tsdf_voxel_size: float = GS2MESH_TSDF_VOXEL_SIZE
-    gs2mesh_tsdf_depth_trunc: float = GS2MESH_TSDF_DEPTH_TRUNC
-    gs2mesh_use_masks: bool = GS2MESH_USE_MASKS
-    gs2mesh_tsdf_scale: float = GS2MESH_TSDF_SCALE
-    gs2mesh_tsdf_min_depth_baselines: int = GS2MESH_TSDF_MIN_DEPTH_BASELINES
-    gs2mesh_tsdf_max_depth_baselines: int = GS2MESH_TSDF_MAX_DEPTH_BASELINES
-    gs2mesh_tsdf_dilate: int = GS2MESH_TSDF_DILATE
-    gs2mesh_tsdf_cleaning_threshold: int = GS2MESH_TSDF_CLEANING_THRESHOLD
-    gs2mesh_tsdf_use_occlusion_mask: bool = GS2MESH_TSDF_USE_OCCLUSION_MASK
-    gs2mesh_tsdf_invert_mask: bool = GS2MESH_TSDF_INVERT_MASK
-    gs2mesh_tsdf_erode_mask: bool = GS2MESH_TSDF_ERODE_MASK
-    gs2mesh_tsdf_erosion_kernel_size: int = GS2MESH_TSDF_EROSION_KERNEL_SIZE
-    gs2mesh_tsdf_closing_kernel_size: int = GS2MESH_TSDF_CLOSING_KERNEL_SIZE
-    gs2mesh_tsdf_block_count: int = GS2MESH_TSDF_BLOCK_COUNT
+    milo_preset: str = MILO_PRESET
+    milo_preset_base: str = MILO_PRESET
+    milo_iterations: int = MILO_ITERATIONS
+    milo_scene_type: str = MILO_SCENE_TYPE
+    milo_mesh_config: str = MILO_MESH_CONFIG
+    milo_extraction_method: str = MILO_EXTRACTION_METHOD
+    milo_use_masks: bool = MILO_USE_MASKS
+    milo_rasterizer: str = MILO_RASTERIZER
+    milo_dense_gaussians: bool = MILO_DENSE_GAUSSIANS
+    milo_data_device: str = MILO_DATA_DEVICE
+    milo_mesh_res: int = MILO_MESH_RES
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
@@ -165,12 +149,12 @@ class PipelineConfig:
             for f in self.__dataclass_fields__.values()
         }
 
-    def to_gs2mesh_settings(self):
-        from scripts.gs2mesh_config import Gs2meshSettings
+    def to_milo_settings(self):
+        from scripts.milo_config import MiloSettings
 
-        return Gs2meshSettings.from_config_mapping(
+        return MiloSettings.from_config_mapping(
             self.to_dict(),
-            preset=self.gs2mesh_preset,
+            preset=self.milo_preset,
         )
 
 

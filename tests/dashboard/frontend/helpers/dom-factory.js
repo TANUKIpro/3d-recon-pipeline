@@ -222,22 +222,27 @@ export function buildConfigPanelDOM() {
       <input type="checkbox" id="cfg-classical-downsample" checked>
       <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
 
-      <select id="cfg-gs2mesh-preset">
+      <select id="cfg-milo-preset">
         <option value="default" selected>Default</option>
         <option value="high">High</option>
+        <option value="fast">Fast</option>
         <option value="custom">Custom</option>
       </select>
-      <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000">
-      <select id="cfg-gs2mesh-runtime-profile">
-        <option value="auto" selected>Auto</option>
-        <option value="compat">Compat</option>
+      <input type="number" id="cfg-milo-iterations" value="18000">
+      <select id="cfg-milo-scene-type">
+        <option value="indoor" selected>Indoor</option>
+        <option value="outdoor">Outdoor</option>
       </select>
-      <select id="cfg-gs2mesh-stereo-model">
-        <option value="DLNR" selected>DLNR</option>
+      <select id="cfg-milo-mesh-config">
+        <option value="default" selected>Default</option>
+        <option value="highres">High Res</option>
       </select>
-      <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005">
-      <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04">
-      <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
+      <select id="cfg-milo-extraction-method">
+        <option value="sdf" selected>SDF</option>
+        <option value="integration">Integration</option>
+        <option value="regular_tsdf">Regular TSDF</option>
+      </select>
+      <input type="checkbox" id="cfg-milo-use-masks" checked>
 
       <select id="cfg-texture-size">
         <option value="0">Auto</option>

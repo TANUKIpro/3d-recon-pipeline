@@ -1,19 +1,19 @@
 /**
  * Configuration panel: video/object selection and parameter inputs.
  *
- * 6-stage gs2mesh pipeline:
+ * 6-stage MILo pipeline:
  *   1. Extract Frames
  *   2. COLMAP SfM
  *   3. SAM2 Segmentation
- *   4. gs2mesh Reconstruction
+ *   4. MILo Reconstruction
  *   5. Texture Bake
  *   6. Post-texture Cleanup
  */
 
 import {
-  GS2MESH_PRESET_CUSTOM,
-  GS2MESH_PRESET_DEFAULT,
-  GS2MESH_PUBLIC_PRESETS,
+  MILO_PRESET_CUSTOM,
+  MILO_PRESET_DEFAULT,
+  MILO_PUBLIC_PRESETS,
   NEW_OBJECT_VALUE,
   STAGE_LABELS,
 } from './config/presets.js';
@@ -54,14 +54,13 @@ export class ConfigPanel {
       sam2_model: document.getElementById('cfg-sam2-model'),
       ground_plane_enabled: document.getElementById('cfg-ground-plane-enabled'),
 
-      // Stage 4: gs2mesh Reconstruction
-      gs2mesh_preset: document.getElementById('cfg-gs2mesh-preset'),
-      gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
-      gs2mesh_runtime_profile: document.getElementById('cfg-gs2mesh-runtime-profile'),
-      gs2mesh_stereo_model: document.getElementById('cfg-gs2mesh-stereo-model'),
-      gs2mesh_tsdf_voxel_size: document.getElementById('cfg-gs2mesh-tsdf-voxel-size'),
-      gs2mesh_tsdf_depth_trunc: document.getElementById('cfg-gs2mesh-tsdf-depth-trunc'),
-      gs2mesh_use_masks: document.getElementById('cfg-gs2mesh-use-masks'),
+      // Stage 4: MILo Reconstruction
+      milo_preset: document.getElementById('cfg-milo-preset'),
+      milo_iterations: document.getElementById('cfg-milo-iterations'),
+      milo_scene_type: document.getElementById('cfg-milo-scene-type'),
+      milo_mesh_config: document.getElementById('cfg-milo-mesh-config'),
+      milo_extraction_method: document.getElementById('cfg-milo-extraction-method'),
+      milo_use_masks: document.getElementById('cfg-milo-use-masks'),
 
       // Stage 5: Texture Bake
       texture_size: document.getElementById('cfg-texture-size'),
@@ -86,8 +85,8 @@ export class ConfigPanel {
     this._selectedObjectSummary = null;
     this._startStage = 1;
     this.currentBranchSlug = null;
-    this._suppressGs2meshPresetSync = false;
-    this._gs2meshPresetBase = GS2MESH_PRESET_DEFAULT;
+    this._suppressMiloPresetSync = false;
+    this._miloPresetBase = MILO_PRESET_DEFAULT;
 
     this._updateTextureAutoOption(null);
     this._bindEvents();
@@ -188,24 +187,17 @@ export class ConfigPanel {
       sam2_model: this._inputs.sam2_model.value,
       ground_plane_enabled: this._inputs.ground_plane_enabled?.checked ?? true,
 
-      // Stage 4: gs2mesh Reconstruction
-      gs2mesh_preset: this._inputs.gs2mesh_preset?.value || GS2MESH_PRESET_DEFAULT,
-      gs2mesh_preset_base: this._gs2meshPresetBase,
-      gs2mesh_gs_iterations: this._parsePositiveInt(
-        this._inputs.gs2mesh_gs_iterations?.value,
-        5000,
+      // Stage 4: MILo Reconstruction
+      milo_preset: this._inputs.milo_preset?.value || MILO_PRESET_DEFAULT,
+      milo_preset_base: this._miloPresetBase,
+      milo_iterations: this._parsePositiveInt(
+        this._inputs.milo_iterations?.value,
+        18000,
       ),
-      gs2mesh_runtime_profile: this._inputs.gs2mesh_runtime_profile?.value || 'auto',
-      gs2mesh_stereo_model: this._inputs.gs2mesh_stereo_model?.value || 'DLNR',
-      gs2mesh_tsdf_voxel_size: this._parsePositiveFloat(
-        this._inputs.gs2mesh_tsdf_voxel_size?.value,
-        0.005,
-      ),
-      gs2mesh_tsdf_depth_trunc: this._parsePositiveFloat(
-        this._inputs.gs2mesh_tsdf_depth_trunc?.value,
-        0.04,
-      ),
-      gs2mesh_use_masks: this._inputs.gs2mesh_use_masks?.checked ?? true,
+      milo_scene_type: this._inputs.milo_scene_type?.value || 'indoor',
+      milo_mesh_config: this._inputs.milo_mesh_config?.value || 'default',
+      milo_extraction_method: this._inputs.milo_extraction_method?.value || 'sdf',
+      milo_use_masks: this._inputs.milo_use_masks?.checked ?? true,
 
       // Stage 5: Texture Bake
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
@@ -305,25 +297,24 @@ export class ConfigPanel {
       });
     }
 
-    if (this._inputs.gs2mesh_preset) {
-      this._inputs.gs2mesh_preset.addEventListener('change', () => {
-        if (this._suppressGs2meshPresetSync) return;
-        const preset = this._inputs.gs2mesh_preset.value || GS2MESH_PRESET_DEFAULT;
-        this._applyGs2meshPreset(preset);
+    if (this._inputs.milo_preset) {
+      this._inputs.milo_preset.addEventListener('change', () => {
+        if (this._suppressMiloPresetSync) return;
+        const preset = this._inputs.milo_preset.value || MILO_PRESET_DEFAULT;
+        this._applyMiloPreset(preset);
       });
     }
     for (const key of [
-      'gs2mesh_gs_iterations',
-      'gs2mesh_runtime_profile',
-      'gs2mesh_stereo_model',
-      'gs2mesh_tsdf_voxel_size',
-      'gs2mesh_tsdf_depth_trunc',
-      'gs2mesh_use_masks',
+      'milo_iterations',
+      'milo_scene_type',
+      'milo_mesh_config',
+      'milo_extraction_method',
+      'milo_use_masks',
     ]) {
       const input = this._inputs[key];
       if (!input) continue;
-      input.addEventListener('input', () => this._markGs2meshPresetCustom());
-      input.addEventListener('change', () => this._markGs2meshPresetCustom());
+      input.addEventListener('input', () => this._markMiloPresetCustom());
+      input.addEventListener('change', () => this._markMiloPresetCustom());
     }
 
     this._objectSelect.addEventListener('change', () => {
@@ -625,43 +616,41 @@ export class ConfigPanel {
       this._inputs.ground_plane_enabled.checked = cfg.ground_plane_enabled !== false;
     }
 
-    // Stage 4: gs2mesh Reconstruction
-    this._suppressGs2meshPresetSync = true;
-    if (cfg.gs2mesh_preset != null && this._inputs.gs2mesh_preset) {
-      this._setSelectValue(this._inputs.gs2mesh_preset, String(cfg.gs2mesh_preset));
-    } else if (this._inputs.gs2mesh_preset) {
-      this._inputs.gs2mesh_preset.value = GS2MESH_PRESET_DEFAULT;
+    // Stage 4: MILo Reconstruction
+    this._suppressMiloPresetSync = true;
+    if (cfg.milo_preset != null && this._inputs.milo_preset) {
+      this._setSelectValue(this._inputs.milo_preset, String(cfg.milo_preset));
+    } else if (this._inputs.milo_preset) {
+      this._inputs.milo_preset.value = MILO_PRESET_DEFAULT;
     }
     const presetBase = String(
-      cfg.gs2mesh_preset_base
-      || (cfg.gs2mesh_preset && cfg.gs2mesh_preset !== GS2MESH_PRESET_CUSTOM
-        ? cfg.gs2mesh_preset
-        : GS2MESH_PRESET_DEFAULT)
+      cfg.milo_preset_base
+      || (cfg.milo_preset && cfg.milo_preset !== MILO_PRESET_CUSTOM
+        ? cfg.milo_preset
+        : MILO_PRESET_DEFAULT)
     );
-    this._gs2meshPresetBase = Object.prototype.hasOwnProperty.call(GS2MESH_PUBLIC_PRESETS, presetBase)
+    this._miloPresetBase = Object.prototype.hasOwnProperty.call(MILO_PUBLIC_PRESETS, presetBase)
       ? presetBase
-      : GS2MESH_PRESET_DEFAULT;
+      : MILO_PRESET_DEFAULT;
     for (const key of [
-      'gs2mesh_gs_iterations',
-      'gs2mesh_tsdf_voxel_size',
-      'gs2mesh_tsdf_depth_trunc',
+      'milo_iterations',
     ]) {
       if (cfg[key] == null || !this._inputs[key]) continue;
       this._inputs[key].value = String(cfg[key]);
     }
-    if (cfg.gs2mesh_stereo_model != null) {
-      const stereoModel = String(cfg.gs2mesh_stereo_model) === 'DLNR_Middlebury'
-        ? 'DLNR'
-        : String(cfg.gs2mesh_stereo_model);
-      this._setSelectValue(this._inputs.gs2mesh_stereo_model, stereoModel);
+    if (cfg.milo_scene_type != null && this._inputs.milo_scene_type) {
+      this._setSelectValue(this._inputs.milo_scene_type, String(cfg.milo_scene_type));
     }
-    if (cfg.gs2mesh_runtime_profile != null && this._inputs.gs2mesh_runtime_profile) {
-      this._setSelectValue(this._inputs.gs2mesh_runtime_profile, String(cfg.gs2mesh_runtime_profile));
+    if (cfg.milo_mesh_config != null && this._inputs.milo_mesh_config) {
+      this._setSelectValue(this._inputs.milo_mesh_config, String(cfg.milo_mesh_config));
     }
-    if (cfg.gs2mesh_use_masks != null && this._inputs.gs2mesh_use_masks) {
-      this._inputs.gs2mesh_use_masks.checked = cfg.gs2mesh_use_masks !== false;
+    if (cfg.milo_extraction_method != null && this._inputs.milo_extraction_method) {
+      this._setSelectValue(this._inputs.milo_extraction_method, String(cfg.milo_extraction_method));
     }
-    this._suppressGs2meshPresetSync = false;
+    if (cfg.milo_use_masks != null && this._inputs.milo_use_masks) {
+      this._inputs.milo_use_masks.checked = cfg.milo_use_masks !== false;
+    }
+    this._suppressMiloPresetSync = false;
 
     // Stage 5: Texture Bake
     if (cfg.texture_size != null && this._inputs.texture_size) {
@@ -732,11 +721,11 @@ export class ConfigPanel {
     );
   }
 
-  _applyGs2meshPreset(preset) {
-    const values = GS2MESH_PUBLIC_PRESETS[preset];
+  _applyMiloPreset(preset) {
+    const values = MILO_PUBLIC_PRESETS[preset];
     if (!values) return;
-    this._suppressGs2meshPresetSync = true;
-    this._gs2meshPresetBase = preset;
+    this._suppressMiloPresetSync = true;
+    this._miloPresetBase = preset;
     for (const [key, value] of Object.entries(values)) {
       const input = this._inputs[key];
       if (!input) continue;
@@ -746,15 +735,15 @@ export class ConfigPanel {
         input.value = String(value);
       }
     }
-    if (this._inputs.gs2mesh_preset) {
-      this._inputs.gs2mesh_preset.value = preset;
+    if (this._inputs.milo_preset) {
+      this._inputs.milo_preset.value = preset;
     }
-    this._suppressGs2meshPresetSync = false;
+    this._suppressMiloPresetSync = false;
   }
 
-  _markGs2meshPresetCustom() {
-    if (this._suppressGs2meshPresetSync || !this._inputs.gs2mesh_preset) return;
-    this._inputs.gs2mesh_preset.value = GS2MESH_PRESET_CUSTOM;
+  _markMiloPresetCustom() {
+    if (this._suppressMiloPresetSync || !this._inputs.milo_preset) return;
+    this._inputs.milo_preset.value = MILO_PRESET_CUSTOM;
   }
 }
 

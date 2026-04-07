@@ -111,7 +111,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.texture_quality_boost)
 
-    def test_gs2mesh_defaults(self) -> None:
+    def test_milo_defaults(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -120,23 +120,17 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.gs2mesh_preset, "default")
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 5000)
-        self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
-        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
-        self.assertTrue(cfg.gs2mesh_use_masks)
-        self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 100000)
+        self.assertEqual(cfg.milo_preset, "default")
+        self.assertEqual(cfg.milo_iterations, 18000)
+        self.assertEqual(cfg.milo_scene_type, "indoor")
+        self.assertTrue(cfg.milo_use_masks)
 
-    def test_gs2mesh_fields_parsed_and_clamped(self) -> None:
+    def test_milo_fields_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
             {
-                "gs2mesh_gs_iterations": 500,
-                "gs2mesh_runtime_profile": "compat",
-                "gs2mesh_tsdf_voxel_size": 0.0001,
-                "gs2mesh_tsdf_depth_trunc": 0.001,
-                "gs2mesh_use_masks": False,
+                "milo_iterations": 500,
+                "milo_scene_type": "outdoor",
+                "milo_use_masks": False,
             },
             video_path="input.mp4",
             object_name="sample",
@@ -144,12 +138,10 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
-        self.assertEqual(cfg.gs2mesh_runtime_profile, "compat")
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
-        self.assertFalse(cfg.gs2mesh_use_masks)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+        self.assertEqual(cfg.milo_iterations, 1000)
+        self.assertEqual(cfg.milo_scene_type, "outdoor")
+        self.assertFalse(cfg.milo_use_masks)
+        self.assertEqual(cfg.milo_preset, "custom")
 
 
 class DetectStageOutputsTests(unittest.TestCase):

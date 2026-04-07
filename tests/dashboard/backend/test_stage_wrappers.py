@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 from scripts.dashboard.stage_wrappers import (
     _stage_colmap_sfm,
     _stage_extract_frames,
-    _stage_gs2mesh_reconstruct,
+    _stage_milo_reconstruct,
     _stage_texture_bake,
 )
 
@@ -29,14 +29,16 @@ from scripts.dashboard.stage_wrappers import (
 
 _stub_extract = types.ModuleType("scripts.stage_extract_frames")
 _stub_colmap = types.ModuleType("scripts.stage_colmap_sfm")
-_stub_gs2mesh = types.ModuleType("scripts.stage_gs2mesh_reconstruct")
+_stub_milo = types.ModuleType("scripts.stage_milo_reconstruct")
+_stub_milo_config = types.ModuleType("scripts.milo_config")
 _stub_texture = types.ModuleType("scripts.stage_texture_bake")
 _stub_vram = types.ModuleType("scripts.vram_utils")
 
 _STUBS = {
     "scripts.stage_extract_frames": _stub_extract,
     "scripts.stage_colmap_sfm": _stub_colmap,
-    "scripts.stage_gs2mesh_reconstruct": _stub_gs2mesh,
+    "scripts.stage_milo_reconstruct": _stub_milo,
+    "scripts.milo_config": _stub_milo_config,
     "scripts.stage_texture_bake": _stub_texture,
     "scripts.vram_utils": _stub_vram,
 }
@@ -57,8 +59,11 @@ class _WrapperTestBase(unittest.TestCase):
         self.mock_colmap = MagicMock(name="run_colmap_sfm")
         _stub_colmap.run_colmap_sfm = self.mock_colmap  # type: ignore[attr-defined]
 
-        self.mock_gs2mesh = MagicMock(name="run_gs2mesh")
-        _stub_gs2mesh.run_gs2mesh = self.mock_gs2mesh  # type: ignore[attr-defined]
+        self.mock_milo = MagicMock(name="run_milo")
+        _stub_milo.run_milo = self.mock_milo  # type: ignore[attr-defined]
+
+        self.mock_milo_settings_cls = MagicMock(name="MiloSettings")
+        _stub_milo_config.MiloSettings = self.mock_milo_settings_cls  # type: ignore[attr-defined]
 
         self.mock_bake = MagicMock(name="bake_texture")
         _stub_texture.bake_texture = self.mock_bake  # type: ignore[attr-defined]
@@ -117,27 +122,20 @@ class TestStageColmapSfmArgs(_WrapperTestBase):
         self.assertEqual(call_kwargs.get("unregister_process"), unreg)
 
 
-class TestStageGs2meshVRAMCleanup(_WrapperTestBase):
-    """_stage_gs2mesh_reconstruct calls cleanup_pytorch_vram after inference."""
+class TestStageMiloVRAMCleanup(_WrapperTestBase):
+    """_stage_milo_reconstruct calls cleanup_pytorch_vram after inference."""
 
     def test_cleanup_called_after_inference(self) -> None:
-        _stage_gs2mesh_reconstruct(
+        from scripts.milo_config import MiloSettings
+        settings = MiloSettings.from_preset("default")
+        _stage_milo_reconstruct(
             "/data/output/frames",
             "/data/output/colmap_sparse",
             "/data/output/masks",
             "/data/output",
-            gs_iterations=30000,
-            runtime_profile="compat",
-            stereo_model="DLNR_Middlebury",
-            tsdf_voxel_size=0.005,
-            tsdf_depth_trunc=0.04,
-            use_masks=True,
+            milo_settings=settings,
         )
-        self.mock_gs2mesh.assert_called_once()
-        settings = self.mock_gs2mesh.call_args.kwargs.get("settings")
-        self.assertIsNotNone(settings)
-        self.assertEqual(settings.runtime_profile, "compat")
-        self.assertEqual(settings.gs_iterations, 30000)
+        self.mock_milo.assert_called_once()
         self.mock_cleanup.assert_called_once()
 
 
@@ -194,11 +192,11 @@ class TestLazyImportVerification(_WrapperTestBase):
         )
         self.assertTrue(self.mock_colmap.called)
 
-    def test_gs2mesh_calls_underlying(self) -> None:
-        _stage_gs2mesh_reconstruct(
+    def test_milo_calls_underlying(self) -> None:
+        _stage_milo_reconstruct(
             "/frames", "/colmap_sparse", "/masks", "/out",
         )
-        self.assertTrue(self.mock_gs2mesh.called)
+        self.assertTrue(self.mock_milo.called)
 
     def test_texture_bake_calls_underlying(self) -> None:
         _stage_texture_bake(

@@ -7,7 +7,7 @@ Pipeline stages:
   1. Frame extraction (CPU)
   2. COLMAP SfM (GPU-accelerated feature matching)
   3. SAM2 interactive segmentation (GPU, Gradio UI)
-  4. gs2mesh reconstruction (GPU — 3DGS + stereo depth + TSDF)
+  4. MILo reconstruction (GPU — Mesh-In-the-Loop 3DGS)
   5. Texture baking (GPU when available, CPU fallback)
   6. Post-texture contact cleanup
 """
@@ -102,21 +102,21 @@ Examples:
         print(f"  → {mask_dir}")
 
     # =====================================================================
-    # Stage 4: gs2mesh Reconstruction
+    # Stage 4: MILo Reconstruction
     # =====================================================================
     if skip_to <= 4:
         print("\n" + "=" * 60)
-        print("Stage 4/6: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
+        print("Stage 4/6: MILo Reconstruction (Mesh-In-the-Loop 3DGS)")
         print("=" * 60)
         ensure_vram_available(
             min_free_mb=_VRAM_GATE_MIN_FREE_MB,
-            stage_name="before gs2mesh",
+            stage_name="before MILo",
             strict=_VRAM_GATE_STRICT,
         )
 
-        from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
+        from scripts.stage_milo_reconstruct import run_milo
 
-        mesh_ply = run_gs2mesh(
+        mesh_ply = run_milo(
             frames_dir,
             colmap_sparse_dir,
             mask_dir,

@@ -180,9 +180,8 @@ describe('ConfigPanel', () => {
         'frame_interval', 'max_frames',
         'colmap_matcher', 'colmap_max_features', 'colmap_image_size',
         'sam2_model', 'ground_plane_enabled',
-        'gs2mesh_preset', 'gs2mesh_gs_iterations', 'gs2mesh_runtime_profile',
-        'gs2mesh_stereo_model', 'gs2mesh_tsdf_voxel_size',
-        'gs2mesh_tsdf_depth_trunc', 'gs2mesh_use_masks',
+        'milo_preset', 'milo_iterations', 'milo_scene_type',
+        'milo_use_masks',
         'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
       ];
       for (const key of expectedKeys) {
@@ -201,8 +200,7 @@ describe('ConfigPanel', () => {
       // Numeric fields should have fallback defaults (positive numbers)
       expect(config.frame_interval).toBeGreaterThan(0);
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
-      expect(config.gs2mesh_preset).toBe('default');
-      expect(config.gs2mesh_runtime_profile).toBe('auto');
+      expect(config.milo_preset).toBe('default');
       expect(config.texture_view_assign_mode).toBe('legacy');
       expect(config.texture_quality_boost).toBe(false);
     });
@@ -219,41 +217,39 @@ describe('ConfigPanel', () => {
       expect(config.texture_quality_boost).toBe(true);
     });
 
-    it('reads the selected gs2mesh runtime profile', () => {
-      document.getElementById('cfg-gs2mesh-runtime-profile').value = 'compat';
+    it('reads the selected milo scene type', () => {
+      document.getElementById('cfg-milo-scene-type').value = 'outdoor';
       const config = panel.getConfig();
-      expect(config.gs2mesh_runtime_profile).toBe('compat');
+      expect(config.milo_scene_type).toBe('outdoor');
     });
 
-    it('reads the selected gs2mesh preset', () => {
-      document.getElementById('cfg-gs2mesh-preset').value = 'high';
+    it('reads the selected milo preset', () => {
+      document.getElementById('cfg-milo-preset').value = 'high';
       const config = panel.getConfig();
-      expect(config.gs2mesh_preset).toBe('high');
+      expect(config.milo_preset).toBe('high');
     });
   });
 
-  describe('gs2mesh presets', () => {
+  describe('milo presets', () => {
     it('applies High preset values to public Stage 4 inputs', () => {
-      const presetSelect = document.getElementById('cfg-gs2mesh-preset');
+      const presetSelect = document.getElementById('cfg-milo-preset');
       presetSelect.value = 'high';
       presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
 
-      expect(document.getElementById('cfg-gs2mesh-gs-iterations').value).toBe('15000');
-      expect(document.getElementById('cfg-gs2mesh-tsdf-voxel-size').value).toBe('0.005');
-      expect(document.getElementById('cfg-gs2mesh-tsdf-depth-trunc').value).toBe('0.03');
+      expect(document.getElementById('cfg-milo-iterations').value).toBe('30000');
     });
 
     it('marks the preset as custom after a Stage 4 public input edit', () => {
-      const presetSelect = document.getElementById('cfg-gs2mesh-preset');
+      const presetSelect = document.getElementById('cfg-milo-preset');
       presetSelect.value = 'high';
       presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
 
-      const iterations = document.getElementById('cfg-gs2mesh-gs-iterations');
+      const iterations = document.getElementById('cfg-milo-iterations');
       iterations.value = '24000';
       iterations.dispatchEvent(new Event('input', { bubbles: true }));
 
       expect(presetSelect.value).toBe('custom');
-      expect(panel.getConfig().gs2mesh_preset_base).toBe('high');
+      expect(panel.getConfig().milo_preset_base).toBe('high');
     });
   });
 

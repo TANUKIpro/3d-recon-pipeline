@@ -111,18 +111,18 @@ class TestBuildStageProgressPayload(unittest.TestCase):
 
     def test_session_updated(self) -> None:
         session = PipelineSession()
-        session.stage_start(PipelineStage.GS2MESH_RECONSTRUCT)
+        session.stage_start(PipelineStage.MILO_RECONSTRUCT)
 
         _build_stage_progress_payload(
             session,
-            PipelineStage.GS2MESH_RECONSTRUCT,
+            PipelineStage.MILO_RECONSTRUCT,
             progress=75.0,
-            detail="Running gs2mesh",
+            detail="Running MILo",
         )
 
-        info = session.stages[int(PipelineStage.GS2MESH_RECONSTRUCT)]
+        info = session.stages[int(PipelineStage.MILO_RECONSTRUCT)]
         self.assertEqual(info.progress, 75.0)
-        self.assertEqual(info.detail, "Running gs2mesh")
+        self.assertEqual(info.detail, "Running MILo")
 
     def test_checkpoint_resolved(self) -> None:
         session = PipelineSession()
