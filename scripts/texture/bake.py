@@ -626,7 +626,11 @@ def bake_texture(
         fill_weights = all_weights[ok]
 
         if fill_tidx.size > 0:
-            colors = _bilinear_sample(frame, px_proj[fill_tidx], py_proj[fill_tidx])
+            colors = _bilinear_sample(
+                frame,
+                px_proj[fill_tidx],
+                py_proj[fill_tidx],
+            )
             texture[ys[fill_tidx], xs[fill_tidx]] += fill_weights[:, None] * colors
             weight_sum[fill_tidx] += fill_weights
 
