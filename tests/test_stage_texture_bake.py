@@ -1,5 +1,8 @@
 import json
 import os
+import hashlib
+import sys
+import types
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -7,11 +10,15 @@ from unittest.mock import MagicMock, patch
 
 import cv2
 import numpy as np
+from plyfile import PlyData, PlyElement
 
+import scripts.texture.gpu_raster as gpu_raster
 from scripts.stage_texture_bake import (
     _apply_narrow_seam_leveling,
     _apply_view_hardening,
     _compute_conflict_texels,
+    _evaluate_view_packet,
+    _evaluate_view_samples,
     _compute_face_locked_views,
     _compute_region_gc_locked_views,
     _estimate_detail_band_shift,
@@ -22,10 +29,14 @@ from scripts.stage_texture_bake import (
     _resolve_texture_size,
     _resolve_texture_view_assign_mode,
     _load_poses,
+    _score_view_packet,
     _select_detail_companion_view_candidates,
     _select_detail_companion_views,
     _translate_patch,
     _update_topk_scores,
+    ViewEvalPacket,
+    ViewPacketShapeError,
+    bake_texture,
 )
 from scripts.texture.bake import (
     _maybe_simplify_mesh_for_uv,
@@ -39,6 +50,39 @@ def _make_mock_torch(cuda_available: bool = True) -> MagicMock:
     mock = MagicMock()
     mock.cuda.is_available.return_value = cuda_available
     return mock
+
+
+def _hash_arrays(*arrays: np.ndarray) -> str:
+    digest = hashlib.sha256()
+    for arr in arrays:
+        digest.update(np.ascontiguousarray(arr).tobytes())
+    return digest.hexdigest()
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _make_fake_xatlas(result):
+    class FakeAtlas:
+        def add_mesh(self, *args, **kwargs):
+            return None
+
+        def generate(self, chart_options=None, pack_options=None):
+            del chart_options, pack_options
+            return None
+
+        def __getitem__(self, index):
+            del index
+            return result
+
+    return types.SimpleNamespace(
+        Atlas=FakeAtlas,
+        ChartOptions=type("ChartOptions", (), {}),
+        PackOptions=type("PackOptions", (), {}),
+    )
 
 
 class ResolveTextureDeviceTests(unittest.TestCase):
@@ -208,6 +252,199 @@ class BlendNormalizationTests(unittest.TestCase):
         np.testing.assert_array_almost_equal(texture[3], expected_blend, decimal=5)
         # Single view → just that color
         np.testing.assert_array_almost_equal(texture[2], color_v0, decimal=5)
+
+
+class ViewEvalPacketTests(unittest.TestCase):
+    def _make_inputs(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        pos3d = np.array([
+            [0.0, 0.0, 1.0],
+            [0.2, 0.1, 1.4],
+            [-0.3, 0.2, 1.8],
+            [1.9, 0.0, 0.8],
+        ], dtype=np.float64)
+        normals = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        c2w = np.eye(4, dtype=np.float64)
+        K = np.array([
+            [4.0, 0.0, 4.0],
+            [0.0, 4.0, 4.0],
+            [0.0, 0.0, 1.0],
+        ], dtype=np.float64)
+        mask = np.ones((8, 8), dtype=bool)
+        mask[4, 4] = False
+        depth_buffer = np.full((8, 8), np.inf, dtype=np.float32)
+        depth_buffer[4, 4] = 0.95
+        depth_buffer[4, 5] = 1.5
+        depth_buffer[4, 3] = 1.9
+        return pos3d, normals, c2w, K, mask, depth_buffer
+
+    def test_packet_matches_public_view_scoring(self) -> None:
+        pos3d, normals, c2w, K, mask, depth_buffer = self._make_inputs()
+
+        packet, valid_packet, score_packet = _evaluate_view_packet(
+            pos3d=pos3d,
+            normals=normals,
+            c2w=c2w,
+            K=K,
+            img_w=8,
+            img_h=8,
+            mask_bool=mask,
+            depth_buffer=depth_buffer,
+            min_cos=0.2,
+            angle_exp=4.0,
+            dist_pow=1.0,
+            device="cpu",
+        )
+        valid_public, score_public, px_public, py_public = _evaluate_view_samples(
+            pos3d=pos3d,
+            normals=normals,
+            c2w=c2w,
+            K=K,
+            img_w=8,
+            img_h=8,
+            mask_bool=mask,
+            depth_buffer=depth_buffer,
+            min_cos=0.2,
+            angle_exp=4.0,
+            dist_pow=1.0,
+            device="cpu",
+        )
+        valid_rescored, score_rescored = _score_view_packet(
+            packet,
+            min_cos=0.2,
+            angle_exp=4.0,
+            dist_pow=1.0,
+        )
+
+        np.testing.assert_array_equal(valid_packet, valid_public)
+        np.testing.assert_array_equal(valid_rescored, valid_public)
+        np.testing.assert_array_equal(score_packet, score_public)
+        np.testing.assert_array_equal(score_rescored, score_public)
+        np.testing.assert_array_equal(packet.px_proj, px_public)
+        np.testing.assert_array_equal(packet.py_proj, py_public)
+
+    def test_packet_hash_regression(self) -> None:
+        pos3d, normals, c2w, K, mask, depth_buffer = self._make_inputs()
+
+        packet, valid, score = _evaluate_view_packet(
+            pos3d=pos3d,
+            normals=normals,
+            c2w=c2w,
+            K=K,
+            img_w=8,
+            img_h=8,
+            mask_bool=mask,
+            depth_buffer=depth_buffer,
+            min_cos=0.2,
+            angle_exp=4.0,
+            dist_pow=1.0,
+            device="cpu",
+        )
+
+        self.assertEqual(
+            _hash_arrays(
+                packet.px_proj,
+                packet.py_proj,
+                packet.sample_valid,
+                packet.cos_angle,
+                packet.distances,
+                valid,
+                score,
+            ),
+            "77827b06d2dbd09345faf180e598156cfc8bf2cbc7f6d8528fe0e772ce43f572",
+        )
+
+    def test_gpu_packet_length_mismatch_raises_targeted_error(self) -> None:
+        pos3d, normals, c2w, K, mask, depth_buffer = self._make_inputs()
+        pos3d = np.vstack([
+            pos3d,
+            np.array([[0.1, -0.2, 1.2]], dtype=np.float64),
+        ])
+        normals = np.vstack([
+            normals,
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float64),
+        ])
+        bad_packet = ViewEvalPacket(
+            px_proj=np.zeros(3, dtype=np.float64),
+            py_proj=np.zeros(3, dtype=np.float64),
+            sample_valid=np.array([True, False, True]),
+            cos_angle=np.ones(3, dtype=np.float64),
+            distances=np.ones(3, dtype=np.float64),
+        )
+
+        with patch(
+            "scripts.texture.gpu_raster.gpu_evaluate_view_packet",
+            return_value=bad_packet,
+        ):
+            with self.assertRaisesRegex(
+                ViewPacketShapeError,
+                "expected 5 samples",
+            ):
+                _evaluate_view_packet(
+                    pos3d=pos3d,
+                    normals=normals,
+                    c2w=c2w,
+                    K=K,
+                    img_w=8,
+                    img_h=8,
+                    mask_bool=mask,
+                    depth_buffer=depth_buffer,
+                    min_cos=0.2,
+                    angle_exp=4.0,
+                    dist_pow=1.0,
+                    device="cuda",
+                )
+
+
+class GpuTexelCacheTests(unittest.TestCase):
+    def test_subset_upload_does_not_replace_cached_canonical_texels(self) -> None:
+        full_pos = np.arange(18, dtype=np.float64).reshape(6, 3)
+        full_norm = np.tile(
+            np.array([[0.0, 0.0, 1.0]], dtype=np.float64),
+            (6, 1),
+        )
+        subset_pos = full_pos[:3].copy()
+        subset_norm = full_norm[:3].copy()
+        upload_count = {"count": 0}
+
+        def fake_as_tensor(array, device=None):
+            upload_count["count"] += 1
+            return {
+                "upload": upload_count["count"],
+                "shape": tuple(array.shape),
+                "device": device,
+            }
+
+        fake_torch = types.SimpleNamespace(as_tensor=fake_as_tensor)
+
+        with patch.object(gpu_raster, "_torch", fake_torch):
+            gpu_raster.clear_cache()
+            full_pos_gpu_1, full_norm_gpu_1 = gpu_raster._cache_texel_tensors(
+                full_pos, full_norm
+            )
+            subset_pos_gpu, subset_norm_gpu = gpu_raster._cache_texel_tensors(
+                subset_pos, subset_norm
+            )
+            full_pos_gpu_2, full_norm_gpu_2 = gpu_raster._cache_texel_tensors(
+                full_pos, full_norm
+            )
+
+            self.assertIs(gpu_raster._cached_pos3d_owner, full_pos)
+            self.assertIs(gpu_raster._cached_normals_owner, full_norm)
+            self.assertEqual(gpu_raster._cached_texel_count, 6)
+            gpu_raster.clear_cache()
+
+        self.assertIs(full_pos_gpu_1, full_pos_gpu_2)
+        self.assertIs(full_norm_gpu_1, full_norm_gpu_2)
+        self.assertIsNot(full_pos_gpu_1, subset_pos_gpu)
+        self.assertIsNot(full_norm_gpu_1, subset_norm_gpu)
+        self.assertEqual(upload_count["count"], 4)
 
 
 class PoseLoadingTests(unittest.TestCase):
@@ -1129,3 +1366,231 @@ class NarrowSeamLevelingTests(unittest.TestCase):
         self.assertGreater(seam_texels, 0)
         np.testing.assert_array_almost_equal(leveled[0, 0], texture[0, 0], decimal=5)
         self.assertGreater(float(leveled[5, 5, 1]), float(texture[5, 5, 1]) + 0.15)
+
+
+class BakeTextureRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _write_mesh(path: Path) -> None:
+        vertex_dtype = np.dtype([
+            ("x", "f4"),
+            ("y", "f4"),
+            ("z", "f4"),
+            ("red", "u1"),
+            ("green", "u1"),
+            ("blue", "u1"),
+        ])
+        face_dtype = np.dtype([("vertex_indices", "i4", (3,))])
+
+        vertices = np.array([
+            (-0.5, -0.5, 1.0, 255, 80, 80),
+            (0.5, -0.5, 1.0, 80, 255, 80),
+            (0.0, 0.5, 1.0, 80, 80, 255),
+        ], dtype=vertex_dtype)
+        faces = np.array([([0, 2, 1],)], dtype=face_dtype)
+        PlyData([
+            PlyElement.describe(vertices, "vertex"),
+            PlyElement.describe(faces, "face"),
+        ], text=True).write(str(path))
+
+    def test_mocked_single_triangle_output_hashes_are_stable(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            mesh_path = tmp_path / "mesh.ply"
+            self._write_mesh(mesh_path)
+
+            frames_dir = tmp_path / "frames"
+            masks_dir = tmp_path / "masks"
+            output_dir = tmp_path / "out"
+            frames_dir.mkdir()
+            masks_dir.mkdir()
+            output_dir.mkdir()
+
+            frame = np.zeros((8, 8, 3), dtype=np.uint8)
+            frame[..., 0] = 32
+            frame[..., 1] = np.array([
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+                [16, 24, 32, 40, 48, 56, 64, 72],
+            ], dtype=np.uint8)
+            frame[..., 2] = np.array([
+                [80, 80, 80, 80, 80, 80, 80, 80],
+                [88, 88, 88, 88, 88, 88, 88, 88],
+                [96, 96, 96, 96, 96, 96, 96, 96],
+                [104, 104, 104, 104, 104, 104, 104, 104],
+                [112, 112, 112, 112, 112, 112, 112, 112],
+                [120, 120, 120, 120, 120, 120, 120, 120],
+                [128, 128, 128, 128, 128, 128, 128, 128],
+                [136, 136, 136, 136, 136, 136, 136, 136],
+            ], dtype=np.uint8)
+            cv2.imwrite(str(frames_dir / "00000.jpg"), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(masks_dir / "00000.png"), np.full((8, 8), 255, dtype=np.uint8))
+
+            poses_path = tmp_path / "camera_poses.json"
+            poses_path.write_text(json.dumps([
+                {
+                    "frame_name": "00000.jpg",
+                    "transform_matrix": np.eye(4, dtype=np.float64).tolist(),
+                }
+            ]), encoding="utf-8")
+
+            parallel_result = (
+                np.array([0, 1, 2], dtype=np.uint32),
+                np.array([[0, 2, 1]], dtype=np.uint32),
+                np.array([[0.1, 0.1], [0.5, 0.9], [0.9, 0.1]], dtype=np.float32),
+            )
+            fake_xatlas = _make_fake_xatlas(parallel_result)
+            intrinsics = {"K": [[4.0, 0.0, 4.0], [0.0, 4.0, 4.0], [0.0, 0.0, 1.0]]}
+
+            with patch.dict(sys.modules, {"xatlas": fake_xatlas}):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "TEXTURE_DEVICE": "cpu",
+                        "TEXTURE_OVERSAMPLE": "1",
+                        "TEXTURE_BLEND_TOPK": "1",
+                        "TEXTURE_SHARPEN": "0",
+                        "TEXTURE_QUALITY_BOOST": "false",
+                    },
+                    clear=False,
+                ):
+                    with patch(
+                        "scripts.texture.parallel_uv.parallel_xatlas_generate",
+                        return_value=parallel_result,
+                    ):
+                        with patch(
+                            "scripts.texture.bake._estimate_intrinsics",
+                            return_value=intrinsics,
+                        ):
+                            with patch(
+                                "scripts.texture.bake.orient_mesh_outward",
+                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                            ):
+                                result = bake_texture(
+                                    str(mesh_path),
+                                    str(poses_path),
+                                    str(frames_dir),
+                                    str(masks_dir),
+                                    str(output_dir),
+                                    tex_size=8,
+                                    quality_boost=False,
+                                )
+
+            self.assertEqual(result, output_dir / "textured_mesh.obj")
+            self.assertEqual(_hash_file(output_dir / "textured_mesh.obj"), "ed5e5443d4cab796bc64dfa73d88299135b36fd2ceed6038b14fa8c6bb3b9f40")
+            self.assertEqual(_hash_file(output_dir / "textured_mesh.mtl"), "b2afa1559c9a36be27e591d98f7384c7f1c99e7bf33349e9e78c786c922efced")
+            self.assertEqual(_hash_file(output_dir / "texture.png"), "34f825db2c56bd448db64ccc94445ccdafd67b22bdfe497ab493f8eca4352f2f")
+
+    def test_fallback_subset_reuse_does_not_boolean_mismatch(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            mesh_path = tmp_path / "mesh.ply"
+            self._write_mesh(mesh_path)
+
+            frames_dir = tmp_path / "frames"
+            masks_dir = tmp_path / "masks"
+            output_dir = tmp_path / "out"
+            frames_dir.mkdir()
+            masks_dir.mkdir()
+            output_dir.mkdir()
+
+            frame0 = np.full((8, 8, 3), 96, dtype=np.uint8)
+            frame1 = np.full((8, 8, 3), 128, dtype=np.uint8)
+            cv2.imwrite(str(frames_dir / "00000.jpg"), cv2.cvtColor(frame0, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(frames_dir / "00001.jpg"), cv2.cvtColor(frame1, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(masks_dir / "00000.png"), np.full((8, 8), 255, dtype=np.uint8))
+            cv2.imwrite(str(masks_dir / "00001.png"), np.full((8, 8), 255, dtype=np.uint8))
+
+            poses_path = tmp_path / "camera_poses.json"
+            poses_path.write_text(json.dumps([
+                {
+                    "frame_name": "00000.jpg",
+                    "transform_matrix": np.eye(4, dtype=np.float64).tolist(),
+                },
+                {
+                    "frame_name": "00001.jpg",
+                    "transform_matrix": np.array(
+                        [[1.0, 0.0, 0.0, 1.0],
+                         [0.0, 1.0, 0.0, 0.0],
+                         [0.0, 0.0, 1.0, 0.0],
+                         [0.0, 0.0, 0.0, 1.0]],
+                        dtype=np.float64,
+                    ).tolist(),
+                }
+            ]), encoding="utf-8")
+
+            parallel_result = (
+                np.array([0, 1, 2], dtype=np.uint32),
+                np.array([[0, 2, 1]], dtype=np.uint32),
+                np.array([[0.1, 0.1], [0.5, 0.9], [0.9, 0.1]], dtype=np.float32),
+            )
+            fake_xatlas = _make_fake_xatlas(parallel_result)
+            intrinsics = {"K": [[4.0, 0.0, 4.0], [0.0, 4.0, 4.0], [0.0, 0.0, 1.0]]}
+
+            def fake_eval_samples(
+                pos3d, normals, c2w, K, img_w, img_h, mask_bool, depth_buffer,
+                min_cos, angle_exp, dist_pow, device="cpu",
+            ):
+                del normals, K, img_w, img_h, mask_bool, depth_buffer, device
+                n = len(pos3d)
+                px = np.linspace(1.0, 6.0, n, dtype=np.float64)
+                py = np.linspace(6.0, 1.0, n, dtype=np.float64)
+                valid = np.zeros(n, dtype=bool)
+                if min_cos <= 0.0:
+                    if float(c2w[0, 3]) < 0.5:
+                        valid[:3] = True
+                    else:
+                        valid[3:] = True
+                score = np.zeros(n, dtype=np.float64)
+                if np.any(valid):
+                    score[valid] = 1.0
+                return valid, score, px, py
+
+            with patch.dict(sys.modules, {"xatlas": fake_xatlas}):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "TEXTURE_DEVICE": "cpu",
+                        "TEXTURE_OVERSAMPLE": "1",
+                        "TEXTURE_BLEND_TOPK": "1",
+                        "TEXTURE_SHARPEN": "0",
+                        "TEXTURE_QUALITY_BOOST": "false",
+                    },
+                    clear=False,
+                ):
+                    with patch(
+                        "scripts.texture.parallel_uv.parallel_xatlas_generate",
+                        return_value=parallel_result,
+                    ):
+                        with patch(
+                            "scripts.texture.bake._estimate_intrinsics",
+                            return_value=intrinsics,
+                        ):
+                            with patch(
+                                "scripts.texture.bake.orient_mesh_outward",
+                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                            ):
+                                with patch(
+                                    "scripts.texture.bake._evaluate_view_samples",
+                                    side_effect=fake_eval_samples,
+                                ):
+                                    with patch(
+                                        "scripts.texture.bake._identify_cap_texels",
+                                        return_value=(None, None),
+                                    ):
+                                        result = bake_texture(
+                                            str(mesh_path),
+                                            str(poses_path),
+                                            str(frames_dir),
+                                            str(masks_dir),
+                                            str(output_dir),
+                                            tex_size=8,
+                                            quality_boost=False,
+                                        )
+
+            self.assertEqual(result, output_dir / "textured_mesh.obj")
+            self.assertTrue((output_dir / "texture.png").is_file())

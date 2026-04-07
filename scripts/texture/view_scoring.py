@@ -1,8 +1,46 @@
 """View scoring and selection for texture baking."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 import numpy as np
 
 from scripts.texture.intrinsics import _project_simple
+
+
+@dataclass(slots=True)
+class ViewEvalPacket:
+    """Projection/scoring intermediates for a single view."""
+
+    px_proj: np.ndarray
+    py_proj: np.ndarray
+    sample_valid: np.ndarray
+    cos_angle: np.ndarray
+    distances: np.ndarray
+
+
+class ViewPacketShapeError(RuntimeError):
+    """Raised when a view-evaluation packet length diverges from its input texels."""
+
+
+def _validate_view_packet(packet: ViewEvalPacket, expected_len: int) -> None:
+    """Ensure all packet arrays match the input texel count."""
+    lengths = {
+        "px_proj": int(packet.px_proj.shape[0]),
+        "py_proj": int(packet.py_proj.shape[0]),
+        "sample_valid": int(packet.sample_valid.shape[0]),
+        "cos_angle": int(packet.cos_angle.shape[0]),
+        "distances": int(packet.distances.shape[0]),
+    }
+    mismatched = {name: length for name, length in lengths.items() if length != expected_len}
+    if not mismatched:
+        return
+
+    details = ", ".join(f"{name}={length}" for name, length in mismatched.items())
+    raise ViewPacketShapeError(
+        f"ViewEvalPacket length mismatch: expected {expected_len} samples, got {details}"
+    )
 
 
 def _rasterize_view_depth(
@@ -140,14 +178,71 @@ def _evaluate_view_samples(
     dist_pow: float,
     device: str = "cpu",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    packet, valid, score = _evaluate_view_packet(
+        pos3d=pos3d,
+        normals=normals,
+        c2w=c2w,
+        K=K,
+        img_w=img_w,
+        img_h=img_h,
+        mask_bool=mask_bool,
+        depth_buffer=depth_buffer,
+        min_cos=min_cos,
+        angle_exp=angle_exp,
+        dist_pow=dist_pow,
+        device=device,
+    )
+
+    return valid, score, packet.px_proj, packet.py_proj
+
+
+def _score_view_packet(
+    packet: ViewEvalPacket,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply facing-angle thresholding and score computation to a packet."""
+    facing = packet.cos_angle > min_cos
+    valid = packet.sample_valid & facing
+
+    score = np.zeros(packet.cos_angle.shape[0], dtype=np.float64)
+    if np.any(valid):
+        ang = np.power(np.maximum(packet.cos_angle[valid], 0.0), angle_exp)
+        dist_term = np.power(np.maximum(packet.distances[valid], 1e-6), dist_pow)
+        score[valid] = ang / np.maximum(dist_term, 1e-10)
+
+    return valid, score
+
+
+def _evaluate_view_packet(
+    pos3d: np.ndarray,
+    normals: np.ndarray,
+    c2w: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+    mask_bool: np.ndarray,
+    depth_buffer: np.ndarray,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+    device: str = "cpu",
+) -> tuple[ViewEvalPacket, np.ndarray, np.ndarray]:
     """Evaluate which texels can be sampled from a view and return per-texel scores."""
     if device == "cuda":
         try:
-            from scripts.texture.gpu_raster import gpu_evaluate_view_samples
-            return gpu_evaluate_view_samples(
+            from scripts.texture.gpu_raster import gpu_evaluate_view_packet
+
+            packet = gpu_evaluate_view_packet(
                 pos3d, normals, c2w, K, img_w, img_h,
-                mask_bool, depth_buffer, min_cos, angle_exp, dist_pow,
+                mask_bool, depth_buffer,
             )
+            _validate_view_packet(packet, int(pos3d.shape[0]))
+            valid, score = _score_view_packet(packet, min_cos, angle_exp, dist_pow)
+            return packet, valid, score
+        except ViewPacketShapeError:
+            raise
         except Exception:
             pass  # fall through to CPU path
 
@@ -177,16 +272,17 @@ def _evaluate_view_samples(
     visibility_eps = np.maximum(1e-4, 0.003 * depth_ref / cos_safe)
     visible = depths <= (depth_ref + visibility_eps)
 
-    facing = cos_angle > min_cos
-    valid = in_bounds & mask_ok & visible & facing
+    packet = ViewEvalPacket(
+        px_proj=px_proj,
+        py_proj=py_proj,
+        sample_valid=(in_bounds & mask_ok & visible),
+        cos_angle=cos_angle,
+        distances=dists,
+    )
+    _validate_view_packet(packet, int(pos3d.shape[0]))
+    valid, score = _score_view_packet(packet, min_cos, angle_exp, dist_pow)
 
-    score = np.zeros(len(pos3d), dtype=np.float64)
-    if np.any(valid):
-        ang = np.power(np.maximum(cos_angle[valid], 0.0), angle_exp)
-        dist_term = np.power(np.maximum(dists[valid], 1e-6), dist_pow)
-        score[valid] = ang / np.maximum(dist_term, 1e-10)
-
-    return valid, score, px_proj, py_proj
+    return packet, valid, score
 
 
 def _update_topk_scores(

@@ -45,9 +45,13 @@ from scripts.texture.image_utils import (  # noqa: F401
 )
 from scripts.texture.view_scoring import (  # noqa: F401
     _apply_view_hardening,
+    _evaluate_view_packet,
     _evaluate_view_samples,
     _rasterize_view_depth,
+    _score_view_packet,
     _update_topk_scores,
+    ViewEvalPacket,
+    ViewPacketShapeError,
 )
 from scripts.texture.conflict_region import (  # noqa: F401
     _TEXTURE_CONFLICT_FACE_MIN_COVERAGE,

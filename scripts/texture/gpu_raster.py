@@ -216,27 +216,58 @@ def gpu_rasterize_uv_space(
 # Cached tensors for pos3d / normals (immutable across views)
 _cached_pos3d_gpu = None
 _cached_normals_gpu = None
-_cached_pos3d_id: int | None = None
+_cached_pos3d_owner: np.ndarray | None = None
+_cached_normals_owner: np.ndarray | None = None
+_cached_texel_count = 0
+
+
+def _upload_texel_tensors(pos3d: np.ndarray, normals: np.ndarray):
+    """Upload a texel position/normal pair to GPU without mutating cache state."""
+    torch = _torch
+    pos_gpu = torch.as_tensor(
+        pos3d.astype(np.float32, copy=False), device="cuda"
+    )
+    norm_gpu = torch.as_tensor(
+        normals.astype(np.float32, copy=False), device="cuda"
+    )
+    return pos_gpu, norm_gpu
 
 
 def _cache_texel_tensors(pos3d: np.ndarray, normals: np.ndarray):
-    """Upload pos3d and normals to GPU once."""
-    global _cached_pos3d_gpu, _cached_normals_gpu, _cached_pos3d_id
-    torch = _torch
-    pid = id(pos3d)
-    if _cached_pos3d_id == pid and _cached_pos3d_gpu is not None:
+    """Upload pos3d and normals to GPU, preserving the largest canonical texel set.
+
+    The main bake loop evaluates the full texel set repeatedly and benefits from a
+    persistent cache. Later fallback/detail-refinement passes evaluate smaller
+    subsets; those must not evict the canonical cache, or a recycled Python object
+    id can cause stale GPU tensors to be reused for a different subset length.
+    """
+    global _cached_pos3d_gpu, _cached_normals_gpu
+    global _cached_pos3d_owner, _cached_normals_owner, _cached_texel_count
+
+    if (
+        _cached_pos3d_gpu is not None
+        and _cached_normals_gpu is not None
+        and _cached_pos3d_owner is pos3d
+        and _cached_normals_owner is normals
+    ):
         return _cached_pos3d_gpu, _cached_normals_gpu
-    _cached_pos3d_gpu = torch.as_tensor(
-        pos3d.astype(np.float32, copy=False), device="cuda"
-    )
-    _cached_normals_gpu = torch.as_tensor(
-        normals.astype(np.float32, copy=False), device="cuda"
-    )
-    _cached_pos3d_id = pid
-    return _cached_pos3d_gpu, _cached_normals_gpu
+
+    texel_count = int(pos3d.shape[0])
+    if (
+        _cached_pos3d_gpu is None
+        or _cached_normals_gpu is None
+        or texel_count >= _cached_texel_count
+    ):
+        _cached_pos3d_gpu, _cached_normals_gpu = _upload_texel_tensors(pos3d, normals)
+        _cached_pos3d_owner = pos3d
+        _cached_normals_owner = normals
+        _cached_texel_count = texel_count
+        return _cached_pos3d_gpu, _cached_normals_gpu
+
+    return _upload_texel_tensors(pos3d, normals)
 
 
-def gpu_evaluate_view_samples(
+def gpu_evaluate_view_packet(
     pos3d: np.ndarray,
     normals: np.ndarray,
     c2w: np.ndarray,
@@ -245,18 +276,13 @@ def gpu_evaluate_view_samples(
     img_h: int,
     mask_bool: np.ndarray,
     depth_buffer: np.ndarray,
-    min_cos: float,
-    angle_exp: float,
-    dist_pow: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """GPU-accelerated view sample evaluation. Same interface as CPU version."""
+) -> "ViewEvalPacket":
+    """GPU-accelerated view sample evaluation packet builder."""
+    from scripts.texture.view_scoring import ViewEvalPacket, _validate_view_packet
+
     torch = _torch
 
     pos_gpu, norm_gpu = _cache_texel_tensors(pos3d, normals)
-    # If pos3d is a slice (different id), do a direct upload
-    if id(pos3d) != _cached_pos3d_id:
-        pos_gpu = torch.as_tensor(pos3d.astype(np.float32, copy=False), device="cuda")
-        norm_gpu = torch.as_tensor(normals.astype(np.float32, copy=False), device="cuda")
 
     c2w_t = torch.as_tensor(c2w.astype(np.float32, copy=False), device="cuda")
     K_t = torch.as_tensor(K.astype(np.float32, copy=False), device="cuda")
@@ -296,16 +322,45 @@ def gpu_evaluate_view_samples(
     d_np = d.cpu().numpy().astype(np.float64)
     visible = d_np <= (depth_ref + visibility_eps)
 
-    facing = cos_np > min_cos
-    valid = in_bounds_np & mask_ok & visible & facing
+    packet = ViewEvalPacket(
+        px_proj=u_np,
+        py_proj=v_np,
+        sample_valid=(in_bounds_np & mask_ok & visible),
+        cos_angle=cos_np,
+        distances=dists_np,
+    )
+    _validate_view_packet(packet, int(pos3d.shape[0]))
+    return packet
 
-    score = np.zeros(len(pos3d), dtype=np.float64)
-    if np.any(valid):
-        ang = np.power(np.maximum(cos_np[valid], 0.0), angle_exp)
-        dist_term = np.power(np.maximum(dists_np[valid], 1e-6), dist_pow)
-        score[valid] = ang / np.maximum(dist_term, 1e-10)
 
-    return valid, score, u_np, v_np
+def gpu_evaluate_view_samples(
+    pos3d: np.ndarray,
+    normals: np.ndarray,
+    c2w: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+    mask_bool: np.ndarray,
+    depth_buffer: np.ndarray,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """GPU-accelerated view sample evaluation. Same interface as CPU version."""
+    from scripts.texture.view_scoring import _score_view_packet
+
+    packet = gpu_evaluate_view_packet(
+        pos3d=pos3d,
+        normals=normals,
+        c2w=c2w,
+        K=K,
+        img_w=img_w,
+        img_h=img_h,
+        mask_bool=mask_bool,
+        depth_buffer=depth_buffer,
+    )
+    valid, score = _score_view_packet(packet, min_cos, angle_exp, dist_pow)
+    return valid, score, packet.px_proj, packet.py_proj
 
 
 # ---------------------------------------------------------------------------
@@ -378,12 +433,15 @@ def gpu_batch_color_score(
 def clear_cache():
     """Release all cached GPU tensors."""
     global _cached_verts_f32, _cached_faces_i32, _cached_mesh_id
-    global _cached_pos3d_gpu, _cached_normals_gpu, _cached_pos3d_id
+    global _cached_pos3d_gpu, _cached_normals_gpu
+    global _cached_pos3d_owner, _cached_normals_owner, _cached_texel_count
     global _cuda_ctx
     _cached_verts_f32 = None
     _cached_faces_i32 = None
     _cached_mesh_id = None
     _cached_pos3d_gpu = None
     _cached_normals_gpu = None
-    _cached_pos3d_id = None
+    _cached_pos3d_owner = None
+    _cached_normals_owner = None
+    _cached_texel_count = 0
     # Don't destroy the context — it's reusable
