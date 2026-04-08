@@ -92,7 +92,7 @@ MILO_PRESETS: dict[str, dict[str, object]] = {
         "iterations": 7000,
         "scene_type": "indoor",
         "mesh_config": "lowres",
-        "extraction_method": "sdf",
+        "extraction_method": "regular_tsdf",
         "rasterizer": "radegs",
         "use_masks": True,
         "dense_gaussians": False,

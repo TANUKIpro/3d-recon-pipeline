@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from argparse import Namespace
 import json
 import re
 import unittest
@@ -10,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from scripts.milo_config import MiloSettings
+from scripts import stage_milo_reconstruct as milo_stage
 from scripts.stage_milo_reconstruct import (
     _build_milo_env,
     _build_milo_extract_args,
@@ -19,6 +21,7 @@ from scripts.stage_milo_reconstruct import (
     _find_recon_dir,
     _parse_milo_progress,
     _setup_milo_source_dir,
+    _write_milo_train_config,
     run_milo,
 )
 
@@ -123,6 +126,40 @@ class TestBuildMiloTrainArgs(unittest.TestCase):
 
         self.assertIn("--dense_gaussians", args)
 
+    def test_runtime_config_path_is_forwarded(self) -> None:
+        settings = MiloSettings.from_preset("fast")
+        args = _build_milo_train_args(
+            Path("/tmp/source"),
+            Path("/tmp/model"),
+            settings,
+            config_path=Path("/tmp/milo-runtime-config"),
+        )
+
+        self.assertEqual(
+            args[args.index("--config_path") + 1],
+            "/tmp/milo-runtime-config",
+        )
+
+
+class TestWriteMiloTrainConfig(unittest.TestCase):
+    def test_overrides_iterations_while_preserving_base_config(self) -> None:
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            base_config = tmp_path / "fast"
+            base_config.write_text(
+                "Namespace(iterations=18000, densify_until_iter=3000)\n",
+                encoding="utf-8",
+            )
+            settings = MiloSettings.from_preset("fast")
+
+            with patch.object(milo_stage, "_MILO_TRAIN_CONFIG_PATH", base_config):
+                runtime_config = _write_milo_train_config(tmp_path, settings)
+
+            rendered = runtime_config.read_text(encoding="utf-8").strip()
+            parsed = eval(rendered, {"Namespace": Namespace})
+            self.assertEqual(parsed.iterations, 7000)
+            self.assertEqual(parsed.densify_until_iter, 3000)
+
 
 class TestBuildMiloExtractArgs(unittest.TestCase):
     def test_sdf_extraction_method(self) -> None:
@@ -132,6 +169,9 @@ class TestBuildMiloExtractArgs(unittest.TestCase):
         )
 
         self.assertIn("mesh_extract_sdf.py", args[2])
+        self.assertEqual(args[args.index("--iteration") + 1], "18000")
+        self.assertEqual(args[args.index("--config") + 1], "default")
+        self.assertEqual(args[args.index("--imp_metric") + 1], "indoor")
 
     def test_integration_extraction_method(self) -> None:
         settings = MiloSettings(
@@ -145,19 +185,17 @@ class TestBuildMiloExtractArgs(unittest.TestCase):
         )
 
         self.assertIn("mesh_extract_integration.py", args[2])
+        self.assertEqual(args[args.index("--iteration") + 1], "18000")
+        self.assertEqual(args[args.index("--imp_metric") + 1], "indoor")
 
     def test_regular_tsdf_extraction_method_includes_mesh_res(self) -> None:
-        settings = MiloSettings(
-            iterations=18000, scene_type="indoor", mesh_config="default",
-            extraction_method="regular_tsdf", rasterizer="radegs",
-            use_masks=True, dense_gaussians=False,
-            data_device="cuda", mesh_res=512,
-        )
+        settings = MiloSettings.from_preset("fast")
         args = _build_milo_extract_args(
             Path("/tmp/source"), Path("/tmp/model"), settings,
         )
 
         self.assertIn("mesh_extract_regular_tsdf.py", args[2])
+        self.assertEqual(args[args.index("--iteration") + 1], "7000")
         self.assertEqual(args[args.index("--mesh_res") + 1], "512")
 
 
@@ -257,7 +295,15 @@ class TestRunMiloIntegration(unittest.TestCase):
 
             with patch("scripts.vram_utils.cleanup_pytorch_vram"), \
                  patch("scripts.vram_utils.log_vram"), \
-                 patch("scripts.vram_utils.log_vram_detailed"):
+                 patch("scripts.vram_utils.log_vram_detailed"), \
+                 patch(
+                     "scripts.stage_milo_reconstruct._trim_mesh_with_masks",
+                     return_value=mesh_file,
+                 ), \
+                 patch(
+                     "scripts.stage_milo_reconstruct._write_milo_train_config",
+                     return_value=out / "milo_train_runtime_config",
+                 ):
                 result = run_milo(
                     str(frames_dir),
                     str(colmap_sparse),
@@ -308,7 +354,15 @@ class TestRunMiloIntegration(unittest.TestCase):
 
             with patch("scripts.vram_utils.cleanup_pytorch_vram"), \
                  patch("scripts.vram_utils.log_vram"), \
-                 patch("scripts.vram_utils.log_vram_detailed"):
+                 patch("scripts.vram_utils.log_vram_detailed"), \
+                 patch(
+                     "scripts.stage_milo_reconstruct._trim_mesh_with_masks",
+                     return_value=mesh_file,
+                 ), \
+                 patch(
+                     "scripts.stage_milo_reconstruct._write_milo_train_config",
+                     return_value=out / "milo_train_runtime_config",
+                 ):
                 run_milo(
                     str(frames_dir),
                     str(colmap_sparse),
@@ -360,7 +414,11 @@ class TestRunMiloIntegration(unittest.TestCase):
 
             with patch("scripts.vram_utils.cleanup_pytorch_vram"), \
                  patch("scripts.vram_utils.log_vram"), \
-                 patch("scripts.vram_utils.log_vram_detailed"):
+                 patch("scripts.vram_utils.log_vram_detailed"), \
+                 patch(
+                     "scripts.stage_milo_reconstruct._write_milo_train_config",
+                     return_value=out / "milo_train_runtime_config",
+                 ):
                 run_milo(
                     str(frames_dir),
                     str(colmap_sparse),

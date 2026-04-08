@@ -157,12 +157,42 @@ def _apply_milo_env_fallbacks(
     return values
 
 
+def _is_legacy_fast_preset_payload(raw: Mapping[str, Any]) -> bool:
+    if normalize_preset(raw.get("milo_preset"), fallback="") != "fast":
+        return False
+    if raw.get("milo_iterations") is not None and parse_int(raw.get("milo_iterations"), 7000) != 7000:
+        return False
+    if raw.get("milo_scene_type") is not None and parse_choice(raw.get("milo_scene_type"), MILO_SCENE_TYPES, "indoor") != "indoor":
+        return False
+    if raw.get("milo_mesh_config") is not None and parse_choice(raw.get("milo_mesh_config"), MILO_MESH_CONFIGS, "lowres") != "lowres":
+        return False
+    if raw.get("milo_extraction_method") is not None and parse_choice(raw.get("milo_extraction_method"), MILO_EXTRACTION_METHODS, "sdf") != "sdf":
+        return False
+    if raw.get("milo_use_masks") is not None and parse_bool(raw.get("milo_use_masks"), True) is not True:
+        return False
+    if raw.get("milo_rasterizer") is not None and parse_choice(raw.get("milo_rasterizer"), MILO_RASTERIZERS, "radegs") != "radegs":
+        return False
+    if raw.get("milo_dense_gaussians") is not None and parse_bool(raw.get("milo_dense_gaussians"), False) is not False:
+        return False
+    if raw.get("milo_data_device") is not None and parse_choice(raw.get("milo_data_device"), {"cuda", "cpu"}, "cuda") != "cuda":
+        return False
+    if raw.get("milo_mesh_res") is not None and parse_int(raw.get("milo_mesh_res"), 512) != 512:
+        return False
+    return True
+
+
 def _resolve_milo_config(
     raw: Mapping[str, Any],
     env_map: Mapping[str, str],
     *,
     explicit_keys: set[str] | None,
 ) -> dict[str, Any]:
+    if _is_legacy_fast_preset_payload(raw):
+        values = config_fields_from_preset("fast")
+        values["milo_preset"] = "fast"
+        values["milo_preset_base"] = "fast"
+        return values
+
     raw_preset = normalize_preset(raw.get("milo_preset"), fallback="")
     raw_preset_base = normalize_preset(raw.get("milo_preset_base"), fallback="")
     env_preset = normalize_preset(env_map.get("MILO_PRESET"), fallback="")

@@ -239,6 +239,14 @@ describe('ConfigPanel', () => {
       expect(document.getElementById('cfg-milo-iterations').value).toBe('30000');
     });
 
+    it('applies Fast preset values to extraction settings', () => {
+      const presetSelect = document.getElementById('cfg-milo-preset');
+      presetSelect.value = 'fast';
+      presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+      expect(document.getElementById('cfg-milo-extraction-method').value).toBe('regular_tsdf');
+    });
+
     it('marks the preset as custom after a Stage 4 public input edit', () => {
       const presetSelect = document.getElementById('cfg-milo-preset');
       presetSelect.value = 'high';

@@ -8,6 +8,7 @@ Takes COLMAP output + optional SAM2 masks, produces object_mesh.ply.
 
 from __future__ import annotations
 
+from argparse import Namespace
 import gc
 import os
 import re
@@ -21,6 +22,7 @@ from scripts.milo_config import MiloSettings
 
 _MILO_BASE = Path("/opt/MILo")
 _MILO_SCRIPTS = _MILO_BASE / "milo"
+_MILO_TRAIN_CONFIG_PATH = _MILO_SCRIPTS / "configs" / "fast"
 
 
 class _SubprocessFailure(RuntimeError):
@@ -117,11 +119,17 @@ def run_milo(
     # Step 2: MILo training.
     _report(5.0, "Training MILo (Mesh-In-the-Loop 3DGS)")
     model_dir = milo_workdir / "model"
+    train_config_path = _write_milo_train_config(milo_workdir, settings)
 
     from scripts.vram_utils import log_vram_detailed
     log_vram_detailed("before MILo training subprocess")
 
-    train_args = _build_milo_train_args(milo_source, model_dir, settings)
+    train_args = _build_milo_train_args(
+        milo_source,
+        model_dir,
+        settings,
+        config_path=train_config_path,
+    )
     _run_subprocess(
         train_args,
         cwd=str(_MILO_SCRIPTS),
@@ -318,6 +326,8 @@ def _build_milo_train_args(
     source_path: Path,
     model_path: Path,
     settings: MiloSettings,
+    *,
+    config_path: Path | None = None,
 ) -> list[str]:
     args = [
         "python3", "-u",
@@ -330,9 +340,35 @@ def _build_milo_train_args(
         "--iterations", str(settings.iterations),
         "--data_device", settings.data_device,
     ]
+    if config_path is not None:
+        args.extend(["--config_path", str(config_path)])
     if settings.dense_gaussians:
         args.append("--dense_gaussians")
     return args
+
+
+def _load_milo_train_config(config_path: Path) -> dict[str, object]:
+    raw = config_path.read_text(encoding="utf-8").strip()
+    if not raw:
+        return {}
+    parsed = eval(raw, {"Namespace": Namespace})
+    if not isinstance(parsed, Namespace):
+        raise RuntimeError(f"Unexpected MILo config format: {config_path}")
+    return vars(parsed).copy()
+
+
+def _write_milo_train_config(workdir: Path, settings: MiloSettings) -> Path:
+    values = _load_milo_train_config(_MILO_TRAIN_CONFIG_PATH)
+    values["iterations"] = settings.iterations
+    runtime_config_path = workdir / "milo_train_runtime_config"
+    rendered_args = ", ".join(
+        f"{key}={value!r}" for key, value in sorted(values.items())
+    )
+    runtime_config_path.write_text(
+        f"Namespace({rendered_args})\n",
+        encoding="utf-8",
+    )
+    return runtime_config_path
 
 
 def _build_milo_env() -> dict[str, str]:
@@ -386,8 +422,16 @@ def _build_milo_extract_args(
         str(_MILO_SCRIPTS / script),
         "-s", str(source_path),
         "-m", str(model_path),
+        "--iteration", str(settings.iterations),
         "--rasterizer", settings.rasterizer,
     ]
+    if settings.extraction_method == "sdf":
+        args.extend([
+            "--config", settings.mesh_config,
+            "--imp_metric", settings.scene_type,
+        ])
+    elif settings.extraction_method == "integration":
+        args.extend(["--imp_metric", settings.scene_type])
     if settings.extraction_method == "regular_tsdf":
         args.extend(["--mesh_res", str(settings.mesh_res)])
     return args

@@ -308,6 +308,57 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         self.assertEqual(cfg.milo_preset_base, "high")
         self.assertEqual(cfg.milo_iterations, 30000)
 
+    def test_milo_fast_preset_applies_regular_tsdf_values(self) -> None:
+        cfg = _build({"milo_preset": "fast"})
+        self.assertEqual(cfg.milo_preset, "fast")
+        self.assertEqual(cfg.milo_preset_base, "fast")
+        self.assertEqual(cfg.milo_iterations, 7000)
+        self.assertEqual(cfg.milo_mesh_config, "lowres")
+        self.assertEqual(cfg.milo_extraction_method, "regular_tsdf")
+        self.assertEqual(cfg.milo_mesh_res, 512)
+
+    def test_milo_legacy_fast_payload_is_migrated(self) -> None:
+        raw = {
+            "milo_preset": "fast",
+            "milo_preset_base": "fast",
+            "milo_iterations": 7000,
+            "milo_scene_type": "indoor",
+            "milo_mesh_config": "lowres",
+            "milo_extraction_method": "sdf",
+            "milo_use_masks": True,
+            "milo_rasterizer": "radegs",
+            "milo_dense_gaussians": False,
+            "milo_data_device": "cuda",
+            "milo_mesh_res": 512,
+        }
+        cfg = _build(raw)
+        self.assertEqual(cfg.milo_preset, "fast")
+        self.assertEqual(cfg.milo_extraction_method, "regular_tsdf")
+        self.assertEqual(cfg.milo_mesh_res, 512)
+
+    def test_milo_legacy_fast_payload_migrates_even_with_explicit_keys(self) -> None:
+        raw = {
+            "milo_preset": "fast",
+            "milo_preset_base": "fast",
+            "milo_iterations": 7000,
+            "milo_scene_type": "indoor",
+            "milo_mesh_config": "lowres",
+            "milo_extraction_method": "sdf",
+            "milo_use_masks": True,
+            "milo_rasterizer": "radegs",
+            "milo_dense_gaussians": False,
+            "milo_data_device": "cuda",
+            "milo_mesh_res": 512,
+        }
+        cfg = build_pipeline_config(
+            raw,
+            explicit_keys=set(raw.keys()),
+            **_COMMON_BUILD_KW,
+        )
+        self.assertEqual(cfg.milo_preset, "fast")
+        self.assertEqual(cfg.milo_extraction_method, "regular_tsdf")
+        self.assertEqual(cfg.milo_mesh_res, 512)
+
     def test_milo_explicit_override_forces_custom_while_preserving_base(self) -> None:
         cfg = build_pipeline_config(
             {

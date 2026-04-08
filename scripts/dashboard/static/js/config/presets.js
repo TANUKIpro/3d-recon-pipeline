@@ -26,7 +26,7 @@ export const MILO_PUBLIC_PRESETS = {
     milo_iterations: 7000,
     milo_scene_type: 'indoor',
     milo_mesh_config: 'lowres',
-    milo_extraction_method: 'sdf',
+    milo_extraction_method: 'regular_tsdf',
     milo_use_masks: true,
   },
 };
