@@ -86,7 +86,7 @@ RUN cd /opt/MILo/submodules/tetra_triangulation \
     && cmake -DCMAKE_CXX_FLAGS="-I${CUDA_HOME}/include" . && make \
     && pip install --no-cache-dir --no-build-isolation . \
     && cp tetranerf/utils/extension/tetranerf_cpp_extension.cpython-*.so \
-       "$(python3 -c 'import tetranerf.utils.extension as m; import os; print(os.path.dirname(m.__file__))')/"
+       "$(cd / && python3 -c 'import tetranerf.utils.extension as m, os; print(os.path.dirname(m.__file__))')/"
 
 # nvdiffrast is already installed from Layer 3b
 
