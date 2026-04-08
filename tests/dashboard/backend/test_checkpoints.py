@@ -40,9 +40,9 @@ class TestCheckpointSpecs(unittest.TestCase):
     def test_stage4_has_milo_checkpoints(self) -> None:
         specs = checkpoint_specs(4)
         ids = [s["id"] for s in specs]
-        self.assertIn("s4.train_gs", ids)
-        self.assertIn("s4.stereo", ids)
-        self.assertIn("s4.tsdf", ids)
+        self.assertIn("s4.undistort", ids)
+        self.assertIn("s4.train_milo", ids)
+        self.assertIn("s4.mesh_extract", ids)
         self.assertIn("s4.save", ids)
 
     def test_stage5_has_texture_checkpoints(self) -> None:
@@ -65,7 +65,7 @@ class TestFirstCheckpointId(unittest.TestCase):
         self.assertEqual(first_checkpoint_id(1), "s1.inspect")
 
     def test_stage4_first(self) -> None:
-        self.assertEqual(first_checkpoint_id(4), "s4.train_gs")
+        self.assertEqual(first_checkpoint_id(4), "s4.undistort")
 
     def test_stage5_first(self) -> None:
         self.assertEqual(first_checkpoint_id(5), "s5.load")
@@ -135,9 +135,9 @@ class TestResolveCheckpointId(unittest.TestCase):
 
     def test_stage4_pattern(self) -> None:
         result = resolve_checkpoint_id(
-            4, "Training 3D Gaussian splatting"
+            4, "Undistorting images"
         )
-        self.assertEqual(result, "s4.train_gs")
+        self.assertEqual(result, "s4.undistort")
 
     def test_stage5_export_pattern(self) -> None:
         result = resolve_checkpoint_id(

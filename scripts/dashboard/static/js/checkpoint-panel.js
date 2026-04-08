@@ -38,9 +38,9 @@ const CHECKPOINT_TEMPLATES = {
     'Wait for mask verification',
   ],
   4: [
-    'Train 3D Gaussian Splatting',
-    'Mesh extraction',
-    'Post-process mesh',
+    'COLMAP undistortion',
+    'MILo training (Mesh-In-the-Loop 3DGS)',
+    'Mesh extraction (SDF)',
     'Save output mesh',
   ],
   5: [
@@ -66,7 +66,7 @@ const CHECKPOINT_IDS = {
   1: ['s1.inspect', 's1.extract', 's1.finalize'],
   2: ['s2.features', 's2.match', 's2.reconstruct', 's2.export'],
   3: ['s3.initialize', 's3.interact', 's3.propagate', 's3.verify'],
-  4: ['s4.train_gs', 's4.stereo', 's4.tsdf', 's4.save'],
+  4: ['s4.undistort', 's4.train_milo', 's4.mesh_extract', 's4.save'],
   5: ['s5.load', 's5.intrinsics', 's5.uv', 's5.score', 's5.fill', 's5.export'],
   6: ['s6.proposal', 's6.review', 's6.holefill', 's6.noise', 's6.watertight', 's6.finalclean', 's6.apply'],
 };
@@ -90,9 +90,9 @@ const DETAIL_MATCHERS = {
     { re: /waiting for mask verification|verification/i, idx: 3 },
   ],
   4: [
-    { re: /training 3d gaussian|3dgs training|iteration|running milo/i, idx: 0 },
-    { re: /mesh extraction|extracting mesh/i, idx: 1 },
-    { re: /post-process|collecting output/i, idx: 2 },
+    { re: /undistorting images|colmap image_undistorter/i, idx: 0 },
+    { re: /training milo|milo training|iteration/i, idx: 1 },
+    { re: /mesh extraction|mesh_extract|extracting mesh/i, idx: 2 },
     { re: /milo reconstruction complete|milo complete/i, idx: 3 },
   ],
   5: [
