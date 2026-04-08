@@ -20,6 +20,7 @@ import numpy as np
 from scripts.milo_config import MiloSettings
 
 _MILO_BASE = Path("/opt/MILo")
+_MILO_SCRIPTS = _MILO_BASE / "milo"
 
 
 class _SubprocessFailure(RuntimeError):
@@ -123,7 +124,7 @@ def run_milo(
     train_args = _build_milo_train_args(milo_source, model_dir, settings)
     _run_subprocess(
         train_args,
-        cwd=str(_MILO_BASE),
+        cwd=str(_MILO_SCRIPTS),
         prefix="MILo",
         progress_fn=lambda line: _parse_milo_progress(
             line, settings.iterations, _report,
@@ -146,7 +147,7 @@ def run_milo(
     extract_args = _build_milo_extract_args(milo_source, model_dir, settings)
     _run_subprocess(
         extract_args,
-        cwd=str(_MILO_BASE),
+        cwd=str(_MILO_SCRIPTS),
         prefix="MILo-extract",
         register_process=register_process,
         unregister_process=unregister_process,
@@ -320,7 +321,7 @@ def _build_milo_train_args(
 ) -> list[str]:
     args = [
         "python3", "-u",
-        str(_MILO_BASE / "train.py"),
+        str(_MILO_SCRIPTS / "train.py"),
         "-s", str(source_path),
         "-m", str(model_path),
         "--imp_metric", settings.scene_type,
@@ -337,10 +338,12 @@ def _build_milo_train_args(
 def _build_milo_env() -> dict[str, str]:
     """Build environment for MILo subprocess."""
     env = dict(os.environ)
-    milo_path = str(_MILO_BASE)
+    milo_paths = [str(_MILO_SCRIPTS), str(_MILO_BASE)]
     existing = env.get("PYTHONPATH", "")
-    if milo_path not in existing:
-        env["PYTHONPATH"] = f"{milo_path}:{existing}" if existing else milo_path
+    parts = [p for p in milo_paths if p not in existing]
+    if parts:
+        prefix = ":".join(parts)
+        env["PYTHONPATH"] = f"{prefix}:{existing}" if existing else prefix
     return env
 
 
@@ -380,7 +383,7 @@ def _build_milo_extract_args(
 
     args = [
         "python3", "-u",
-        str(_MILO_BASE / script),
+        str(_MILO_SCRIPTS / script),
         "-s", str(source_path),
         "-m", str(model_path),
         "--rasterizer", settings.rasterizer,

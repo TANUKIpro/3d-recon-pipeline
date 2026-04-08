@@ -74,13 +74,19 @@ RUN cd /opt/MILo \
     && pip install --no-cache-dir --no-build-isolation \
         submodules/diff-gaussian-rasterization \
         submodules/diff-gaussian-rasterization_gof \
+        submodules/diff-gaussian-rasterization_ms \
         submodules/simple-knn \
         submodules/fused-ssim
 
 # Build tetra_triangulation (Delaunay mesh extraction)
+# NOTE: setup.py has ext_modules commented out, so pip install only copies the
+# Python package.  We cmake/make first to build the C++ SO, then pip-install
+# the Python package, then manually copy the SO into the installed location.
 RUN cd /opt/MILo/submodules/tetra_triangulation \
     && cmake -DCMAKE_CXX_FLAGS="-I${CUDA_HOME}/include" . && make \
-    && pip install --no-cache-dir --no-build-isolation .
+    && pip install --no-cache-dir --no-build-isolation . \
+    && cp tetranerf/utils/extension/tetranerf_cpp_extension.cpython-*.so \
+       "$(python3 -c 'import tetranerf.utils.extension as m; import os; print(os.path.dirname(m.__file__))')/"
 
 # nvdiffrast is already installed from Layer 3b
 
