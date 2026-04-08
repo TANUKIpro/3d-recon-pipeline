@@ -66,7 +66,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake libgmp-dev libcgal-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --recursive https://github.com/Anttwo/MILo.git /opt/MILo
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" \
+    && git clone --recursive https://github.com/Anttwo/MILo.git /opt/MILo
 
 # Build MILo's gaussian rasterizers and core CUDA extensions
 RUN cd /opt/MILo \
@@ -77,8 +78,8 @@ RUN cd /opt/MILo \
         submodules/fused-ssim
 
 # Build tetra_triangulation (Delaunay mesh extraction)
-RUN cd /opt/MILo/submodules/tetra-triangulation \
-    && cmake . && make \
+RUN cd /opt/MILo/submodules/tetra_triangulation \
+    && cmake -DCMAKE_CXX_FLAGS="-I${CUDA_HOME}/include" . && make \
     && pip install --no-cache-dir --no-build-isolation .
 
 # nvdiffrast is already installed from Layer 3b
