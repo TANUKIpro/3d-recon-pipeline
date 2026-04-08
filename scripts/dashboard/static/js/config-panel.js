@@ -130,17 +130,18 @@ export class ConfigPanel {
     this._updateResumeHint();
   }
 
-  setObjectName(name) {
+  setObjectName(name, opts = {}) {
     const normalized = this._normalizeObjectName(name);
     if (!normalized) return;
     this._objectNameInput.value = normalized;
     this._objectNameDirty = false;
+    const applyConfig = opts.applyConfig !== false;
     const matched = this._objects.find(o => o.name === normalized);
     if (matched) {
       this._objectSelect.value = normalized;
       this._selectedObjectSummary = matched;
       this._renderObjectSummary(matched);
-      this._refreshObjectInfo(normalized);
+      this._refreshObjectInfo(normalized, { applyConfig });
     } else {
       this._objectSelect.value = NEW_OBJECT_VALUE;
       this._selectedObjectSummary = null;
@@ -231,7 +232,7 @@ export class ConfigPanel {
       } else if (data.active_object && objects.some(o => o.name === data.active_object)) {
         target = data.active_object;
       }
-      this._selectObject(target, { keepInput: true, notify: false });
+      this._selectObject(target, { keepInput: true, notify: false, applyConfig: false });
     } catch (e) {
       this._objectInfo.textContent = 'Failed to load objects';
       this._selectedObjectSummary = null;
@@ -397,6 +398,7 @@ export class ConfigPanel {
 
   _selectObject(name, opts = {}) {
     const notify = opts.notify !== false;
+    const applyConfig = opts.applyConfig !== false;
     if (name && name !== NEW_OBJECT_VALUE) {
       this._objectSelect.value = name;
       this._objectNameInput.value = name;
@@ -405,7 +407,7 @@ export class ConfigPanel {
       this._selectedObjectSummary = summary;
       this._renderObjectSummary(summary, name);
       this._renderArtifacts(summary);
-      this._refreshObjectInfo(name);
+      this._refreshObjectInfo(name, { applyConfig });
       this._updateResumeHint();
       if (notify && !this._running && this.onObjectSelected) {
         this.onObjectSelected(name);
@@ -433,8 +435,9 @@ export class ConfigPanel {
     }
   }
 
-  async _refreshObjectInfo(name) {
+  async _refreshObjectInfo(name, opts = {}) {
     if (!name) return;
+    const shouldApplyConfig = opts.applyConfig !== false;
     const reqId = ++this._objectInfoRequestId;
     try {
       const res = await fetch(`/api/pipeline/object-info?name=${encodeURIComponent(name)}`);
@@ -447,7 +450,7 @@ export class ConfigPanel {
       if (object.video_path) {
         await this._applyObjectVideoPath(object.video_path);
       }
-      if (object.config && typeof object.config === 'object') {
+      if (shouldApplyConfig && object.config && typeof object.config === 'object') {
         this._applyConfig(object.config);
       }
       this._renderObjectSummary(object, object.name);

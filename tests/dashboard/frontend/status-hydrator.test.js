@@ -641,13 +641,19 @@ describe('StatusHydrator', () => {
     it('sets object name from status', async () => {
       const status = mkStatus({ object_name: 'my-object' });
       await hydrator.applySnapshot(status);
-      expect(deps.config.setObjectName).toHaveBeenCalledWith('my-object');
+      expect(deps.config.setObjectName).toHaveBeenCalledWith('my-object', { applyConfig: true });
     });
 
     it('does not set object name when empty', async () => {
       const status = mkStatus({ object_name: '' });
       await hydrator.applySnapshot(status);
       expect(deps.config.setObjectName).not.toHaveBeenCalled();
+    });
+
+    it('passes applyConfig: false when opts.applyConfig is false', async () => {
+      const status = mkStatus({ object_name: 'my-object' });
+      await hydrator.applySnapshot(status, { applyConfig: false });
+      expect(deps.config.setObjectName).toHaveBeenCalledWith('my-object', { applyConfig: false });
     });
   });
 

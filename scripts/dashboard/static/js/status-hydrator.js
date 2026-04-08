@@ -95,7 +95,8 @@ export class StatusHydrator {
     await postTextureCleanupReview?.syncFromStatus?.(statusMsg);
 
     if (statusMsg.object_name) {
-      config.setObjectName(statusMsg.object_name);
+      const shouldApplyConfig = opts.applyConfig !== false;
+      config.setObjectName(statusMsg.object_name, { applyConfig: shouldApplyConfig });
     }
 
     if (statusMsg.running) {

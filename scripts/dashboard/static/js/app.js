@@ -245,7 +245,7 @@ config.onCancel = async () => {
 // ── WebSocket handlers ───────────────────────────────────────
 
 ws.on('status', async (msg) => {
-  await statusHydrator.applySnapshot(msg);
+  await statusHydrator.applySnapshot(msg, { applyConfig: false });
 });
 
 ws.on('stage_start', (msg) => {
