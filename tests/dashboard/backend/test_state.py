@@ -153,6 +153,23 @@ class TestPipelineConfig(unittest.TestCase):
                 f"Mismatch on field {f.name}",
             )
 
+    def test_to_colmap_sparse_filter_settings_reflects_config(self) -> None:
+        cfg = PipelineConfig(
+            colmap_filter_enabled=False,
+            colmap_filter_min_inside_views=3,
+            colmap_filter_min_inside_ratio=0.8,
+            colmap_filter_mask_dilate=2,
+            colmap_filter_min_points=500,
+        )
+
+        settings = cfg.to_colmap_sparse_filter_settings()
+
+        self.assertFalse(settings.enabled)
+        self.assertEqual(settings.min_inside_views, 3)
+        self.assertEqual(settings.min_inside_ratio, 0.8)
+        self.assertEqual(settings.mask_dilate, 2)
+        self.assertEqual(settings.min_points, 500)
+
 
 class TestStageInfo(unittest.TestCase):
     """StageInfo default values."""

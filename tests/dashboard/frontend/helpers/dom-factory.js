@@ -243,6 +243,11 @@ export function buildConfigPanelDOM() {
         <option value="regular_tsdf">Regular TSDF</option>
       </select>
       <input type="checkbox" id="cfg-milo-use-masks" checked>
+      <input type="checkbox" id="cfg-colmap-filter-enabled" checked>
+      <input type="number" id="cfg-colmap-filter-min-inside-views" value="2">
+      <input type="number" id="cfg-colmap-filter-min-inside-ratio" value="0.6">
+      <input type="number" id="cfg-colmap-filter-mask-dilate" value="1">
+      <input type="number" id="cfg-colmap-filter-min-points" value="200">
 
       <select id="cfg-texture-size">
         <option value="0">Auto</option>

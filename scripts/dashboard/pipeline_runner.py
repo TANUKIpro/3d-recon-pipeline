@@ -411,6 +411,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 session.mask_dir,
                 output_dir,
                 cfg.to_milo_settings(),
+                cfg.to_colmap_sparse_filter_settings(),
             )
             session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
             _check_cancelled(session)

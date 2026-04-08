@@ -124,6 +124,9 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.milo_iterations, 18000)
         self.assertEqual(cfg.milo_scene_type, "indoor")
         self.assertTrue(cfg.milo_use_masks)
+        self.assertTrue(cfg.colmap_filter_enabled)
+        self.assertEqual(cfg.colmap_filter_min_inside_views, 2)
+        self.assertEqual(cfg.colmap_filter_min_inside_ratio, 0.6)
 
     def test_milo_fields_parsed_and_clamped(self) -> None:
         cfg = build_pipeline_config(
@@ -143,10 +146,32 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertFalse(cfg.milo_use_masks)
         self.assertEqual(cfg.milo_preset, "custom")
 
+    def test_colmap_filter_fields_parsed_and_clamped(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "colmap_filter_enabled": False,
+                "colmap_filter_min_inside_views": 0,
+                "colmap_filter_min_inside_ratio": 1.5,
+                "colmap_filter_mask_dilate": -1,
+                "colmap_filter_min_points": 0,
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertFalse(cfg.colmap_filter_enabled)
+        self.assertEqual(cfg.colmap_filter_min_inside_views, 1)
+        self.assertEqual(cfg.colmap_filter_min_inside_ratio, 1.0)
+        self.assertEqual(cfg.colmap_filter_mask_dilate, 0)
+        self.assertEqual(cfg.colmap_filter_min_points, 1)
+
 
 class DetectStageOutputsTests(unittest.TestCase):
     def test_stage4_reset_includes_mesh(self) -> None:
         self.assertIn("object_mesh.ply", STAGE_RESET_PATHS[4]["files"])
+        self.assertIn("colmap_sparse_filtered", STAGE_RESET_PATHS[4]["dirs"])
 
     def test_stage5_detected_when_obj_exists(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -292,6 +292,38 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         self.assertFalse(cfg.milo_use_masks)
         self.assertEqual(cfg.milo_preset, "custom")
 
+    def test_colmap_filter_fields_parse_and_env(self) -> None:
+        cfg_raw = _build(
+            {
+                "colmap_filter_enabled": False,
+                "colmap_filter_min_inside_views": 3,
+                "colmap_filter_min_inside_ratio": 0.75,
+                "colmap_filter_mask_dilate": 2,
+                "colmap_filter_min_points": 400,
+            }
+        )
+        self.assertFalse(cfg_raw.colmap_filter_enabled)
+        self.assertEqual(cfg_raw.colmap_filter_min_inside_views, 3)
+        self.assertEqual(cfg_raw.colmap_filter_min_inside_ratio, 0.75)
+        self.assertEqual(cfg_raw.colmap_filter_mask_dilate, 2)
+        self.assertEqual(cfg_raw.colmap_filter_min_points, 400)
+
+        cfg_env = _build(
+            {},
+            env={
+                "COLMAP_FILTER_ENABLED": "0",
+                "COLMAP_FILTER_MIN_INSIDE_VIEWS": "4",
+                "COLMAP_FILTER_MIN_INSIDE_RATIO": "0.8",
+                "COLMAP_FILTER_MASK_DILATE": "3",
+                "COLMAP_FILTER_MIN_POINTS": "500",
+            },
+        )
+        self.assertFalse(cfg_env.colmap_filter_enabled)
+        self.assertEqual(cfg_env.colmap_filter_min_inside_views, 4)
+        self.assertEqual(cfg_env.colmap_filter_min_inside_ratio, 0.8)
+        self.assertEqual(cfg_env.colmap_filter_mask_dilate, 3)
+        self.assertEqual(cfg_env.colmap_filter_min_points, 500)
+
     def test_milo_scene_type_parse_and_env(self) -> None:
         cfg_raw = _build({"milo_scene_type": "outdoor"})
         self.assertEqual(cfg_raw.milo_scene_type, "outdoor")

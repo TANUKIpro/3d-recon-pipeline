@@ -28,6 +28,13 @@ COLMAP_USE_GPU = False
 COLMAP_DSP_SIFT = False
 COLMAP_FIRST_OCTAVE = -1
 
+# --- Stage 4 pre-process: COLMAP Sparse Filter -------------
+COLMAP_FILTER_ENABLED = True
+COLMAP_FILTER_MIN_INSIDE_VIEWS = 2
+COLMAP_FILTER_MIN_INSIDE_RATIO = 0.6
+COLMAP_FILTER_MASK_DILATE = 1
+COLMAP_FILTER_MIN_POINTS = 200
+
 # --- Stage 3: SAM2 ----------------------------------------
 SAM2_DEFAULT_MODEL = "large"
 SAM2_MODEL_CONFIGS: dict[str, dict[str, str]] = {

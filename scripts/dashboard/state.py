@@ -14,6 +14,11 @@ from typing import Any
 
 from scripts.config_defaults import (
     COLMAP_IMAGE_SIZE,
+    COLMAP_FILTER_ENABLED,
+    COLMAP_FILTER_MASK_DILATE,
+    COLMAP_FILTER_MIN_INSIDE_RATIO,
+    COLMAP_FILTER_MIN_INSIDE_VIEWS,
+    COLMAP_FILTER_MIN_POINTS,
     COLMAP_MAX_FEATURES,
     COLMAP_MATCHER,
     COLMAP_DSP_SIFT,
@@ -119,6 +124,11 @@ class PipelineConfig:
     colmap_use_gpu: bool = COLMAP_USE_GPU
     colmap_dsp_sift: bool = COLMAP_DSP_SIFT
     colmap_first_octave: int = COLMAP_FIRST_OCTAVE
+    colmap_filter_enabled: bool = COLMAP_FILTER_ENABLED
+    colmap_filter_min_inside_views: int = COLMAP_FILTER_MIN_INSIDE_VIEWS
+    colmap_filter_min_inside_ratio: float = COLMAP_FILTER_MIN_INSIDE_RATIO
+    colmap_filter_mask_dilate: int = COLMAP_FILTER_MASK_DILATE
+    colmap_filter_min_points: int = COLMAP_FILTER_MIN_POINTS
     milo_preset: str = MILO_PRESET
     milo_preset_base: str = MILO_PRESET
     milo_iterations: int = MILO_ITERATIONS
@@ -155,6 +165,17 @@ class PipelineConfig:
         return MiloSettings.from_config_mapping(
             self.to_dict(),
             preset=self.milo_preset,
+        )
+
+    def to_colmap_sparse_filter_settings(self):
+        from scripts.colmap_sparse_filter import SparseFilterSettings
+
+        return SparseFilterSettings(
+            enabled=self.colmap_filter_enabled,
+            min_inside_views=self.colmap_filter_min_inside_views,
+            min_inside_ratio=self.colmap_filter_min_inside_ratio,
+            mask_dilate=self.colmap_filter_mask_dilate,
+            min_points=self.colmap_filter_min_points,
         )
 
 

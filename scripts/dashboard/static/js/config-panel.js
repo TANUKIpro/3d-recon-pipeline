@@ -49,6 +49,11 @@ export class ConfigPanel {
       colmap_use_gpu: document.getElementById('cfg-colmap-use-gpu'),
       colmap_dsp_sift: document.getElementById('cfg-colmap-dsp-sift'),
       colmap_first_octave: document.getElementById('cfg-colmap-first-octave'),
+      colmap_filter_enabled: document.getElementById('cfg-colmap-filter-enabled'),
+      colmap_filter_min_inside_views: document.getElementById('cfg-colmap-filter-min-inside-views'),
+      colmap_filter_min_inside_ratio: document.getElementById('cfg-colmap-filter-min-inside-ratio'),
+      colmap_filter_mask_dilate: document.getElementById('cfg-colmap-filter-mask-dilate'),
+      colmap_filter_min_points: document.getElementById('cfg-colmap-filter-min-points'),
 
       // Stage 3: SAM2 Segmentation
       sam2_model: document.getElementById('cfg-sam2-model'),
@@ -183,6 +188,32 @@ export class ConfigPanel {
       colmap_use_gpu: this._inputs.colmap_use_gpu?.checked ?? false,
       colmap_dsp_sift: this._inputs.colmap_dsp_sift?.checked ?? false,
       colmap_first_octave: (this._inputs.colmap_first_octave?.checked ?? true) ? -1 : 0,
+      colmap_filter_enabled: this._inputs.colmap_filter_enabled?.checked ?? true,
+      colmap_filter_min_inside_views: this._parsePositiveInt(
+        this._inputs.colmap_filter_min_inside_views?.value,
+        2,
+      ),
+      colmap_filter_min_inside_ratio: Math.max(
+        0,
+        Math.min(
+          1,
+          this._parseNonNegativeFloat(
+            this._inputs.colmap_filter_min_inside_ratio?.value,
+            0.6,
+          ),
+        ),
+      ),
+      colmap_filter_mask_dilate: Math.max(
+        0,
+        this._parseNonNegativeInt(
+          this._inputs.colmap_filter_mask_dilate?.value,
+          1,
+        ),
+      ),
+      colmap_filter_min_points: this._parsePositiveInt(
+        this._inputs.colmap_filter_min_points?.value,
+        200,
+      ),
 
       // Stage 3: SAM2 Segmentation
       sam2_model: this._inputs.sam2_model.value,
@@ -609,6 +640,18 @@ export class ConfigPanel {
     }
     if (cfg.colmap_first_octave != null && this._inputs.colmap_first_octave) {
       this._inputs.colmap_first_octave.checked = cfg.colmap_first_octave < 0;
+    }
+    if (cfg.colmap_filter_enabled != null && this._inputs.colmap_filter_enabled) {
+      this._inputs.colmap_filter_enabled.checked = cfg.colmap_filter_enabled !== false;
+    }
+    for (const key of [
+      'colmap_filter_min_inside_views',
+      'colmap_filter_min_inside_ratio',
+      'colmap_filter_mask_dilate',
+      'colmap_filter_min_points',
+    ]) {
+      if (cfg[key] == null || !this._inputs[key]) continue;
+      this._inputs[key].value = String(cfg[key]);
     }
 
     // Stage 3: SAM2 Segmentation

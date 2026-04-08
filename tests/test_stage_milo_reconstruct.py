@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from scripts.colmap_sparse_filter import SparseFilterResult
 from scripts.milo_config import MiloSettings
 from scripts import stage_milo_reconstruct as milo_stage
 from scripts.stage_milo_reconstruct import (
@@ -19,6 +20,7 @@ from scripts.stage_milo_reconstruct import (
     _ensure_sparse_0,
     _find_extracted_mesh,
     _find_recon_dir,
+    _prepare_sparse_model_for_milo,
     _parse_milo_progress,
     _setup_milo_source_dir,
     _write_milo_train_config,
@@ -65,6 +67,66 @@ class TestEnsureSparse0(unittest.TestCase):
             _ensure_sparse_0(sparse)
 
             self.assertTrue((sparse / "0" / "cameras.bin").exists())
+
+
+class TestPrepareSparseModelForMilo(unittest.TestCase):
+    @patch("scripts.stage_milo_reconstruct.filter_colmap_sparse_model")
+    @patch("scripts.stage_milo_reconstruct._find_recon_dir")
+    def test_returns_filtered_recon_dir_when_filter_succeeds(
+        self,
+        mock_find_recon,
+        mock_filter,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            recon_dir = Path(tmp) / "colmap_sparse" / "0"
+            recon_dir.mkdir(parents=True)
+            filtered_dir = output_dir / "colmap_sparse_filtered" / "0"
+            mock_find_recon.return_value = recon_dir
+            mock_filter.return_value = SparseFilterResult(
+                selected_recon_dir=filtered_dir,
+                filtered_recon_dir=filtered_dir,
+                used_filtered=True,
+                total_points=100,
+                kept_points=80,
+                matched_images=4,
+            )
+
+            result = _prepare_sparse_model_for_milo(
+                str(recon_dir.parent),
+                str(Path(tmp) / "masks"),
+                output_dir,
+                MiloSettings.from_preset("default"),
+                milo_stage.SparseFilterSettings(),
+                lambda _pct, _msg: None,
+            )
+
+            self.assertEqual(result, filtered_dir)
+
+    @patch("scripts.stage_milo_reconstruct.filter_colmap_sparse_model")
+    @patch("scripts.stage_milo_reconstruct._find_recon_dir")
+    def test_falls_back_to_original_when_filter_errors(
+        self,
+        mock_find_recon,
+        mock_filter,
+    ) -> None:
+        with TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "out"
+            recon_dir = Path(tmp) / "colmap_sparse" / "0"
+            recon_dir.mkdir(parents=True)
+            mock_find_recon.return_value = recon_dir
+            mock_filter.side_effect = RuntimeError("boom")
+
+            result = _prepare_sparse_model_for_milo(
+                str(recon_dir.parent),
+                str(Path(tmp) / "masks"),
+                output_dir,
+                MiloSettings.from_preset("default"),
+                milo_stage.SparseFilterSettings(),
+                lambda _pct, _msg: None,
+            )
+
+            self.assertEqual(result, recon_dir)
 
 
 class TestSetupMiloSourceDir(unittest.TestCase):
@@ -266,10 +328,10 @@ class TestRunMiloIntegration(unittest.TestCase):
     @patch("scripts.stage_milo_reconstruct._apply_masks_to_images")
     @patch("scripts.stage_milo_reconstruct._ensure_sparse_0")
     @patch("scripts.stage_milo_reconstruct._run_colmap_cmd")
-    @patch("scripts.stage_milo_reconstruct._find_recon_dir")
+    @patch("scripts.stage_milo_reconstruct._prepare_sparse_model_for_milo")
     def test_run_milo_completes_pipeline(
         self,
-        mock_find_recon,
+        mock_prepare_sparse,
         mock_colmap_cmd,
         mock_ensure_sparse,
         mock_apply_masks,
@@ -285,7 +347,7 @@ class TestRunMiloIntegration(unittest.TestCase):
             frames_dir.mkdir(parents=True)
             colmap_sparse.mkdir(parents=True)
 
-            mock_find_recon.return_value = colmap_sparse / "0"
+            mock_prepare_sparse.return_value = colmap_sparse / "0"
 
             mesh_file = Path(tmp) / "extracted.ply"
             mesh_file.write_bytes(b"ply")
@@ -323,10 +385,10 @@ class TestRunMiloIntegration(unittest.TestCase):
     @patch("scripts.stage_milo_reconstruct._apply_masks_to_images")
     @patch("scripts.stage_milo_reconstruct._ensure_sparse_0")
     @patch("scripts.stage_milo_reconstruct._run_colmap_cmd")
-    @patch("scripts.stage_milo_reconstruct._find_recon_dir")
+    @patch("scripts.stage_milo_reconstruct._prepare_sparse_model_for_milo")
     def test_run_milo_applies_masks_when_enabled(
         self,
-        mock_find_recon,
+        mock_prepare_sparse,
         mock_colmap_cmd,
         mock_ensure_sparse,
         mock_apply_masks,
@@ -344,7 +406,7 @@ class TestRunMiloIntegration(unittest.TestCase):
             colmap_sparse.mkdir(parents=True)
             masks_dir.mkdir(parents=True)
 
-            mock_find_recon.return_value = colmap_sparse / "0"
+            mock_prepare_sparse.return_value = colmap_sparse / "0"
             mesh_file = Path(tmp) / "extracted.ply"
             mesh_file.write_bytes(b"ply")
             mock_find_mesh.return_value = mesh_file
@@ -380,10 +442,10 @@ class TestRunMiloIntegration(unittest.TestCase):
     @patch("scripts.stage_milo_reconstruct._apply_masks_to_images")
     @patch("scripts.stage_milo_reconstruct._ensure_sparse_0")
     @patch("scripts.stage_milo_reconstruct._run_colmap_cmd")
-    @patch("scripts.stage_milo_reconstruct._find_recon_dir")
+    @patch("scripts.stage_milo_reconstruct._prepare_sparse_model_for_milo")
     def test_run_milo_skips_masks_when_disabled(
         self,
-        mock_find_recon,
+        mock_prepare_sparse,
         mock_colmap_cmd,
         mock_ensure_sparse,
         mock_apply_masks,
@@ -399,7 +461,7 @@ class TestRunMiloIntegration(unittest.TestCase):
             frames_dir.mkdir(parents=True)
             colmap_sparse.mkdir(parents=True)
 
-            mock_find_recon.return_value = colmap_sparse / "0"
+            mock_prepare_sparse.return_value = colmap_sparse / "0"
             mesh_file = Path(tmp) / "extracted.ply"
             mesh_file.write_bytes(b"ply")
             mock_find_mesh.return_value = mesh_file

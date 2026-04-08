@@ -18,6 +18,10 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.colmap_sparse_filter import (
+    SparseFilterSettings,
+    filter_colmap_sparse_model,
+)
 from scripts.milo_config import MiloSettings
 
 _MILO_BASE = Path("/opt/MILo")
@@ -48,6 +52,7 @@ def run_milo(
     mask_dir: str | None,
     output_dir: str,
     settings: MiloSettings | None = None,
+    sparse_filter_settings: SparseFilterSettings | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -63,6 +68,8 @@ def run_milo(
 
     if settings is None:
         settings = MiloSettings.from_preset()
+    if sparse_filter_settings is None:
+        sparse_filter_settings = SparseFilterSettings()
 
     def _report(pct: float, msg: str) -> None:
         if progress_cb:
@@ -70,8 +77,16 @@ def run_milo(
         if cancel_cb:
             cancel_cb()
 
-    # Find the COLMAP reconstruction subdir (0/, 1/, etc.)
-    recon_dir = _find_recon_dir(colmap_sparse_dir)
+    # Find the COLMAP reconstruction subdir (0/, 1/, etc.) and optionally
+    # filter sparse points against SAM2 object masks before MILo consumes them.
+    recon_dir = _prepare_sparse_model_for_milo(
+        colmap_sparse_dir,
+        mask_dir,
+        out,
+        settings,
+        sparse_filter_settings,
+        _report,
+    )
 
     # Step 0: Undistort images.
     _report(1.0, "Undistorting images for MILo")
@@ -203,6 +218,55 @@ def _find_recon_dir(colmap_sparse_dir: str) -> Path:
     raise RuntimeError(
         "No valid COLMAP reconstruction found in " + colmap_sparse_dir
     )
+
+
+def _prepare_sparse_model_for_milo(
+    colmap_sparse_dir: str,
+    mask_dir: str | None,
+    output_dir: Path,
+    milo_settings: MiloSettings,
+    sparse_filter_settings: SparseFilterSettings,
+    report,
+) -> Path:
+    """Return the reconstruction directory MILo should consume."""
+    recon_dir = _find_recon_dir(colmap_sparse_dir)
+    if mask_dir is None or not milo_settings.use_masks:
+        return recon_dir
+    if not sparse_filter_settings.enabled:
+        return recon_dir
+
+    report(0.5, "Filtering COLMAP sparse points with SAM2 masks")
+    filtered_root = output_dir / "colmap_sparse_filtered"
+    try:
+        result = filter_colmap_sparse_model(
+            recon_dir,
+            Path(mask_dir),
+            filtered_root,
+            sparse_filter_settings,
+        )
+    except Exception as exc:
+        print(
+            "COLMAP sparse filter failed; using original sparse model: "
+            f"{exc}"
+        )
+        report(0.8, "Filtered sparse unavailable, using original COLMAP sparse")
+        return recon_dir
+
+    if result.warning:
+        print(
+            "COLMAP sparse filter fallback: "
+            f"{result.warning}"
+        )
+    if result.used_filtered:
+        print(
+            "COLMAP sparse filter kept "
+            f"{result.kept_points}/{result.total_points} points across "
+            f"{result.matched_images} masked images -> {result.filtered_recon_dir}"
+        )
+        return result.selected_recon_dir
+
+    report(0.8, "Filtered sparse unavailable, using original COLMAP sparse")
+    return recon_dir
 
 
 def _ensure_sparse_0(sparse_dir: Path) -> None:

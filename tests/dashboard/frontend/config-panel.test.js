@@ -179,6 +179,9 @@ describe('ConfigPanel', () => {
         'video_path', 'object_name', 'resume_from_stage',
         'frame_interval', 'max_frames',
         'colmap_matcher', 'colmap_max_features', 'colmap_image_size',
+        'colmap_filter_enabled', 'colmap_filter_min_inside_views',
+        'colmap_filter_min_inside_ratio', 'colmap_filter_mask_dilate',
+        'colmap_filter_min_points',
         'sam2_model', 'ground_plane_enabled',
         'milo_preset', 'milo_iterations', 'milo_scene_type',
         'milo_use_masks',
@@ -227,6 +230,20 @@ describe('ConfigPanel', () => {
       document.getElementById('cfg-milo-preset').value = 'high';
       const config = panel.getConfig();
       expect(config.milo_preset).toBe('high');
+    });
+
+    it('reads COLMAP sparse filter controls', () => {
+      document.getElementById('cfg-colmap-filter-enabled').checked = false;
+      document.getElementById('cfg-colmap-filter-min-inside-views').value = '3';
+      document.getElementById('cfg-colmap-filter-min-inside-ratio').value = '0.75';
+      document.getElementById('cfg-colmap-filter-mask-dilate').value = '2';
+      document.getElementById('cfg-colmap-filter-min-points').value = '400';
+      const config = panel.getConfig();
+      expect(config.colmap_filter_enabled).toBe(false);
+      expect(config.colmap_filter_min_inside_views).toBe(3);
+      expect(config.colmap_filter_min_inside_ratio).toBe(0.75);
+      expect(config.colmap_filter_mask_dilate).toBe(2);
+      expect(config.colmap_filter_min_points).toBe(400);
     });
   });
 

@@ -99,6 +99,13 @@ _CHECKPOINTS: dict[int, Any] = {
     ),
     4: (
         _checkpoint(
+            "s4.filter_sparse",
+            label="Filter COLMAP sparse points",
+            patterns=_patterns(
+                r"filtering colmap sparse points|filtered sparse unavailable|colmap sparse filter",
+            ),
+        ),
+        _checkpoint(
             "s4.undistort",
             label="COLMAP undistortion",
             patterns=_patterns(r"undistorting images|colmap image_undistorter"),
@@ -118,7 +125,7 @@ _CHECKPOINTS: dict[int, Any] = {
             label="Save output mesh",
             patterns=_patterns(r"milo reconstruction complete|milo complete"),
             cleanup_files=("object_mesh.ply",),
-            cleanup_dirs=("milo_workspace",),
+            cleanup_dirs=("milo_workspace", "colmap_sparse_filtered"),
         ),
     ),
     5: (
@@ -205,7 +212,10 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
         "dirs": ("masks", "masks_ground", "masks_object_raw"),
         "files": ("ground_plane.json",),
     },
-    4: {"dirs": ("milo_workspace",), "files": ("object_mesh.ply",)},
+    4: {
+        "dirs": ("milo_workspace", "colmap_sparse_filtered"),
+        "files": ("object_mesh.ply",),
+    },
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
     6: {
         "dirs": ("post_texture_contact_cleanup",),

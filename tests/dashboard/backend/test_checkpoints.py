@@ -40,6 +40,7 @@ class TestCheckpointSpecs(unittest.TestCase):
     def test_stage4_has_milo_checkpoints(self) -> None:
         specs = checkpoint_specs(4)
         ids = [s["id"] for s in specs]
+        self.assertIn("s4.filter_sparse", ids)
         self.assertIn("s4.undistort", ids)
         self.assertIn("s4.train_milo", ids)
         self.assertIn("s4.mesh_extract", ids)
@@ -65,7 +66,7 @@ class TestFirstCheckpointId(unittest.TestCase):
         self.assertEqual(first_checkpoint_id(1), "s1.inspect")
 
     def test_stage4_first(self) -> None:
-        self.assertEqual(first_checkpoint_id(4), "s4.undistort")
+        self.assertEqual(first_checkpoint_id(4), "s4.filter_sparse")
 
     def test_stage5_first(self) -> None:
         self.assertEqual(first_checkpoint_id(5), "s5.load")
@@ -135,9 +136,9 @@ class TestResolveCheckpointId(unittest.TestCase):
 
     def test_stage4_pattern(self) -> None:
         result = resolve_checkpoint_id(
-            4, "Undistorting images"
+            4, "Filtering COLMAP sparse points with SAM2 masks"
         )
-        self.assertEqual(result, "s4.undistort")
+        self.assertEqual(result, "s4.filter_sparse")
 
     def test_stage5_export_pattern(self) -> None:
         result = resolve_checkpoint_id(
@@ -170,6 +171,7 @@ class TestCheckpointCleanupPlan(unittest.TestCase):
     def test_stage4_known(self) -> None:
         dirs, files, used_fallback = checkpoint_cleanup_plan(4, "s4.save")
         self.assertFalse(used_fallback)
+        self.assertIn("colmap_sparse_filtered", dirs)
         self.assertIn("object_mesh.ply", files)
 
 

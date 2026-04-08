@@ -40,6 +40,7 @@ class TestResetOutputsFromStage(unittest.TestCase):
             (out / "masks").mkdir()
             (out / "masks" / "00000.png").write_bytes(b"png")
             # Create stage 4 output
+            (out / "colmap_sparse_filtered").mkdir()
             (out / "object_mesh.ply").write_text("ply\n")
 
             reset_outputs_from_stage(out, 3)
@@ -50,6 +51,7 @@ class TestResetOutputsFromStage(unittest.TestCase):
             self.assertTrue((out / "camera_poses.json").is_file())
             # Stages 3+ deleted
             self.assertFalse((out / "masks").is_dir())
+            self.assertFalse((out / "colmap_sparse_filtered").is_dir())
             self.assertFalse((out / "object_mesh.ply").is_file())
 
 

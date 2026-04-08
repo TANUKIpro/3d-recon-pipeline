@@ -8,6 +8,11 @@ from typing import Any, Mapping
 
 from scripts.config_defaults import (
     COLMAP_IMAGE_SIZE,
+    COLMAP_FILTER_ENABLED,
+    COLMAP_FILTER_MASK_DILATE,
+    COLMAP_FILTER_MIN_INSIDE_RATIO,
+    COLMAP_FILTER_MIN_INSIDE_VIEWS,
+    COLMAP_FILTER_MIN_POINTS,
     COLMAP_MAX_FEATURES,
     COLMAP_MATCHER,
     COLMAP_DSP_SIFT,
@@ -333,6 +338,57 @@ def build_pipeline_config(
         colmap_first_octave=parse_int(
             raw.get("colmap_first_octave"),
             env_int("COLMAP_FIRST_OCTAVE", COLMAP_FIRST_OCTAVE, env_map),
+        ),
+        colmap_filter_enabled=parse_bool(
+            raw.get("colmap_filter_enabled"),
+            env_bool("COLMAP_FILTER_ENABLED", COLMAP_FILTER_ENABLED, env_map),
+        ),
+        colmap_filter_min_inside_views=max(
+            1,
+            parse_int(
+                raw.get("colmap_filter_min_inside_views"),
+                env_int(
+                    "COLMAP_FILTER_MIN_INSIDE_VIEWS",
+                    COLMAP_FILTER_MIN_INSIDE_VIEWS,
+                    env_map,
+                ),
+            ),
+        ),
+        colmap_filter_min_inside_ratio=max(
+            0.0,
+            min(
+                1.0,
+                parse_float(
+                    raw.get("colmap_filter_min_inside_ratio"),
+                    env_float(
+                        "COLMAP_FILTER_MIN_INSIDE_RATIO",
+                        COLMAP_FILTER_MIN_INSIDE_RATIO,
+                        env_map,
+                    ),
+                ),
+            ),
+        ),
+        colmap_filter_mask_dilate=max(
+            0,
+            parse_int(
+                raw.get("colmap_filter_mask_dilate"),
+                env_int(
+                    "COLMAP_FILTER_MASK_DILATE",
+                    COLMAP_FILTER_MASK_DILATE,
+                    env_map,
+                ),
+            ),
+        ),
+        colmap_filter_min_points=max(
+            1,
+            parse_int(
+                raw.get("colmap_filter_min_points"),
+                env_int(
+                    "COLMAP_FILTER_MIN_POINTS",
+                    COLMAP_FILTER_MIN_POINTS,
+                    env_map,
+                ),
+            ),
         ),
         milo_preset=str(milo_cfg["milo_preset"]),
         milo_preset_base=str(milo_cfg["milo_preset_base"]),

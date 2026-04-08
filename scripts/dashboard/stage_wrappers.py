@@ -67,6 +67,7 @@ def _stage_milo_reconstruct(
     mask_dir: str | None,
     output_dir: str,
     milo_settings=None,
+    colmap_filter_settings=None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -76,8 +77,17 @@ def _stage_milo_reconstruct(
     from scripts.stage_milo_reconstruct import run_milo
     from scripts.vram_utils import cleanup_pytorch_vram
 
-    if not isinstance(milo_settings, MiloSettings):
+    if milo_settings is None:
         milo_settings = MiloSettings.from_preset()
+    else:
+        try:
+            is_valid_settings = isinstance(milo_settings, MiloSettings)
+        except TypeError:
+            # Test stubs may replace MiloSettings with a mock object rather than
+            # a real type; in that case keep the provided value.
+            is_valid_settings = True
+        if not is_valid_settings:
+            milo_settings = MiloSettings.from_preset()
     try:
         result = run_milo(
             frames_dir,
@@ -85,6 +95,7 @@ def _stage_milo_reconstruct(
             mask_dir,
             output_dir,
             settings=milo_settings,
+            sparse_filter_settings=colmap_filter_settings,
             progress_cb=progress_cb,
             cancel_cb=cancel_cb,
             register_process=register_process,

@@ -189,9 +189,20 @@ describe('CheckpointPanel', () => {
       });
       panel.setActiveStage(4);
       const states = readStates();
-      // Stage 4 has 3 checkpoints; "complete" fallback -> maxIndex = 2
+      // Stage 4 has 5 checkpoints; "complete" fallback -> maxIndex = 4
       const lastIndex = states.length - 1;
       expect(states[lastIndex]).toBe('running');
+    });
+
+    it('stage 4 filter detail maps to sparse filter checkpoint', () => {
+      panel.applyStatusSnapshot({
+        stages: {
+          '4': { status: 'running', detail: 'Filtering COLMAP sparse points with SAM2 masks' },
+        },
+      });
+      panel.setActiveStage(4);
+      const states = readStates();
+      expect(states[0]).toBe('running');
     });
 
     it('no match uses previous index', () => {
