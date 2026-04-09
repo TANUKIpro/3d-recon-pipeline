@@ -37,7 +37,7 @@ def detect_branch() -> str:
 def branch_slug(branch: str) -> str:
     """Sanitize a branch name into a filesystem-safe slug.
 
-    ``feat/replace-pi3x-with-gs2mesh`` → ``feat-replace-pi3x-with-gs2mesh``
+    ``feat/replace-gs2mesh-to-GWrapping`` → ``feat-replace-gs2mesh-to-GWrapping``
     """
     slug = branch.strip().replace("/", "-").replace("\\", "-")
     slug = re.sub(r"[^\w.-]", "-", slug, flags=re.UNICODE)

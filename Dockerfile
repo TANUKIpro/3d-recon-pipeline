@@ -1,5 +1,5 @@
 # clip2mesh: Docker-based 3D reconstruction pipeline
-# COLMAP + 3D Gaussian Splatting + gs2mesh + SAM2
+# COLMAP + GaussianWrapping (3DGS surface reconstruction) + SAM2
 
 FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
@@ -24,7 +24,7 @@ WORKDIR /app
 
 # --- Layer 2: PyTorch (CUDA 12.1 wheels, matches base image) ---
 RUN pip install --no-cache-dir \
-    "torch>=2.5.0" torchvision \
+    "torch>=2.5.0" torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu121
 
 # --- Layer 3: Python dependencies ---
@@ -44,7 +44,7 @@ RUN pip install --no-cache-dir \
     "pillow>=10.0.0" \
     "tqdm>=4.65.0" \
     hydra-core iopath \
-    wandb \
+    wandb dacite \
     && pip install --no-cache-dir scikit-image
 
 # CUDA arch list needed at build time (no GPU in Docker build context)
@@ -59,102 +59,73 @@ RUN git clone https://github.com/facebookresearch/sam2.git /opt/sam2 \
     && cd /opt/sam2 \
     && SAM2_BUILD_CUDA=1 pip install --no-build-isolation -e .
 
-# --- Layer 5a: gaussian-splatting CUDA extensions ---
+# --- Layer 5: GaussianWrapping (3DGS surface reconstruction) ---
 
-RUN git clone --recursive https://github.com/graphdeco-inria/gaussian-splatting.git /opt/gaussian-splatting \
-    && cd /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \
-    && git checkout 3dgs_accel \
-    && pip install --no-cache-dir --no-build-isolation \
-        /opt/gaussian-splatting/submodules/diff-gaussian-rasterization \
-        /opt/gaussian-splatting/submodules/simple-knn \
-    && pip install --no-cache-dir --no-build-isolation \
-        /opt/gaussian-splatting/submodules/fused-ssim 2>/dev/null || true \
-    && cd /opt/gaussian-splatting \
-    && python3 -c "from diff_gaussian_rasterization import SparseGaussianAdam"
+# tetra_triangulation requires cmake, GMP, CGAL for Delaunay triangulation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake libgmp-dev libcgal-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Build a compat rasterizer overlay so stage 4 can fall back without changing
-# reconstruction inputs or quality settings. Reuse the main checkout and only
-# replace diff_gaussian_rasterization; the global simple_knn/fused-ssim wheels
-# from the accel build remain available on the default site-packages path.
-RUN mkdir -p /opt/gs-compat-site \
-    && git clone --recursive https://github.com/graphdeco-inria/diff-gaussian-rasterization.git /opt/diff-gaussian-rasterization-compat \
-    && pip install --no-cache-dir --no-build-isolation \
-        --target /opt/gs-compat-site \
-        /opt/diff-gaussian-rasterization-compat
-RUN PYTHONPATH=/opt/gs-compat-site python3 -c "import diff_gaussian_rasterization"
+# Clone with all submodules (SSH→HTTPS redirect for Depth-Anything-V2, nvdiffrast)
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" \
+    && git clone --recursive https://github.com/diego1401/GaussianWrapping.git /opt/GaussianWrapping
 
-# --- Layer 5b: gs2mesh + DLNR stereo weights ---
-RUN git clone https://github.com/yanivw12/gs2mesh.git /opt/gs2mesh \
-    && rm -rf /opt/gs2mesh/third_party/gaussian-splatting \
-    && ln -s /opt/gaussian-splatting /opt/gs2mesh/third_party/gaussian-splatting \
-    && cd /opt/gs2mesh \
+# GaussianWrapping Python requirements (open3d, trimesh, dacite, etc.)
+RUN cd /opt/GaussianWrapping \
     && pip install --no-cache-dir -r requirements.txt 2>/dev/null; true
 
-# Explicitly install gs2mesh/DLNR deps that fail silently from requirements.txt.
-# opt_einsum: DLNR core/update.py (confirmed missing).
-# matplotlib, plotly, tensorboard, imageio: currently installed via the error-
-# swallowing requirements.txt line — pin them here for robustness.
-RUN pip install --no-cache-dir opt_einsum matplotlib plotly tensorboard imageio
+# Build 4 rasterizers (Mini-Splatting2, RaDe-GS, Ours, SOF)
+RUN pip install --no-cache-dir --no-build-isolation \
+    /opt/GaussianWrapping/submodules/diff-gaussian-rasterization_ms \
+    /opt/GaussianWrapping/submodules/diff-gaussian-rasterization \
+    /opt/GaussianWrapping/submodules/diff-gaussian-rasterization_ours \
+    /opt/GaussianWrapping/submodules/diff-gaussian-rasterization_sof
 
-# k3d is a Jupyter 3D widget imported by gs2mesh's visualize.py at module level.
-# It's never used in our headless pipeline; stub it to avoid pulling Jupyter deps.
-RUN mkdir -p /usr/local/lib/python3.11/dist-packages/k3d \
-    && touch /usr/local/lib/python3.11/dist-packages/k3d/__init__.py
-
-# GroundingDINO (auto-masking) has uninstalled deps (supervision, addict, yapf).
-# We skip masking (--skip_masking), but masker_utils.py imports it at module level.
-# Wrap in try/except so it doesn't crash at import time.
+# Patch diff_gaussian_rasterization_sof for Python 3.11 dataclass compatibility.
+# Mutable defaults (SortQueueSizes(), SortSettings(), CullingSettings()) are
+# forbidden in Python >=3.10 dataclasses; replace with field(default_factory=...).
 RUN python3 -c "\
-p='/opt/gs2mesh/gs2mesh_utils/masker_utils.py'; \
-t=open(p).read().replace( \
-  'import third_party.GroundingDINO.groundingdino.util.inference as GD', \
-  'try:\n    import third_party.GroundingDINO.groundingdino.util.inference as GD\nexcept (ImportError, ModuleNotFoundError):\n    GD = None'); \
-open(p,'w').write(t)"
+p='/usr/local/lib/python3.11/dist-packages/diff_gaussian_rasterization_sof/__init__.py'; \
+t=open(p).read(); \
+t=t.replace('from dataclasses import dataclass, asdict', \
+            'from dataclasses import dataclass, asdict, field'); \
+t=t.replace('queue_sizes : SortQueueSizes = SortQueueSizes()', \
+            'queue_sizes : SortQueueSizes = field(default_factory=SortQueueSizes)'); \
+t=t.replace('sort_settings : SortSettings = SortSettings()', \
+            'sort_settings : SortSettings = field(default_factory=SortSettings)'); \
+t=t.replace('culling_settings : CullingSettings = CullingSettings()', \
+            'culling_settings : CullingSettings = field(default_factory=CullingSettings)'); \
+t=t.replace('meshing_settings : MeshingSettings = MeshingSettings()', \
+            'meshing_settings : MeshingSettings = field(default_factory=MeshingSettings)'); \
+open(p,'w').write(t); \
+print('Patched diff_gaussian_rasterization_sof for Python 3.11')"
 
-# gs2mesh hardcodes gaussian-splatting renderer integration.
-# Newer gaussian-splatting expects `depths` / `train_test_exp` fields and a
-# different Camera constructor signature.
-RUN python3 - <<'PY'
-from pathlib import Path
+# Build simple-knn, fused-ssim
+RUN pip install --no-cache-dir --no-build-isolation \
+    /opt/GaussianWrapping/submodules/simple-knn \
+    /opt/GaussianWrapping/submodules/fused-ssim
 
-p = Path('/opt/gs2mesh/gs2mesh_utils/renderer_utils.py')
-t = p.read_text()
-if "from PIL import Image" not in t:
-    t = t.replace("import copy\n", "import copy\nfrom PIL import Image\n", 1)
-img = "                         images='images', \n"
-ev = "                         eval=False, \n"
-dbg = "                         debug=False, \n"
-if "depths=''" not in t:
-    t = t.replace(img, img + "                         depths='', \n", 1)
-if "train_test_exp=False" not in t:
-    t = t.replace(ev, ev + "                         train_test_exp=False, \n", 1)
-if "antialiasing=False" not in t:
-    t = t.replace(dbg, dbg + "                         antialiasing=False, \n", 1)
-old_camera = '                view = cameras.Camera(0, R, T, FoVx, FoVy, torch.rand(3,h,w), None, "abcd", 0)\n'
-new_camera = """                dummy_image = Image.fromarray(np.zeros((h, w, 3), dtype=np.uint8))
-                view = cameras.Camera(
-                    (w, h),
-                    0,
-                    R,
-                    T,
-                    FoVx,
-                    FoVy,
-                    None,
-                    dummy_image,
-                    None,
-                    f"{camera_name}",
-                    camera_number,
-                    data_device=self.device,
-                )
-"""
-if old_camera in t:
-    t = t.replace(old_camera, new_camera, 1)
-p.write_text(t)
-PY
+# Build tetra_triangulation (Delaunay mesh extraction)
+# cmake+make builds the C++ SO, pip install copies the Python package,
+# then manually copy the SO into the installed location.
+RUN cd /opt/GaussianWrapping/submodules/tetra_triangulation \
+    && cmake -DCMAKE_CXX_FLAGS="-I${CUDA_HOME}/include" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 . \
+    && make \
+    && pip install --no-cache-dir --no-build-isolation . \
+    && cp tetranerf/utils/extension/tetranerf_cpp_extension.cpython-*.so \
+       /usr/local/lib/python3.11/dist-packages/tetranerf/utils/extension/ 2>/dev/null; true
 
-RUN mkdir -p /opt/gs2mesh/third_party/DLNR/pretrained \
-    && wget -q -O /opt/gs2mesh/third_party/DLNR/pretrained/DLNR_Middlebury.pth \
-        https://github.com/David-Zhao-1997/High-frequency-Stereo-Matching-Network/releases/download/v1.0.0/DLNR_Middlebury.pth
+# Build warp-patch-ncc (inside Geometry-Grounded-GS submodule)
+RUN pip install --no-cache-dir --no-build-isolation \
+    /opt/GaussianWrapping/submodules/Geometry-Grounded-Gaussian-Splatting/submodules/warp-patch-ncc
+
+# torch_geometric + PyG sparse/scatter wheels
+RUN pip install --no-cache-dir torch_geometric \
+    && pip install --no-cache-dir pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
+       -f https://data.pyg.org/whl/torch-2.5.0+cu121.html 2>/dev/null; true
+
+# Verify core rasterizer build
+RUN python3 -c "from diff_gaussian_rasterization import GaussianRasterizationSettings; print('RaDe-GS OK')"
 
 # --- Layer 6: Application code ---
 COPY scripts/ /app/scripts/
@@ -164,7 +135,7 @@ COPY tests/ /app/tests/
 RUN pip install --no-cache-dir pytest pytest-asyncio
 
 # Add repos to Python path
-ENV PYTHONPATH="/app:/opt/gs2mesh:/opt/gaussian-splatting:/opt/sam2:${PYTHONPATH}"
+ENV PYTHONPATH="/app:/opt/GaussianWrapping:/opt/GaussianWrapping/submodules/Depth-Anything-V2:/opt/sam2:${PYTHONPATH}"
 
 EXPOSE 7860
 

@@ -14,7 +14,7 @@ const STAGE_LABELS = {
   1: 'Extract Frames',
   2: 'COLMAP SfM',
   3: 'SAM2',
-  4: 'gs2mesh',
+  4: 'GWrapping',
   5: 'Texture Bake',
   6: 'Post Cleanup',
 };
@@ -38,9 +38,9 @@ const CHECKPOINT_TEMPLATES = {
     'Wait for mask verification',
   ],
   4: [
-    'Train 3D Gaussian Splatting',
-    'Stereo depth estimation',
-    'TSDF fusion + mesh extraction',
+    'Undistort images',
+    'Train GaussianWrapping',
+    'Mesh extraction',
     'Save output mesh',
   ],
   5: [
@@ -66,7 +66,7 @@ const CHECKPOINT_IDS = {
   1: ['s1.inspect', 's1.extract', 's1.finalize'],
   2: ['s2.features', 's2.match', 's2.reconstruct', 's2.export'],
   3: ['s3.initialize', 's3.interact', 's3.propagate', 's3.verify'],
-  4: ['s4.train_gs', 's4.stereo', 's4.tsdf', 's4.save'],
+  4: ['s4.undistort', 's4.train', 's4.extract', 's4.save'],
   5: ['s5.load', 's5.intrinsics', 's5.uv', 's5.score', 's5.fill', 's5.export'],
   6: ['s6.proposal', 's6.review', 's6.holefill', 's6.noise', 's6.watertight', 's6.finalclean', 's6.apply'],
 };
@@ -90,10 +90,10 @@ const DETAIL_MATCHERS = {
     { re: /waiting for mask verification|verification/i, idx: 3 },
   ],
   4: [
-    { re: /training 3d gaussian|3dgs training|iteration/i, idx: 0 },
-    { re: /stereo depth|dlnr|running gs2mesh/i, idx: 1 },
-    { re: /tsdf|fusion|mesh extraction|collecting output/i, idx: 2 },
-    { re: /gs2mesh reconstruction complete|gs2mesh complete/i, idx: 3 },
+    { re: /undistort|undistorting/i, idx: 0 },
+    { re: /training gaussianwrapping|gwrapping training|iteration/i, idx: 1 },
+    { re: /mesh extraction|extracting mesh|collecting output/i, idx: 2 },
+    { re: /gaussianwrapping reconstruction complete|gwrapping complete/i, idx: 3 },
   ],
   5: [
     { re: /loading mesh/i, idx: 0 },

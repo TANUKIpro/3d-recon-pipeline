@@ -34,7 +34,7 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         "dirs": ("masks", "masks_ground", "masks_object_raw"),
         "files": ("ground_plane.json",),
     },
-    4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
+    4: {"dirs": ("gwrapping_workspace",), "files": ("object_mesh.ply",)},
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
     6: {
         "dirs": ("post_texture_contact_cleanup",),

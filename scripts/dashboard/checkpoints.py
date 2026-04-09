@@ -99,26 +99,26 @@ _CHECKPOINTS: dict[int, Any] = {
     ),
     4: (
         _checkpoint(
-            "s4.train_gs",
-            label="Train 3D Gaussian Splatting",
-            patterns=_patterns(r"training 3d gaussian|3dgs training|iteration"),
+            "s4.undistort",
+            label="COLMAP undistortion",
+            patterns=_patterns(r"undistort|image_undistorter"),
         ),
         _checkpoint(
-            "s4.stereo",
-            label="Stereo depth estimation",
-            patterns=_patterns(r"stereo depth|dlnr|running gs2mesh"),
+            "s4.train_gw",
+            label="GaussianWrapping training + extraction",
+            patterns=_patterns(r"training gaussianwrapping|gaussianwrapping training|iteration"),
         ),
         _checkpoint(
-            "s4.tsdf",
-            label="TSDF fusion + mesh extraction",
-            patterns=_patterns(r"tsdf|fusion|mesh extraction|collecting output|GPU TSDF|VoxelBlockGrid"),
+            "s4.trim",
+            label="Mesh trimming",
+            patterns=_patterns(r"trimming mesh|collecting output"),
         ),
         _checkpoint(
             "s4.save",
             label="Save output mesh",
-            patterns=_patterns(r"gs2mesh reconstruction complete|gs2mesh complete"),
+            patterns=_patterns(r"gaussianwrapping reconstruction complete|gaussianwrapping complete"),
             cleanup_files=("object_mesh.ply",),
-            cleanup_dirs=("gs2mesh_workspace",),
+            cleanup_dirs=("gwrapping_workspace",),
         ),
     ),
     5: (
@@ -205,7 +205,7 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
         "dirs": ("masks", "masks_ground", "masks_object_raw"),
         "files": ("ground_plane.json",),
     },
-    4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
+    4: {"dirs": ("gwrapping_workspace",), "files": ("object_mesh.ply",)},
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
     6: {
         "dirs": ("post_texture_contact_cleanup",),

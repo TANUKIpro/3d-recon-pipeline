@@ -104,8 +104,7 @@ class TestPipelineConfig(unittest.TestCase):
         self.assertEqual(cfg.video_path, "")
         self.assertEqual(cfg.output_dir, "/data/output")
         self.assertEqual(cfg.object_name, "")
-        self.assertEqual(cfg.gs2mesh_preset, "default")
-        self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
+        self.assertEqual(cfg.gwrapping_preset, "default")
         self.assertEqual(cfg.texture_view_assign_mode, "region_gc")
         self.assertFalse(cfg.texture_quality_boost)
 
@@ -113,8 +112,7 @@ class TestPipelineConfig(unittest.TestCase):
         original = PipelineConfig(
             video_path="/tmp/v.mp4",
             max_frames=99,
-            gs2mesh_preset="high",
-            gs2mesh_runtime_profile="compat",
+            gwrapping_preset="high",
             texture_view_assign_mode="region_gc",
             texture_quality_boost=True,
         )
@@ -122,8 +120,7 @@ class TestPipelineConfig(unittest.TestCase):
         restored = PipelineConfig.from_dict(d)
         self.assertEqual(restored.video_path, "/tmp/v.mp4")
         self.assertEqual(restored.max_frames, 99)
-        self.assertEqual(restored.gs2mesh_preset, "high")
-        self.assertEqual(restored.gs2mesh_runtime_profile, "compat")
+        self.assertEqual(restored.gwrapping_preset, "high")
         self.assertEqual(restored.texture_view_assign_mode, "region_gc")
         self.assertTrue(restored.texture_quality_boost)
 
@@ -200,7 +197,7 @@ class TestPipelineSessionReset(unittest.TestCase):
     def setUp(self) -> None:
         self.session = PipelineSession()
         # Dirty every field that reset() should clear
-        self.session.current_stage = PipelineStage.GS2MESH_RECONSTRUCT
+        self.session.current_stage = PipelineStage.GWRAPPING_RECONSTRUCT
         self.session.running = True
         self.session.cancelled = True
         self.session.cancel_requested = True
@@ -310,7 +307,7 @@ class TestPipelineSessionStageLifecycle(unittest.TestCase):
 
     def test_progress_checkpoint_update(self) -> None:
         self.session.stage_progress(
-            PipelineStage.GS2MESH_RECONSTRUCT, progress=50.0, checkpoint_id="ckpt-42"
+            PipelineStage.GWRAPPING_RECONSTRUCT, progress=50.0, checkpoint_id="ckpt-42"
         )
         info = self.session.stages[4]
         self.assertAlmostEqual(info.progress, 50.0)
@@ -338,7 +335,7 @@ class TestPipelineSessionConfirmation(unittest.TestCase):
 
     def test_require_next_stage_confirmation(self) -> None:
         self.session.require_next_stage_confirmation(
-            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
+            PipelineStage.GWRAPPING_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         self.assertTrue(self.session.next_stage_confirmation_required)
         self.assertEqual(self.session.next_stage_confirmation_from, 4)
@@ -347,7 +344,7 @@ class TestPipelineSessionConfirmation(unittest.TestCase):
 
     def test_clear_next_stage_confirmation(self) -> None:
         self.session.require_next_stage_confirmation(
-            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
+            PipelineStage.GWRAPPING_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         self.session.clear_next_stage_confirmation()
         self.assertFalse(self.session.next_stage_confirmation_required)
@@ -644,7 +641,7 @@ class TestPipelineSessionClearConfirmation(unittest.TestCase):
     def test_clear_resets_confirmation_fields(self) -> None:
         session = PipelineSession()
         session.require_next_stage_confirmation(
-            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "msg"
+            PipelineStage.GWRAPPING_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "msg"
         )
         self.assertTrue(session.next_stage_confirmation_required)
         self.assertEqual(session.next_stage_confirmation_from, 4)
@@ -671,7 +668,7 @@ class TestPipelineSessionClearConfirmation(unittest.TestCase):
 
         # Verify values after setting confirmation
         session.require_next_stage_confirmation(
-            PipelineStage.GS2MESH_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
+            PipelineStage.GWRAPPING_RECONSTRUCT, PipelineStage.TEXTURE_BAKE, "proceed?"
         )
         d2 = session.to_status_dict()
         nsc2 = d2["next_stage_confirmation"]

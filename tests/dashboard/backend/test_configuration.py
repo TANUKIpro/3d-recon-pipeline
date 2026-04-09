@@ -111,7 +111,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
         self.assertTrue(cfg.texture_quality_boost)
 
-    def test_gs2mesh_defaults(self) -> None:
+    def test_gwrapping_defaults(self) -> None:
         cfg = build_pipeline_config(
             {},
             video_path="input.mp4",
@@ -120,23 +120,23 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.gs2mesh_preset, "default")
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 5000)
-        self.assertEqual(cfg.gs2mesh_runtime_profile, "auto")
-        self.assertEqual(cfg.gs2mesh_stereo_model, "DLNR_Middlebury")
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
-        self.assertTrue(cfg.gs2mesh_use_masks)
-        self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 100000)
+        self.assertEqual(cfg.gwrapping_preset, "default")
+        self.assertEqual(cfg.gwrapping_iterations, 30000)
+        self.assertEqual(cfg.gwrapping_rasterizer, "ours")
+        self.assertEqual(cfg.gwrapping_resolution, 2)
+        self.assertTrue(cfg.gwrapping_use_masks)
+        self.assertTrue(cfg.gwrapping_use_depth)
+        self.assertEqual(cfg.gwrapping_extraction_method, "pivot")
 
-    def test_gs2mesh_fields_parsed_and_clamped(self) -> None:
+    def test_gwrapping_fields_parsed(self) -> None:
         cfg = build_pipeline_config(
             {
-                "gs2mesh_gs_iterations": 500,
-                "gs2mesh_runtime_profile": "compat",
-                "gs2mesh_tsdf_voxel_size": 0.0001,
-                "gs2mesh_tsdf_depth_trunc": 0.001,
-                "gs2mesh_use_masks": False,
+                "gwrapping_iterations": 10000,
+                "gwrapping_rasterizer": "radegs",
+                "gwrapping_resolution": 4,
+                "gwrapping_use_masks": False,
+                "gwrapping_use_depth": False,
+                "gwrapping_extraction_method": "primal",
             },
             video_path="input.mp4",
             object_name="sample",
@@ -144,12 +144,13 @@ class BuildPipelineConfigTests(unittest.TestCase):
             env={},
         )
 
-        self.assertEqual(cfg.gs2mesh_gs_iterations, 1000)
-        self.assertEqual(cfg.gs2mesh_runtime_profile, "compat")
-        self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.001)
-        self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
-        self.assertFalse(cfg.gs2mesh_use_masks)
-        self.assertEqual(cfg.gs2mesh_preset, "custom")
+        self.assertEqual(cfg.gwrapping_iterations, 10000)
+        self.assertEqual(cfg.gwrapping_rasterizer, "radegs")
+        self.assertEqual(cfg.gwrapping_resolution, 4)
+        self.assertFalse(cfg.gwrapping_use_masks)
+        self.assertFalse(cfg.gwrapping_use_depth)
+        self.assertEqual(cfg.gwrapping_extraction_method, "primal")
+        self.assertEqual(cfg.gwrapping_preset, "custom")
 
 
 class DetectStageOutputsTests(unittest.TestCase):

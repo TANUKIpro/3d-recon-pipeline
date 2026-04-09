@@ -17,7 +17,7 @@ const TRANSLATIONS = {
   'stage.extract_frames': { en: 'Extract Frames', ja: 'フレーム抽出' },
   'stage.colmap': { en: 'COLMAP', ja: 'COLMAP' },
   'stage.sam2': { en: 'SAM2', ja: 'SAM2' },
-  'stage.gs2mesh': { en: 'gs2mesh', ja: 'gs2mesh' },
+  'stage.gwrapping': { en: 'GWrapping', ja: 'GWrapping' },
   'stage.texture': { en: 'Texture', ja: 'テクスチャ' },
   'stage.post_cleanup': { en: 'Post Cleanup', ja: '後処理' },
 

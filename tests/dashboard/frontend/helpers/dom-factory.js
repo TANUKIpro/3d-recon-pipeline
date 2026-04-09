@@ -222,22 +222,24 @@ export function buildConfigPanelDOM() {
       <input type="checkbox" id="cfg-classical-downsample" checked>
       <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
 
-      <select id="cfg-gs2mesh-preset">
+      <select id="cfg-gwrapping-preset">
         <option value="default" selected>Default</option>
         <option value="high">High</option>
+        <option value="fast">Fast</option>
         <option value="custom">Custom</option>
       </select>
-      <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000">
-      <select id="cfg-gs2mesh-runtime-profile">
-        <option value="auto" selected>Auto</option>
-        <option value="compat">Compat</option>
+      <input type="number" id="cfg-gwrapping-iterations" value="30000">
+      <select id="cfg-gwrapping-rasterizer">
+        <option value="ours" selected>Ours</option>
+        <option value="radegs">RaDe-GS</option>
       </select>
-      <select id="cfg-gs2mesh-stereo-model">
-        <option value="DLNR" selected>DLNR</option>
+      <input type="number" id="cfg-gwrapping-resolution" value="2">
+      <input type="checkbox" id="cfg-gwrapping-use-masks" checked>
+      <input type="checkbox" id="cfg-gwrapping-use-depth" checked>
+      <select id="cfg-gwrapping-extraction-method">
+        <option value="pivot" selected>Pivot</option>
+        <option value="primal">Primal</option>
       </select>
-      <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005">
-      <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04">
-      <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
 
       <select id="cfg-texture-size">
         <option value="0">Auto</option>

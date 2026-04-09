@@ -63,7 +63,7 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="4">
       <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.gs2mesh">gs2mesh</span>
+      <span class="stage-label" data-i18n="stage.gwrapping">GWrapping</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
@@ -145,10 +145,10 @@
         </div>
       </div>
 
-      <!-- Stage 4: gs2mesh Reconstruction -->
+      <!-- Stage 4: GaussianWrapping Reconstruction -->
       <div id="stage-panel-4" class="stage-panel">
         <div class="stage-panel-empty" id="stage-4-empty">
-          <p>Reconstructed mesh will appear here after gs2mesh completes.</p>
+          <p>Reconstructed mesh will appear here after GaussianWrapping completes.</p>
         </div>
         <div id="three-container-4" class="three-container"></div>
       </div>
@@ -320,56 +320,46 @@
           </div>
         </div>
 
-        <!-- Stage 4: gs2mesh Reconstruction -->
+        <!-- Stage 4: GaussianWrapping Reconstruction -->
         <div class="config-section" data-stages="4">
           <div class="form-group">
-            <label for="cfg-gs2mesh-preset">Quality Preset</label>
-            <select id="cfg-gs2mesh-preset">
+            <label for="cfg-gwrapping-preset">Quality Preset</label>
+            <select id="cfg-gwrapping-preset">
               <option value="default" selected>Default</option>
               <option value="high">High</option>
+              <option value="fast">Fast</option>
               <option value="custom">Custom</option>
             </select>
-            <div class="config-note">Preset applies both UI-exposed knobs and hidden Stage 4 fusion settings.</div>
+            <div class="config-note">Preset applies both UI-exposed knobs and hidden Stage 4 settings.</div>
           </div>
           <div class="form-group">
-            <label for="cfg-gs2mesh-gs-iterations">3DGS Training Iterations</label>
-            <input type="number" id="cfg-gs2mesh-gs-iterations" value="5000" min="1000" step="1000">
+            <label for="cfg-gwrapping-iterations">Iterations</label>
+            <input type="number" id="cfg-gwrapping-iterations" value="30000" min="1000" step="1000">
           </div>
           <div class="form-group">
-            <label for="cfg-gs2mesh-stereo-model">Stereo Model</label>
-            <select id="cfg-gs2mesh-stereo-model">
-              <option value="DLNR" selected>DLNR</option>
+            <label for="cfg-gwrapping-rasterizer">Rasterizer</label>
+            <select id="cfg-gwrapping-rasterizer">
+              <option value="ours" selected>ours</option>
+              <option value="radegs">radegs</option>
             </select>
           </div>
-          <details class="config-advanced">
-            <summary>Advanced Parameters</summary>
-            <div class="config-advanced-body">
-              <div class="form-group">
-                <label for="cfg-gs2mesh-runtime-profile">3DGS Runtime Profile</label>
-                <select id="cfg-gs2mesh-runtime-profile">
-                  <option value="auto" selected>Auto (Sparse Adam + headless)</option>
-                  <option value="compat">Compat (default optimizer)</option>
-                </select>
-                <div class="config-note">Keeps quality knobs unchanged and only changes non-quality runtime behavior.</div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label for="cfg-gs2mesh-tsdf-voxel-size">TSDF Voxel Size</label>
-                  <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005" min="0.001" max="0.1" step="0.001">
-                </div>
-                <div class="form-group">
-                  <label for="cfg-gs2mesh-tsdf-depth-trunc">TSDF Depth Trunc</label>
-                  <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04" min="0.005" max="0.5" step="0.005">
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="checkbox-label" for="cfg-gs2mesh-use-masks">
-                  <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
-                  Apply SAM2 masks to depth maps
-                </label>
-              </div>
-            </div>
-          </details>
+          <div class="form-group">
+            <label for="cfg-gwrapping-resolution">Resolution</label>
+            <input type="number" id="cfg-gwrapping-resolution" value="2" min="1" step="1">
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label" for="cfg-gwrapping-use-masks">
+              <input type="checkbox" id="cfg-gwrapping-use-masks" checked>
+              Apply SAM2 masks
+            </label>
+          </div>
+          <div class="form-group">
+            <label for="cfg-gwrapping-extraction-method">Extraction Method</label>
+            <select id="cfg-gwrapping-extraction-method">
+              <option value="pivot" selected>pivot</option>
+              <option value="primal">primal</option>
+            </select>
+          </div>
         </div>
 
         <!-- Stage 5: Texture -->

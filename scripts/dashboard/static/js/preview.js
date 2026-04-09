@@ -8,7 +8,7 @@
  *   1. Extract Frames
  *   2. COLMAP SfM (camera_poses.json + colmap_sparse_points.ply)
  *   3. SAM2 Segmentation (masks only)
- *   4. gs2mesh Reconstruction (object_mesh.ply)
+ *   4. GaussianWrapping Reconstruction (object_mesh.ply)
  *   5. Texture Bake (textured_mesh.obj)
  *   6. Post-texture Cleanup (textured_mesh_cleaned.obj)
  */
