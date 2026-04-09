@@ -16,6 +16,7 @@ import types
 import unittest
 from unittest.mock import MagicMock, patch
 
+from scripts.gwrapping_config import GWrappingSettings
 from scripts.dashboard.stage_wrappers import (
     _stage_colmap_sfm,
     _stage_extract_frames,
@@ -121,17 +122,20 @@ class TestStageGWrappingVRAMCleanup(_WrapperTestBase):
     """_stage_gwrapping_reconstruct calls cleanup_pytorch_vram after inference."""
 
     def test_cleanup_called_after_inference(self) -> None:
+        settings = GWrappingSettings(
+            iterations=30000,
+            rasterizer="ours",
+            resolution=2,
+            use_masks=True,
+            extraction_method="pivot",
+            use_depth=True,
+        )
         _stage_gwrapping_reconstruct(
             "/data/output/frames",
             "/data/output/colmap_sparse",
             "/data/output/masks",
             "/data/output",
-            iterations=30000,
-            rasterizer="ours",
-            resolution=2,
-            use_masks=True,
-            use_depth=True,
-            extraction_method="pivot",
+            gwrapping_settings=settings,
         )
         self.mock_gwrapping.assert_called_once()
         settings = self.mock_gwrapping.call_args.kwargs.get("settings")
@@ -139,6 +143,18 @@ class TestStageGWrappingVRAMCleanup(_WrapperTestBase):
         self.assertEqual(settings.iterations, 30000)
         self.assertEqual(settings.rasterizer, "ours")
         self.mock_cleanup.assert_called_once()
+
+    def test_defaults_to_preset_when_settings_not_provided(self) -> None:
+        _stage_gwrapping_reconstruct(
+            "/data/output/frames",
+            "/data/output/colmap_sparse",
+            "/data/output/masks",
+            "/data/output",
+        )
+        self.mock_gwrapping.assert_called_once()
+        settings = self.mock_gwrapping.call_args.kwargs.get("settings")
+        self.assertIsInstance(settings, GWrappingSettings)
+        self.assertEqual(settings, GWrappingSettings.from_preset())
 
 
 class TestStageTextureBakeArgs(_WrapperTestBase):

@@ -34,6 +34,10 @@ def _noop_scope(*_args, **_kwargs):
     yield
 
 
+async def _run_inline(fn, /, *args, **kwargs):
+    return fn(*args, **kwargs)
+
+
 class _FakeSAM2Service:
     """Fake SAM2 service that creates mask files on propagate."""
 
@@ -198,6 +202,7 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
         targets: list[tuple[str, MagicMock | AsyncMock]] = [
             (f"{_MODULE}.broadcast", AsyncMock()),
             (f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)),
+            (f"{_MODULE}.asyncio.to_thread", AsyncMock(side_effect=_run_inline)),
             (f"{_MODULE}._stage_extract_frames", MagicMock(side_effect=effects["extract_frames"])),
             (f"{_MODULE}._stage_colmap_sfm", MagicMock(side_effect=effects["colmap_sfm"])),
             (f"{_MODULE}._stage_gwrapping_reconstruct", MagicMock(side_effect=effects["gwrapping_reconstruct"])),
@@ -206,6 +211,8 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             (f"{_MODULE}._stage_post_texture_contact_cleanup_apply", MagicMock(side_effect=effects["post_texture_apply"])),
             (f"{_MODULE}._stage_post_texture_contact_cleanup_skip", MagicMock(side_effect=effects["post_texture_skip"])),
             (f"{_MODULE}._vram_gate", MagicMock()),
+            ("scripts.vram_utils.cleanup_pytorch_vram", MagicMock()),
+            ("scripts.vram_utils.log_vram_detailed", MagicMock()),
         ]
         overrides = extra_overrides or {}
         for i, (target, default_mock) in enumerate(targets):
@@ -236,6 +243,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         mock_fn = MagicMock()
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock) as bc, \
+             patch(f"{_MODULE}.asyncio.to_thread", AsyncMock(side_effect=_run_inline)), \
              patch(f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)):
             await _run_stage(self.session, PipelineStage.EXTRACT_FRAMES, mock_fn)
 
@@ -258,6 +266,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         mock_fn = MagicMock(side_effect=ValueError("boom"))
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock) as bc, \
+             patch(f"{_MODULE}.asyncio.to_thread", AsyncMock(side_effect=_run_inline)), \
              patch(f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)):
             with self.assertRaises(ValueError):
                 await _run_stage(
@@ -278,6 +287,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         mock_fn = MagicMock()
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
+             patch(f"{_MODULE}.asyncio.to_thread", AsyncMock(side_effect=_run_inline)), \
              patch(f"{_MODULE}.stage_log_scope", MagicMock(side_effect=_noop_scope)):
             await _run_stage(self.session, PipelineStage.GWRAPPING_RECONSTRUCT, mock_fn)
 
@@ -293,6 +303,7 @@ class TestRunStage(unittest.IsolatedAsyncioTestCase):
         mock_scope = MagicMock(side_effect=_noop_scope)
 
         with patch(f"{_MODULE}.broadcast", new_callable=AsyncMock), \
+             patch(f"{_MODULE}.asyncio.to_thread", AsyncMock(side_effect=_run_inline)), \
              patch(f"{_MODULE}.stage_log_scope", mock_scope):
             await _run_stage(self.session, PipelineStage.GWRAPPING_RECONSTRUCT, mock_fn)
 
@@ -475,6 +486,70 @@ class TestRunPipelineCancelHydrates(_PipelineIntegrationBase):
                     signaler.cancel()
 
         mock_hydrate.assert_called_once_with(self.tmpdir)
+
+
+class TestRunPipelineStage4CancelCleanup(_PipelineIntegrationBase):
+    """Cancel during Stage 4 removes partial GWrapping outputs."""
+
+    auto_accept = True
+
+    async def test_stage4_cancel_cleans_partial_outputs(self) -> None:
+        _populate_frames(self.tmpdir)
+        _populate_colmap(self.tmpdir)
+        _populate_masks(self.tmpdir)
+
+        self.session.resume_from_stage = PipelineStage.GWRAPPING_RECONSTRUCT
+        self.session.frames_dir = str(Path(self.tmpdir) / "frames")
+        self.session.colmap_sparse_path = str(Path(self.tmpdir) / "colmap_sparse")
+        self.session.poses_path = str(Path(self.tmpdir) / "camera_poses.json")
+        self.session.mask_dir = str(Path(self.tmpdir) / "masks")
+
+        def _cancel_in_stage4(*args, **kwargs):
+            out = Path(self.tmpdir)
+            (out / "gwrapping_workspace").mkdir(parents=True, exist_ok=True)
+            (out / "gwrapping_workspace" / "partial.txt").write_text(
+                "partial",
+                encoding="utf-8",
+            )
+            (out / "colmap_sparse_filtered").mkdir(parents=True, exist_ok=True)
+            (out / "colmap_sparse_filtered" / "cameras.bin").write_bytes(b"bin")
+            (out / "object_mesh.ply").write_bytes(b"ply")
+            self.session.stage_progress(
+                PipelineStage.GWRAPPING_RECONSTRUCT,
+                progress=40.0,
+                detail="Training GaussianWrapping",
+                checkpoint_id="s4.train_gw",
+            )
+            self.session.request_cancel()
+            kwargs["cancel_cb"]()
+
+        with ExitStack() as stack:
+            mocks = self._enter_all_patches(
+                stack,
+                extra_overrides={
+                    "_stage_gwrapping_reconstruct": MagicMock(
+                        side_effect=_cancel_in_stage4,
+                    ),
+                },
+            )
+            await run_pipeline(self.session, self.sam2)
+
+        bc = mocks["broadcast"]
+        errors = self._broadcasts_of_type(bc, "pipeline_error")
+        self.assertTrue(len(errors) >= 1)
+        self.assertEqual(errors[0]["reason_code"], "cancelled")
+
+        cleanup = errors[0]["cleanup"]
+        self.assertIsNotNone(cleanup)
+        self.assertEqual(cleanup["stage"], 4)
+        self.assertEqual(cleanup["checkpoint_id"], "s4.train_gw")
+        self.assertIn("gwrapping_workspace", cleanup["removed_dirs"])
+        self.assertIn("colmap_sparse_filtered", cleanup["removed_dirs"])
+        self.assertIn("object_mesh.ply", cleanup["removed_files"])
+
+        self.assertFalse((Path(self.tmpdir) / "gwrapping_workspace").exists())
+        self.assertFalse((Path(self.tmpdir) / "colmap_sparse_filtered").exists())
+        self.assertFalse((Path(self.tmpdir) / "object_mesh.ply").exists())
 
 
 class TestRunPipelineExceptionBroadcastsError(_PipelineIntegrationBase):

@@ -170,6 +170,14 @@ class TestCheckpointCleanupPlan(unittest.TestCase):
     def test_stage4_known(self) -> None:
         dirs, files, used_fallback = checkpoint_cleanup_plan(4, "s4.save")
         self.assertFalse(used_fallback)
+        self.assertIn("colmap_sparse_filtered", dirs)
+        self.assertIn("object_mesh.ply", files)
+
+    def test_stage4_train_checkpoint_cleans_partial_outputs(self) -> None:
+        dirs, files, used_fallback = checkpoint_cleanup_plan(4, "s4.train_gw")
+        self.assertFalse(used_fallback)
+        self.assertIn("gwrapping_workspace", dirs)
+        self.assertIn("colmap_sparse_filtered", dirs)
         self.assertIn("object_mesh.ply", files)
 
 
@@ -195,6 +203,15 @@ class TestCleanupCheckpointOutputs(unittest.TestCase):
             result = cleanup_checkpoint_outputs(tmpdir, 4, "s4.save")
             self.assertFalse(target.exists())
             self.assertIn("object_mesh.ply", result["removed_files"])
+
+    def test_stage4_cleanup_removes_filtered_sparse_dir(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "colmap_sparse_filtered"
+            target.mkdir()
+            (target / "cameras.bin").touch()
+            result = cleanup_checkpoint_outputs(tmpdir, 4, "s4.train_gw")
+            self.assertFalse(target.exists())
+            self.assertIn("colmap_sparse_filtered", result["removed_dirs"])
 
     def test_nonexistent_is_safe(self) -> None:
         with TemporaryDirectory() as tmpdir:

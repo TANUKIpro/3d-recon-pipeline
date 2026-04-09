@@ -40,7 +40,7 @@ const CHECKPOINT_TEMPLATES = {
   4: [
     'Undistort images',
     'Train GaussianWrapping',
-    'Mesh extraction',
+    'Collect output mesh',
     'Save output mesh',
   ],
   5: [
@@ -66,7 +66,7 @@ const CHECKPOINT_IDS = {
   1: ['s1.inspect', 's1.extract', 's1.finalize'],
   2: ['s2.features', 's2.match', 's2.reconstruct', 's2.export'],
   3: ['s3.initialize', 's3.interact', 's3.propagate', 's3.verify'],
-  4: ['s4.undistort', 's4.train', 's4.extract', 's4.save'],
+  4: ['s4.undistort', 's4.train_gw', 's4.trim', 's4.save'],
   5: ['s5.load', 's5.intrinsics', 's5.uv', 's5.score', 's5.fill', 's5.export'],
   6: ['s6.proposal', 's6.review', 's6.holefill', 's6.noise', 's6.watertight', 's6.finalclean', 's6.apply'],
 };
@@ -92,7 +92,7 @@ const DETAIL_MATCHERS = {
   4: [
     { re: /undistort|undistorting/i, idx: 0 },
     { re: /training gaussianwrapping|gwrapping training|iteration/i, idx: 1 },
-    { re: /mesh extraction|extracting mesh|collecting output/i, idx: 2 },
+    { re: /collecting output|selected gaussianwrapping mesh/i, idx: 2 },
     { re: /gaussianwrapping reconstruction complete|gwrapping complete/i, idx: 3 },
   ],
   5: [

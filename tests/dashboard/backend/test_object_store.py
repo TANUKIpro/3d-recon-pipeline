@@ -52,6 +52,31 @@ class TestResetOutputsFromStage(unittest.TestCase):
             self.assertFalse((out / "masks").is_dir())
             self.assertFalse((out / "object_mesh.ply").is_file())
 
+    def test_reset_from_stage_4_removes_all_stage4_outputs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / "frames").mkdir()
+            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
+            (out / "camera_poses.json").write_text("{}")
+            (out / "colmap_sparse").mkdir()
+            (out / "gwrapping_workspace").mkdir()
+            (out / "colmap_sparse_filtered").mkdir()
+            (out / "object_mesh.ply").write_text("ply\n")
+
+            reset_outputs_from_stage(out, 4)
+
+            self.assertTrue((out / "frames" / "00000.jpg").is_file())
+            self.assertTrue((out / "camera_poses.json").is_file())
+            self.assertTrue((out / "colmap_sparse").is_dir())
+            self.assertFalse((out / "gwrapping_workspace").exists())
+            self.assertFalse((out / "colmap_sparse_filtered").exists())
+            self.assertFalse((out / "object_mesh.ply").exists())
+
+
+class TestStageResetPaths(unittest.TestCase):
+    def test_stage4_reset_paths_include_filtered_sparse_dir(self) -> None:
+        self.assertIn("colmap_sparse_filtered", STAGE_RESET_PATHS[4]["dirs"])
+
 
 class TestInferResumeStage(unittest.TestCase):
     """infer_resume_stage returns the first incomplete stage."""

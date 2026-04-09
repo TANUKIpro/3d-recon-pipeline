@@ -8,7 +8,6 @@ Takes COLMAP output + optional SAM2 masks, produces object_mesh.ply.
 
 from __future__ import annotations
 
-import gc
 import os
 import re
 import shutil
@@ -24,7 +23,11 @@ from scripts.colmap_sparse_filter import (
 from scripts.gwrapping_config import GWrappingSettings
 
 _GW_BASE = Path("/opt/GaussianWrapping")
-_GW_SCRIPTS = _GW_BASE / "gaussian_wrapping" / "scripts"
+_GW_TRAIN = _GW_BASE / "gaussian_wrapping" / "train.py"
+_GW_EXTRACT = _GW_BASE / "gaussian_wrapping" / "pivot_based_mesh_extraction.py"
+_GW_TEXTURE = _GW_BASE / "gaussian_wrapping" / "texture_mesh.py"
+_GW_OURS_REGULARIZATION_FROM_ITER = 7000
+_GW_RADEGS_REGULARIZATION_FROM_ITER = 15000
 
 
 class _SubprocessFailure(RuntimeError):
@@ -62,7 +65,6 @@ def run_gwrapping(
     """
     out = Path(output_dir)
     gw_workdir = out / "gwrapping_workspace"
-    gw_workdir.mkdir(parents=True, exist_ok=True)
 
     if settings is None:
         settings = GWrappingSettings.from_preset()
@@ -74,6 +76,9 @@ def run_gwrapping(
             progress_cb(pct, msg)
         if cancel_cb:
             cancel_cb()
+
+    _reset_gwrapping_outputs(out)
+    gw_workdir.mkdir(parents=True, exist_ok=True)
 
     # Find the COLMAP reconstruction subdir (0/, 1/, etc.) and optionally
     # filter sparse points against SAM2 object masks.
@@ -136,18 +141,13 @@ def run_gwrapping(
     from scripts.vram_utils import log_vram_detailed
     log_vram_detailed("before GaussianWrapping training subprocess")
 
-    train_args = _build_train_args(gw_source, model_dir, settings)
-    _run_subprocess(
-        train_args,
-        cwd=str(_GW_BASE),
-        prefix="GWrapping",
-        progress_fn=lambda line: _parse_progress(
-            line, settings.iterations, _report,
-        ),
+    _run_gwrapping_pipeline(
+        gw_source,
+        model_dir,
+        settings,
+        report=_report,
         register_process=register_process,
         unregister_process=unregister_process,
-        error_msg="GaussianWrapping training failed",
-        env=_build_env(),
     )
 
     if cancel_cb:
@@ -159,20 +159,15 @@ def run_gwrapping(
 
     # Locate the extracted mesh.
     _report(90.0, "Collecting output mesh")
-    extracted_mesh = _find_extracted_mesh(model_dir)
+    extracted_mesh = _find_extracted_mesh(model_dir, settings)
     if not extracted_mesh.exists():
         raise RuntimeError(
             f"GaussianWrapping produced no output mesh: {extracted_mesh}"
         )
 
-    # Step 3: Post-extraction mask trimming (optional).
-    if settings.use_masks and mask_dir is not None:
-        _report(95.0, "Trimming mesh with SAM2 masks")
-        extracted_mesh = _trim_mesh_with_masks(
-            extracted_mesh, Path(mask_dir), undistorted_dir, gw_workdir,
-        )
+    print(f"Selected GaussianWrapping mesh: {extracted_mesh}")
 
-    # Step 4: Copy output mesh.
+    # Step 3: Copy output mesh.
     _report(98.0, "Collecting output mesh")
     final_mesh = out / "object_mesh.ply"
     shutil.copy2(str(extracted_mesh), str(final_mesh))
@@ -241,6 +236,19 @@ def _prepare_sparse_model(
 
     report(0.8, "Filtered sparse unavailable, using original COLMAP sparse")
     return recon_dir
+
+
+def _reset_gwrapping_outputs(output_dir: Path) -> None:
+    """Remove Stage 4 artifacts so each run starts from a clean workspace."""
+    for path in (
+        output_dir / "gwrapping_workspace",
+        output_dir / "colmap_sparse_filtered",
+        output_dir / "object_mesh.ply",
+    ):
+        if path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
 
 
 def _ensure_sparse_0(sparse_dir: Path) -> None:
@@ -362,19 +370,111 @@ def _build_train_args(
     model_path: Path,
     settings: GWrappingSettings,
 ) -> list[str]:
-    """Build the GaussianWrapping end-to-end pipeline command."""
-    if settings.rasterizer == "radegs":
-        script = "train_and_extract_gw_radegs.py"
-    else:
-        script = "train_and_extract_gw_ours.py"
-
-    return [
-        "python3", "-u",
-        str(_GW_SCRIPTS / script),
+    """Build the GaussianWrapping training command."""
+    _require_supported_extraction_method(settings)
+    args = [
+        "python3",
+        "-u",
+        str(_GW_TRAIN),
         "-s", str(source_path),
         "-m", str(model_path),
         "-r", str(settings.resolution),
+        "--iterations", str(settings.iterations),
+        "--rasterizer", str(settings.rasterizer),
+        "--regularization_from_iter", str(_resolve_regularization_start(settings)),
+        "--data_device", "cpu",
+        "--N_max_gaussians", "5000000",
     ]
+    if settings.rasterizer == "radegs":
+        args.extend([
+            "--multiview_config", "fast_late",
+            "--multiview_factor", "0.05",
+            "--use_max_size_threshold",
+        ])
+    else:
+        args.extend([
+            "--feature_dc_lr", "0.0013",
+            "--feature_rest_lr", "0.00011",
+            "--exposure_compensation",
+        ])
+    return args
+
+
+def _build_extract_args(
+    source_path: Path,
+    model_path: Path,
+    settings: GWrappingSettings,
+) -> list[str]:
+    """Build the GaussianWrapping mesh extraction command."""
+    _require_supported_extraction_method(settings)
+    args = [
+        "python3",
+        "-u",
+        str(_GW_EXTRACT),
+        "-s", str(source_path),
+        "-m", str(model_path),
+        "-r", str(settings.resolution),
+        "--iteration", str(settings.iterations),
+        "--dtype", "int32",
+        "--isosurface_value", "0.0",
+        "--n_binary_steps", "10",
+        "--postprocess",
+        "--data_device", "cpu",
+        "--rasterizer", str(settings.rasterizer),
+    ]
+    if settings.use_masks:
+        args.append("--use_valid_mask")
+    if settings.rasterizer == "radegs":
+        args.extend([
+            "--sdf_mode", "exact_computation",
+            "--std_factor", "3.33",
+            "--use_searched_pivots",
+            "--search_iter", "5",
+            "--search_step_size", "0.33",
+        ])
+    else:
+        args.extend([
+            "--sdf_mode", "ours",
+            "--filter_large_edges",
+        ])
+    return args
+
+
+def _build_texture_args(
+    source_path: Path,
+    model_path: Path,
+    mesh_path: Path,
+    settings: GWrappingSettings,
+) -> list[str]:
+    """Build the best-effort texture refinement command."""
+    return [
+        "python3",
+        "-u",
+        str(_GW_TEXTURE),
+        "-s", str(source_path),
+        "-m", str(model_path),
+        "-r", str(settings.resolution),
+        "--iteration", str(settings.iterations),
+        "--rasterizer", str(settings.rasterizer),
+        "--mesh", str(mesh_path),
+    ]
+
+
+def _resolve_regularization_start(settings: GWrappingSettings) -> int:
+    """Map hidden use_depth to the training regularization schedule."""
+    if not settings.use_depth:
+        return settings.iterations + 1
+    if settings.rasterizer == "radegs":
+        return _GW_RADEGS_REGULARIZATION_FROM_ITER
+    return _GW_OURS_REGULARIZATION_FROM_ITER
+
+
+def _require_supported_extraction_method(settings: GWrappingSettings) -> None:
+    if settings.extraction_method != "pivot":
+        raise RuntimeError(
+            "Unsupported GaussianWrapping extraction method: "
+            f"{settings.extraction_method}"
+        )
 
 
 def _build_env() -> dict[str, str]:
@@ -409,54 +509,109 @@ def _parse_progress(
         report(pct, f"GaussianWrapping training iteration {current}/{total_iterations}")
 
 
-def _find_extracted_mesh(model_dir: Path) -> Path:
-    """Locate the mesh file produced by GaussianWrapping extraction.
+def _find_extracted_mesh(
+    model_dir: Path,
+    settings: GWrappingSettings,
+) -> Path:
+    """Locate the highest-priority mesh file produced by GaussianWrapping."""
+    base_name = _expected_mesh_basename(settings)
+    preferred: list[Path] = [model_dir / f"{base_name}_post.ply"]
+    preferred.extend(sorted(model_dir.glob(f"{base_name}_texture_refined_*.ply")))
+    preferred.append(model_dir / f"{base_name}.ply")
+    for candidate in preferred:
+        if candidate.exists():
+            return candidate
 
-    GaussianWrapping outputs meshes into the model directory. The exact
-    filename depends on the extraction method used by the pipeline script.
-    """
-    # Search for common mesh output patterns
-    candidates = [
-        *model_dir.rglob("*.ply"),
-    ]
-    # Prefer mesh files over point cloud files
+    fallback_candidates = [*model_dir.rglob("*.ply")]
     mesh_candidates = [
-        p for p in candidates
-        if "mesh" in p.stem.lower() or "extracted" in p.stem.lower()
+        path
+        for path in fallback_candidates
+        if "mesh" in path.stem.lower() or "extracted" in path.stem.lower()
     ]
     if mesh_candidates:
-        return max(mesh_candidates, key=lambda p: p.stat().st_mtime)
-    # Fall back to any PLY in the model directory
-    if candidates:
-        return max(candidates, key=lambda p: p.stat().st_mtime)
-    return model_dir / "mesh.ply"
+        selected = max(mesh_candidates, key=lambda path: path.stat().st_mtime)
+        print(
+            "GaussianWrapping output selection fell back to the most recent "
+            f"mesh-like artifact: {selected}"
+        )
+        return selected
+    if fallback_candidates:
+        selected = max(fallback_candidates, key=lambda path: path.stat().st_mtime)
+        print(
+            "GaussianWrapping output selection fell back to the most recent PLY "
+            f"artifact: {selected}"
+        )
+        return selected
+    return model_dir / f"{base_name}.ply"
+
+
+def _expected_mesh_basename(settings: GWrappingSettings) -> str:
+    _require_supported_extraction_method(settings)
+    if settings.rasterizer == "radegs":
+        return "mesh_exact_computation_2pivots_searched"
+    return "mesh_ours_2pivots"
 
 
 # ---------------------------------------------------------------------------
-#  Post-Extraction Mask Trimming
+#  Pipeline Helpers
 # ---------------------------------------------------------------------------
 
-def _trim_mesh_with_masks(
-    mesh_path: Path,
-    mask_dir: Path,
-    undistorted_dir: Path,
-    work_dir: Path,
-) -> Path:
-    """Remove mesh vertices consistently outside SAM2 masks."""
+def _run_gwrapping_pipeline(
+    source_path: Path,
+    model_path: Path,
+    settings: GWrappingSettings,
+    *,
+    report,
+    register_process=None,
+    unregister_process=None,
+) -> None:
+    """Run GaussianWrapping training, extraction, and best-effort refinement."""
+    env = _build_env()
+    _run_subprocess(
+        _build_train_args(source_path, model_path, settings),
+        cwd=str(_GW_BASE),
+        prefix="GWrapping",
+        progress_fn=lambda line: _parse_progress(
+            line, settings.iterations, report,
+        ),
+        register_process=register_process,
+        unregister_process=unregister_process,
+        error_msg="GaussianWrapping training failed",
+        env=env,
+    )
+
+    report(86.0, "Extracting mesh from GaussianWrapping model")
+    _run_subprocess(
+        _build_extract_args(source_path, model_path, settings),
+        cwd=str(_GW_BASE),
+        prefix="GWrapping",
+        register_process=register_process,
+        unregister_process=unregister_process,
+        error_msg="GaussianWrapping mesh extraction failed",
+        env=env,
+    )
+
+    raw_mesh = model_path / f"{_expected_mesh_basename(settings)}.ply"
+    if not raw_mesh.exists():
+        print(
+            "Skipping GaussianWrapping texture refinement because the expected "
+            f"raw mesh is missing: {raw_mesh}"
+        )
+        return
+
+    report(89.0, "Refining extracted mesh colors")
     try:
-        import trimesh
-    except ImportError:
-        print("trimesh not available, skipping mask trimming")
-        return mesh_path
-
-    mesh = trimesh.load(str(mesh_path), process=False)
-    if not hasattr(mesh, "vertices") or len(mesh.vertices) == 0:
-        return mesh_path
-
-    trimmed_path = work_dir / "trimmed_mesh.ply"
-    mesh.export(str(trimmed_path))
-    print(f"Mesh trimming: {len(mesh.vertices)} vertices -> {trimmed_path}")
-    return trimmed_path
+        _run_subprocess(
+            _build_texture_args(source_path, model_path, raw_mesh, settings),
+            cwd=str(_GW_BASE),
+            prefix="GWrapping",
+            register_process=register_process,
+            unregister_process=unregister_process,
+            error_msg="GaussianWrapping texture refinement failed",
+            env=env,
+        )
+    except _SubprocessFailure as exc:
+        print(f"GaussianWrapping texture refinement failed; continuing: {exc}")
 
 
 # ---------------------------------------------------------------------------
