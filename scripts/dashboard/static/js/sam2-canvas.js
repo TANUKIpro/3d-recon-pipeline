@@ -31,11 +31,15 @@ export class SAM2Canvas {
     this._loading = false;
     this._mode = 'object'; // 'object' or 'ground'
     this._groundPhase = false;
+    this._currentController = null;
+    this._sessionEpoch = 0;
 
     this._bindEvents();
   }
 
   activate(frameCount, width, height) {
+    this._abortCurrentRequest();
+    this._sessionEpoch++;
     this._active = true;
     this._imgWidth = width;
     this._imgHeight = height;
@@ -51,6 +55,7 @@ export class SAM2Canvas {
     this._canvas.style.display = 'block';
     this._canvas.width = width;
     this._canvas.height = height;
+    this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
     this._loading = true;
     this._canvas.style.opacity = '0.7';
     this._undoBtn.disabled = true;
@@ -75,6 +80,7 @@ export class SAM2Canvas {
   }
 
   deactivate() {
+    this._abortCurrentRequest();
     this._active = false;
     this._loading = false;
     this._groundPhase = false;
@@ -251,33 +257,51 @@ export class SAM2Canvas {
   }
 
   async _postClickAndDraw(url, body) {
+    this._abortCurrentRequest();
+    const controller = new AbortController();
+    this._currentController = controller;
+    const requestEpoch = this._sessionEpoch;
+
     this._loading = true;
     this._canvas.style.opacity = '0.7';
     try {
-      const options = { method: 'POST' };
+      const options = { method: 'POST', signal: controller.signal };
       if (body) {
         options.headers = { 'Content-Type': 'application/json' };
         options.body = JSON.stringify(body);
       }
       const res = await fetch(url, options);
-      if (res.ok) {
-        const blob = await res.blob();
-        const img = new Image();
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-          img.src = URL.createObjectURL(blob);
-        });
-        this._canvas.width = img.naturalWidth;
-        this._canvas.height = img.naturalHeight;
-        this._ctx.drawImage(img, 0, 0);
+      if (!res.ok) return;
+      if (requestEpoch !== this._sessionEpoch || !this._active) return;
+      const blob = await res.blob();
+      if (requestEpoch !== this._sessionEpoch || !this._active) return;
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = URL.createObjectURL(blob);
+      });
+      if (requestEpoch !== this._sessionEpoch || !this._active) {
         URL.revokeObjectURL(img.src);
+        return;
       }
+      this._canvas.width = img.naturalWidth;
+      this._canvas.height = img.naturalHeight;
+      this._ctx.drawImage(img, 0, 0);
+      URL.revokeObjectURL(img.src);
     } catch (e) {
-      console.error('SAM2 request error:', e);
+      if (e.name !== 'AbortError') console.error('SAM2 request error:', e);
     } finally {
+      if (this._currentController === controller) this._currentController = null;
       this._loading = false;
       this._canvas.style.opacity = '1';
+    }
+  }
+
+  _abortCurrentRequest() {
+    if (this._currentController) {
+      this._currentController.abort();
+      this._currentController = null;
     }
   }
 
