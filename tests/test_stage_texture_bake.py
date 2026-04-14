@@ -1483,7 +1483,7 @@ class BakeTextureRegressionTests(unittest.TestCase):
             self.assertEqual(result, output_dir / "textured_mesh.obj")
             self.assertEqual(_hash_file(output_dir / "textured_mesh.obj"), "ed5e5443d4cab796bc64dfa73d88299135b36fd2ceed6038b14fa8c6bb3b9f40")
             self.assertEqual(_hash_file(output_dir / "textured_mesh.mtl"), "b2afa1559c9a36be27e591d98f7384c7f1c99e7bf33349e9e78c786c922efced")
-            self.assertEqual(_hash_file(output_dir / "texture.png"), "34f825db2c56bd448db64ccc94445ccdafd67b22bdfe497ab493f8eca4352f2f")
+            self.assertEqual(_hash_file(output_dir / "texture.png"), "7ace89584d155af0638ea9e91efa2a856e74d444e02f36b43adca47afdb90719")
 
     def test_fallback_subset_reuse_does_not_boolean_mismatch(self) -> None:
         with TemporaryDirectory() as tmp:

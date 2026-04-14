@@ -857,13 +857,21 @@ def bake_texture(
         empty = ~valid_pad
         if not np.any(empty):
             break
+        nc = cv2.filter2D(
+            valid_pad.astype(np.float32), -1, kernel,
+            borderType=cv2.BORDER_CONSTANT,
+        )
+        fill = empty & (nc > 0)
+        if not np.any(fill):
+            break
+        inv_nc = 1.0 / nc[fill]
         for c in range(3):
-            ns = cv2.filter2D(result_tex[:, :, c], -1, kernel, borderType=cv2.BORDER_CONSTANT)
-            nc = cv2.filter2D(valid_pad.astype(np.float32), -1, kernel, borderType=cv2.BORDER_CONSTANT)
-            fill = empty & (nc > 0)
-            if np.any(fill):
-                result_tex[:, :, c][fill] = ns[fill] / nc[fill]
-                valid_pad[fill] = True
+            ns = cv2.filter2D(
+                result_tex[:, :, c], -1, kernel,
+                borderType=cv2.BORDER_CONSTANT,
+            )
+            result_tex[:, :, c][fill] = ns[fill] * inv_nc
+        valid_pad[fill] = True
         _emit_progress(
             progress_cb,
             92.0 + ((iter_idx + 1) / 8.0) * 5.0,
