@@ -45,7 +45,79 @@ def gpu_tsdf_reconstruct(
     import open3d.core as o3c
     from PIL import Image
 
+    from scripts.vram_utils import log_vram
+
     root = Path(output_dir_root)
+    try:
+        return _gpu_tsdf_impl(
+            root=root,
+            stereo_model=stereo_model,
+            tsdf_voxel=tsdf_voxel,
+            tsdf_sdf_trunc=tsdf_sdf_trunc,
+            tsdf_scale=tsdf_scale,
+            tsdf_min_depth_baselines=tsdf_min_depth_baselines,
+            tsdf_max_depth_baselines=tsdf_max_depth_baselines,
+            tsdf_dilate=tsdf_dilate,
+            tsdf_cleaning_threshold=tsdf_cleaning_threshold,
+            tsdf_use_mask=tsdf_use_mask,
+            tsdf_erode_mask=tsdf_erode_mask,
+            tsdf_use_occlusion_mask=tsdf_use_occlusion_mask,
+            tsdf_invert_mask=tsdf_invert_mask,
+            tsdf_erosion_kernel_size=tsdf_erosion_kernel_size,
+            tsdf_closing_kernel_size=tsdf_closing_kernel_size,
+            block_count=block_count,
+            progress_cb=progress_cb,
+        )
+    finally:
+        # Open3D's VoxelBlockGrid allocates ~8GB on the GPU at
+        # block_count=100_000 from its OWN memory pool (not PyTorch's).
+        # torch.cuda.empty_cache() cannot free it — we must ask Open3D
+        # directly via open3d.core.cuda.release_cache().
+        import gc
+
+        log_vram("before GPU TSDF release")
+        try:
+            o3c.cuda.release_cache()
+        except Exception as exc:  # pragma: no cover — API varies by version
+            print(f"open3d release_cache failed (continuing): {exc}")
+        gc.collect()
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except ImportError:
+            pass
+        log_vram("after GPU TSDF release")
+
+
+def _gpu_tsdf_impl(
+    *,
+    root: Path,
+    stereo_model: str,
+    tsdf_voxel: int,
+    tsdf_sdf_trunc: float,
+    tsdf_scale: float,
+    tsdf_min_depth_baselines: int,
+    tsdf_max_depth_baselines: int,
+    tsdf_dilate: int,
+    tsdf_cleaning_threshold: int,
+    tsdf_use_mask: bool,
+    tsdf_erode_mask: bool,
+    tsdf_use_occlusion_mask: bool,
+    tsdf_invert_mask: bool,
+    tsdf_erosion_kernel_size: int,
+    tsdf_closing_kernel_size: int,
+    block_count: int,
+    progress_cb: Callable[[float, str], None] | None,
+) -> str:
+    """Core implementation — called from `gpu_tsdf_reconstruct` inside its
+    try/finally so GPU memory is released even on early return/error.
+    """
+    import open3d as o3d
+    import open3d.core as o3c
+    from PIL import Image
 
     # ------------------------------------------------------------------
     # Load camera data written by gs2mesh Renderer
@@ -238,6 +310,10 @@ def gpu_tsdf_reconstruct(
 
     mesh = vbg.extract_triangle_mesh()
     mesh = mesh.to_legacy()
+
+    # vbg is no longer needed after to_legacy() — drop the big GPU tensor
+    # now so the Open3D pool can release ~8GB before cleaning+saving.
+    del vbg
 
     # Undo the coordinate scaling applied during integration
     mesh.scale(tsdf_scale, (0, 0, 0))
