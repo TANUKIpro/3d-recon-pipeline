@@ -2544,8 +2544,10 @@ def _analyze_cleanup(
             np.zeros(skirt_cap_faces.shape[0], dtype=bool),
         ))
     print(
-        f"  Pass 7 (bottom hole-fill): {skirt_stats['loops_found']} loops,"
-        f" {skirt_stats['skirt_faces']} skirt + {skirt_stats['cap_faces']} cap faces,"
+        f"  Pass 7 (bottom hole-fill): {skirt_stats['loops_found']} loops"
+        f" (capped={skirt_stats['loops_capped']}, sealed={skirt_stats.get('loops_sealed', 0)}),"
+        f" {skirt_stats['skirt_faces']} skirt + {skirt_stats['cap_faces']} cap"
+        f" + {skirt_stats.get('seal_faces', 0)} seal faces,"
         f" {skirt_stats['new_vertices']} new vertices"
     )
 
