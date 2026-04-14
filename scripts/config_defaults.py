@@ -25,7 +25,7 @@ COLMAP_MATCHER = "exhaustive"
 COLMAP_MAX_FEATURES = 32768
 COLMAP_IMAGE_SIZE = 2048
 COLMAP_USE_GPU = False
-COLMAP_DSP_SIFT = False
+COLMAP_DSP_SIFT = True
 COLMAP_FIRST_OCTAVE = -1
 
 # --- Stage 3: SAM2 ----------------------------------------
