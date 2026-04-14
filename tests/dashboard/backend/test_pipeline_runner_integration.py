@@ -106,7 +106,9 @@ def _populate_cleanup_outputs(d: str) -> None:
         '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
         encoding="utf-8",
     )
-    (out / "textured_mesh_cleaned.obj").write_bytes(b"obj")
+    final_dir = out / out.name
+    final_dir.mkdir(parents=True, exist_ok=True)
+    (final_dir / "textured_mesh_cleaned.obj").write_bytes(b"obj")
 
 
 # ── Common base ────────────────────────────────────────────────────────────
@@ -154,11 +156,11 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
             )[1] and {"requires_review": False, "recommended_decision": "skip"},
             "post_texture_apply": lambda *a, **kw: (
                 _populate_cleanup_outputs(d),
-                str(Path(d) / "textured_mesh_cleaned.obj"),
+                str(Path(d) / Path(d).name / "textured_mesh_cleaned.obj"),
             )[1],
             "post_texture_skip": lambda *a, **kw: (
                 _populate_cleanup_outputs(d),
-                str(Path(d) / "textured_mesh_cleaned.obj"),
+                str(Path(d) / Path(d).name / "textured_mesh_cleaned.obj"),
             )[1],
         }
 

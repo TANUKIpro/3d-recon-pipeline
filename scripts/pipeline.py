@@ -208,9 +208,10 @@ Examples:
         print(f"  → Decision: {decision}")
         print(f"  → {cleaned_obj_path}")
         if decision == "apply":
-            print(f"  → Cap texture: {Path(output_dir) / 'texture_cap.png'}")
+            print(f"  → Cap texture: {cleaned_obj_path.parent / 'texture_cap.png'}")
     else:
-        cleaned_obj_path = Path(output_dir) / "textured_mesh_cleaned.obj"
+        final_root = Path(output_dir) / Path(output_dir).name
+        cleaned_obj_path = final_root / "textured_mesh_cleaned.obj"
 
     # =====================================================================
     # Summary
@@ -224,14 +225,27 @@ Examples:
     print()
 
     out = Path(output_dir)
-    for name in ["textured_mesh.obj", "textured_mesh.mtl", "textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl",
-                  "texture.png", "texture_cap.png",
-                  "object_mesh.ply",
-                  "camera_poses.json", "intrinsics.json"]:
+    final_root = out / out.name
+    intermediate_names = [
+        "textured_mesh.obj", "textured_mesh.mtl", "texture.png",
+        "object_mesh.ply", "camera_poses.json", "intrinsics.json",
+    ]
+    final_names = [
+        "textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl",
+        "texture.png", "texture_cap.png",
+    ]
+    for name in intermediate_names:
         p = out / name
         if p.exists():
             size_mb = p.stat().st_size / 1024 / 1024
             print(f"  {name}: {size_mb:.1f} MB")
+    if final_root.is_dir():
+        print(f"  [final deliverables in {out.name}/]")
+        for name in final_names:
+            p = final_root / name
+            if p.exists():
+                size_mb = p.stat().st_size / 1024 / 1024
+                print(f"    {name}: {size_mb:.1f} MB")
 
     print()
     print("View the textured mesh:")

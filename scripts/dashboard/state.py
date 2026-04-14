@@ -83,8 +83,22 @@ STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
     3: (),  # masks dir checked separately
     4: ("object_mesh.ply",),
     5: ("textured_mesh.obj",),
-    6: ("textured_mesh_cleaned.obj",),
+    # Stage 6 writes into the {object_name}/ final-deliverable subfolder; the
+    # relative path is resolved at runtime because it depends on output_dir's
+    # basename. See ``final_deliverable_dir()`` / ``cleaned_obj_relative_path()``.
+    6: (),
 }
+
+
+def final_deliverable_dir(output_dir: str | Path) -> Path:
+    """Subfolder (named after the object) holding the cleaned textured mesh."""
+    root = Path(output_dir)
+    return root / root.name
+
+
+def cleaned_obj_relative_path(output_dir: str | Path) -> str:
+    """Return ``<object_name>/textured_mesh_cleaned.obj`` for preview/routing."""
+    return f"{Path(output_dir).name}/textured_mesh_cleaned.obj"
 
 
 def _count_indexed_files(dir_path: Path, suffix: str) -> int:
@@ -98,7 +112,7 @@ def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, 
     frame_count = _count_indexed_files(out / "frames", ".jpg")
     mask_count = _count_indexed_files(out / "masks", ".png")
     textured_ready = (out / "textured_mesh.obj").is_file()
-    cleaned_ready = (out / "textured_mesh_cleaned.obj").is_file()
+    cleaned_ready = (final_deliverable_dir(out) / "textured_mesh_cleaned.obj").is_file()
     colmap_sparse_dir = out / "colmap_sparse"
     stage_complete = {
         1: frame_count > 0,
@@ -310,10 +324,9 @@ class PipelineSession:
         base_mesh = out / "object_mesh.ply"
         self.mesh_ply = str(base_mesh) if base_mesh.is_file() else None
         self.obj_path = str(out / "textured_mesh.obj") if (out / "textured_mesh.obj").is_file() else None
+        cleaned_obj_candidate = final_deliverable_dir(out) / "textured_mesh_cleaned.obj"
         self.cleaned_obj_path = (
-            str(out / "textured_mesh_cleaned.obj")
-            if (out / "textured_mesh_cleaned.obj").is_file()
-            else None
+            str(cleaned_obj_candidate) if cleaned_obj_candidate.is_file() else None
         )
         cleanup_proposal = out / "post_texture_contact_cleanup" / "proposal.json"
         self.cleanup_proposal_path = str(cleanup_proposal) if cleanup_proposal.is_file() else None

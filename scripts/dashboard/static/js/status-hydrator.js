@@ -79,7 +79,9 @@ export class StatusHydrator {
       taskConfirm,
       postTextureCleanupReview,
       setStatus, setOverallProgress,
+      preview,
     } = this._deps;
+    preview?.setActiveObjectName?.(statusMsg?.object_name || '');
 
     this._latestStatusSnapshot = statusMsg;
     checkpoints.applyStatusSnapshot(statusMsg);

@@ -458,7 +458,9 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
         if start_stage <= int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
             _require_file(session.obj_path, "Textured mesh")
             await _run_post_texture_cleanup_stage(session)
-            session.cleaned_obj_path = str(Path(output_dir) / "textured_mesh_cleaned.obj")
+            session.cleaned_obj_path = str(
+                Path(output_dir) / Path(output_dir).name / "textured_mesh_cleaned.obj"
+            )
             proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
             session.cleanup_proposal_path = str(proposal_path) if proposal_path.is_file() else None
 
