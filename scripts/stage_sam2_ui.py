@@ -111,12 +111,23 @@ class SAM2Session:
         """Release SAM2 model and free VRAM."""
         import gc
 
-        if self.predictor is not None:
-            del self.predictor
-            self.predictor = None
+        # reset_state() is the only API that actually drops the GPU tensors
+        # (maskmem_features, maskmem_pos_enc, obj_ptr, ...) that propagate_in_video
+        # accumulates inside inference_state. Plain `del` on the dict leaves them
+        # alive because the predictor still holds internal references.
+        if self.predictor is not None and self.inference_state is not None:
+            log_vram("before SAM2 reset_state")
+            try:
+                self.predictor.reset_state(self.inference_state)
+            except Exception as exc:
+                print(f"SAM2 reset_state failed during release: {exc}")
+            log_vram("after SAM2 reset_state")
         if self.inference_state is not None:
             del self.inference_state
             self.inference_state = None
+        if self.predictor is not None:
+            del self.predictor
+            self.predictor = None
         # gc.collect() MUST run before empty_cache(): nn.Module has cyclic
         # references that prevent deallocation on `del` alone.  gc breaks
         # those cycles, then empty_cache() returns the freed GPU blocks to
@@ -266,6 +277,7 @@ def _propagate_masks(
 
     with torch.inference_mode():
         num_frames = int(session.inference_state["num_frames"])
+        masks_tensor = None
         for frame_idx, obj_ids, masks_tensor in session.predictor.propagate_in_video(
             session.inference_state
         ):
@@ -285,6 +297,7 @@ def _propagate_masks(
                     )
             if progress_callback:
                 progress_callback(frame_idx, num_frames)
+        del masks_tensor
 
     _save_final_masks(session, object_masks, ground_masks, num_frames=num_frames)
     return session.mask_dir, (session.ground_mask_dir if has_ground else None)
