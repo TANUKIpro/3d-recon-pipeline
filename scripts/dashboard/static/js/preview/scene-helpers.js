@@ -62,6 +62,55 @@ export function _fitCamera(stage, box) {
   stage.controls.update();
 }
 
+/**
+ * Frame the camera so the always-visible "stage" (the flat XZ grid around
+ * origin) fills the view with a small horizontal margin. This ignores the
+ * full point-cloud bbox (which may include floaters) and locks the zoom to
+ * the stage footprint instead.
+ */
+export function _fitCameraToStage(stage, gridHalfExtent = 2.0, marginFactor = 1.1) {
+  const camera = stage.camera;
+  const fovRad = (camera.fov * Math.PI) / 180;
+  const aspect = Math.max(camera.aspect || 1, 1e-3);
+  const tanV = Math.tan(fovRad / 2);
+  const tanH = tanV * aspect;
+
+  const dir = new THREE.Vector3(0.5, 0.5, 1).normalize();
+
+  // Provisional placement so lookAt() gives us usable world axes.
+  const provisionalD = 10;
+  camera.position.set(dir.x * provisionalD, dir.y * provisionalD, dir.z * provisionalD);
+  camera.lookAt(0, 0, 0);
+  camera.updateMatrixWorld(true);
+
+  const right = new THREE.Vector3(1, 0, 0).transformDirection(camera.matrixWorld);
+  const up = new THREE.Vector3(0, 1, 0).transformDirection(camera.matrixWorld);
+
+  const h = gridHalfExtent;
+  const corners = [
+    new THREE.Vector3( h, 0,  h),
+    new THREE.Vector3( h, 0, -h),
+    new THREE.Vector3(-h, 0,  h),
+    new THREE.Vector3(-h, 0, -h),
+  ];
+  let maxRight = 0;
+  let maxUp = 0;
+  for (const p of corners) {
+    const r = Math.abs(p.dot(right));
+    const u = Math.abs(p.dot(up));
+    if (r > maxRight) maxRight = r;
+    if (u > maxUp) maxUp = u;
+  }
+
+  const Dh = (maxRight * marginFactor) / tanH;
+  const Dv = (maxUp * marginFactor) / tanV;
+  const D = Math.max(Dh, Dv, 1e-3);
+
+  camera.position.set(dir.x * D, dir.y * D, dir.z * D);
+  stage.controls.target.set(0, 0, 0);
+  stage.controls.update();
+}
+
 export function _setMeshShadowProfile(stage, box, enabled) {
   if (!stage) return;
   const p = SCENE_THEMES[this._currentTheme];
