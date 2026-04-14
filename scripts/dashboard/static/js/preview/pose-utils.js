@@ -13,9 +13,31 @@ export function initThree(threeModule) {
 }
 
 export function _poseJsonToArray(data) {
-  const poses = Array.isArray(data?.poses) ? data.poses : [];
-  const frameIndices = Array.isArray(data?.frame_indices) ? data.frame_indices : [];
-  return poses.map((mat4x4, i) => {
+  // Two on-disk shapes are accepted (mirrors scripts/texture/io_utils.py:_load_poses):
+  //   1) {poses: [[[..]x4]x4, ...], frame_indices: [...]}  — legacy Pi3 / gs2mesh
+  //   2) [{frame_name, transform_matrix: [[..]x4]x4}, ...] — COLMAP stage output
+  let matrices = [];
+  let frameIndices = [];
+  if (Array.isArray(data?.poses)) {
+    matrices = data.poses;
+    frameIndices = Array.isArray(data?.frame_indices) ? data.frame_indices : [];
+  } else if (Array.isArray(data)) {
+    for (let i = 0; i < data.length; i++) {
+      const item = data[i];
+      if (!item || !Array.isArray(item.transform_matrix)) continue;
+      matrices.push(item.transform_matrix);
+      const explicit = item.frame_index;
+      if (Number.isFinite(explicit)) {
+        frameIndices.push(Number(explicit));
+      } else {
+        const stem = String(item.frame_name || '').replace(/\.[^./]+$/, '');
+        const m = stem.match(/(\d+)$/);
+        frameIndices.push(m ? parseInt(m[1], 10) : i);
+      }
+    }
+  }
+
+  return matrices.map((mat4x4, i) => {
     // Transpose: row-major (Python) → column-major (three.js Matrix4.fromArray)
     const flat = new Array(16);
     for (let r = 0; r < 4; r++)
