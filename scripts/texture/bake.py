@@ -17,6 +17,7 @@ from scripts.config_defaults import (
     TEXTURE_MIN_COS,
     TEXTURE_OVERSAMPLE,
     TEXTURE_SHARPEN,
+    _TEXTURE_SEAM_PAD_ITERS,
 )
 from scripts.mesh_orientation import orient_mesh_outward
 from scripts.texture.cap_region import _fill_cap_region, _identify_cap_texels, _seed_cap_border
@@ -32,7 +33,7 @@ from scripts.texture.conflict_region import (
     _compute_face_locked_views,
     _compute_region_gc_locked_views,
 )
-from scripts.texture.image_utils import _bilinear_sample
+from scripts.texture.image_utils import _bilinear_sample, _seam_pad_gpu
 from scripts.texture.intrinsics import _estimate_intrinsics
 from scripts.texture.io_utils import _FrameCache, _load_frame, _load_point_cloud, _load_poses
 from scripts.texture.progress import ProgressCallback, _emit_progress, _get_available_memory_mb
@@ -51,6 +52,42 @@ from scripts.texture.view_scoring import (
     _rasterize_view_depth,
     _update_topk_scores,
 )
+
+def _maybe_load_intrinsics(
+    path: Path,
+    img_w: int,
+    img_h: int,
+) -> dict | None:
+    """Return a pre-computed intrinsics dict if it exists and matches the image size.
+
+    The COLMAP stage writes this file during SfM and the texture stage writes
+    the same schema on the slow path; either producer is fine to reuse on
+    subsequent runs.  A resolution mismatch is a signal that the upstream
+    frames were re-extracted at a different size, so we fall back to
+    re-estimation.
+    """
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    required_fields = ("fx", "fy", "cx", "cy", "image_width", "image_height", "K")
+    if not all(field in data for field in required_fields):
+        return None
+
+    if int(data["image_width"]) != img_w or int(data["image_height"]) != img_h:
+        print(
+            f"  Cached intrinsics resolution mismatch "
+            f"({data['image_width']}x{data['image_height']} vs {img_w}x{img_h}); "
+            "re-estimating"
+        )
+        return None
+
+    return data
+
 
 def _resolve_intrinsics_point_cloud(
     output_path: Path,
@@ -229,37 +266,48 @@ def bake_texture(
     else:
         print(f"  Texture size: manual -> {tex_size}x{tex_size}")
 
-    # --- Estimate intrinsics ---
-    # Prefer the original colored point cloud when present, but fall back to
-    # the stage-4 mesh if that's the only artifact available on resume.
-    pc_points, pc_colors = _resolve_intrinsics_point_cloud(
-        output_path,
-        vertices,
-        vert_colors,
-    )
+    # --- Load or estimate intrinsics ---
+    # COLMAP's SfM stage already solves for fx/fy/cx/cy during bundle
+    # adjustment and writes them to <output_dir>/intrinsics.json. Reuse that
+    # whenever the schema matches our image resolution instead of re-solving
+    # via the grid-search + Nelder-Mead path in _estimate_intrinsics (which
+    # dominates the stage's wall-clock).
+    intrinsics = _maybe_load_intrinsics(output_path / "intrinsics.json", img_w, img_h)
+    if intrinsics is not None:
+        source = intrinsics.get("source", "cached")
+        print(f"Loaded camera intrinsics from {output_path / 'intrinsics.json'} (source={source})")
+        _emit_progress(progress_cb, 52.0, "Camera intrinsics loaded from COLMAP")
+    else:
+        # Prefer the original colored point cloud when present, but fall back to
+        # the stage-4 mesh if that's the only artifact available on resume.
+        pc_points, pc_colors = _resolve_intrinsics_point_cloud(
+            output_path,
+            vertices,
+            vert_colors,
+        )
 
-    print("Estimating camera intrinsics...")
-    _emit_progress(progress_cb, 15.0, "Estimating camera intrinsics")
-    _intrinsics_progress_last = {"value": 15.0}
+        print("Estimating camera intrinsics...")
+        _emit_progress(progress_cb, 15.0, "Estimating camera intrinsics")
+        _intrinsics_progress_last = {"value": 15.0}
 
-    def _intrinsics_progress(local_progress: float, detail: str | None = None) -> None:
-        stage_progress = 15.0 + (max(0.0, min(100.0, local_progress)) * 0.35)
-        if stage_progress - _intrinsics_progress_last["value"] >= 0.5:
-            _emit_progress(progress_cb, stage_progress, detail)
-            _intrinsics_progress_last["value"] = stage_progress
+        def _intrinsics_progress(local_progress: float, detail: str | None = None) -> None:
+            stage_progress = 15.0 + (max(0.0, min(100.0, local_progress)) * 0.35)
+            if stage_progress - _intrinsics_progress_last["value"] >= 0.5:
+                _emit_progress(progress_cb, stage_progress, detail)
+                _intrinsics_progress_last["value"] = stage_progress
 
-    intrinsics = _estimate_intrinsics(
-        pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
-        progress_cb=_intrinsics_progress,
-        cache=frame_cache,
-    )
+        intrinsics = _estimate_intrinsics(
+            pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
+            progress_cb=_intrinsics_progress,
+            cache=frame_cache,
+        )
+        _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
+
+        with open(output_path / "intrinsics.json", "w") as f_out:
+            json.dump(intrinsics, f_out, indent=2)
+
     K = np.array(intrinsics["K"], dtype=np.float64)
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
-    _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
-
-    # Save intrinsics
-    with open(output_path / "intrinsics.json", "w") as f_out:
-        json.dump(intrinsics, f_out, indent=2)
 
     # --- UV Atlas ---
     uv_face_budget, uv_budget_source = _resolve_uv_face_budget(len(faces))
@@ -851,32 +899,43 @@ def bake_texture(
     valid_pad = np.zeros((tex_res, tex_res), dtype=bool)
     valid_pad[ys, xs] = has_color
     result_tex = texture.copy()
-    kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.float32)
+    seam_pad_iters = int(_TEXTURE_SEAM_PAD_ITERS)
 
-    for iter_idx in range(8):
-        empty = ~valid_pad
-        if not np.any(empty):
-            break
-        nc = cv2.filter2D(
-            valid_pad.astype(np.float32), -1, kernel,
-            borderType=cv2.BORDER_CONSTANT,
-        )
-        fill = empty & (nc > 0)
-        if not np.any(fill):
-            break
-        inv_nc = 1.0 / nc[fill]
-        for c in range(3):
-            ns = cv2.filter2D(
-                result_tex[:, :, c], -1, kernel,
+    gpu_seam_pad_done = False
+    if texture_device == "cuda":
+        try:
+            result_tex, valid_pad = _seam_pad_gpu(result_tex, valid_pad, seam_pad_iters)
+            gpu_seam_pad_done = True
+            _emit_progress(progress_cb, 97.0, f"Padding seams (GPU, {seam_pad_iters} iters)")
+        except Exception as exc:
+            print(f"  GPU seam padding unavailable ({exc}); falling back to CPU")
+
+    if not gpu_seam_pad_done:
+        kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]], dtype=np.float32)
+        for iter_idx in range(seam_pad_iters):
+            empty = ~valid_pad
+            if not np.any(empty):
+                break
+            nc = cv2.filter2D(
+                valid_pad.astype(np.float32), -1, kernel,
                 borderType=cv2.BORDER_CONSTANT,
             )
-            result_tex[:, :, c][fill] = ns[fill] * inv_nc
-        valid_pad[fill] = True
-        _emit_progress(
-            progress_cb,
-            92.0 + ((iter_idx + 1) / 8.0) * 5.0,
-            f"Padding seams ({iter_idx + 1}/8)",
-        )
+            fill = empty & (nc > 0)
+            if not np.any(fill):
+                break
+            inv_nc = 1.0 / nc[fill]
+            for c in range(3):
+                ns = cv2.filter2D(
+                    result_tex[:, :, c], -1, kernel,
+                    borderType=cv2.BORDER_CONSTANT,
+                )
+                result_tex[:, :, c][fill] = ns[fill] * inv_nc
+            valid_pad[fill] = True
+            _emit_progress(
+                progress_cb,
+                92.0 + ((iter_idx + 1) / seam_pad_iters) * 5.0,
+                f"Padding seams ({iter_idx + 1}/{seam_pad_iters})",
+            )
 
     # Downsample from supersample grid and optionally sharpen
     final_tex = result_tex
