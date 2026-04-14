@@ -62,6 +62,7 @@ _CONVERGENCE_MAX_ITERATIONS = 3
 _ISLAND_FACE_RATIO = 0.1
 _ISLAND_GAP_RATIO = 0.02
 _FLIPPED_NORMAL_NEAR_GROUND_BBOX_RATIO = 0.01
+_GROUND_PLANE_RAISE_RATIO = 0.015
 
 
 @dataclass(frozen=True)
@@ -2311,9 +2312,19 @@ def _analyze_cleanup(
         obj_mesh.faces,
     )
 
-    plane_normal, plane_d, plane_source = _resolve_ground_plane(merged_vertices, ground_plane_path)
+    plane_normal, plane_d_original, plane_source = _resolve_ground_plane(merged_vertices, ground_plane_path)
+    signed = merged_vertices @ plane_normal + plane_d_original
+    vertical_extent = float(signed.max() - signed.min())
+    plane_raise_amount = float(_GROUND_PLANE_RAISE_RATIO * vertical_extent)
+    plane_d = float(plane_d_original - plane_raise_amount)
     selected_shift = 0.0
     actual_plane_d = plane_d
+    print(
+        f"  PostCleanup: ground plane source={plane_source}"
+        f" vertical_extent={vertical_extent:.4f} raise_ratio={_GROUND_PLANE_RAISE_RATIO}"
+        f" raise_amount={plane_raise_amount:.4f}"
+        f" plane_d: {plane_d_original:.4f} -> {plane_d:.4f}"
+    )
     section_loops = _extract_closed_section_loops(merged_vertices, merged_faces, plane_normal, actual_plane_d)
     selected_loop = max(section_loops, key=lambda loop: loop.area) if section_loops else None
 
@@ -2731,6 +2742,10 @@ def _analyze_cleanup(
         "merged_to_originals": merged_to_originals,
         "plane_normal": plane_normal,
         "plane_d": float(plane_d),
+        "plane_d_original": float(plane_d_original),
+        "plane_raise_amount": plane_raise_amount,
+        "plane_raise_ratio": _GROUND_PLANE_RAISE_RATIO,
+        "vertical_extent": vertical_extent,
         "plane_source": plane_source,
         "selected_shift": float(selected_shift),
         "actual_plane_d": float(actual_plane_d),
@@ -2782,6 +2797,10 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "cap_faces": int(analysis["cap_faces"].shape[0]),
         "selected_shift": round(float(analysis["selected_shift"]), 6),
         "clip_plane_d": round(float(analysis["actual_plane_d"]), 6),
+        "plane_d_original": round(float(analysis["plane_d_original"]), 6),
+        "plane_raise_amount": round(float(analysis["plane_raise_amount"]), 6),
+        "plane_raise_ratio": float(analysis["plane_raise_ratio"]),
+        "vertical_extent": round(float(analysis["vertical_extent"]), 6),
         "matched_boundary_area": round(float(analysis["matched_boundary_area"]), 6),
         "section_loop_area": round(float(selected_loop.area), 6) if selected_loop is not None else 0.0,
         "mask_consistency_score": mask_consistency_score,
@@ -2811,6 +2830,10 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
         "ground_plane": {
             "normal": analysis["plane_normal"].tolist(),
             "d": float(analysis["plane_d"]),
+            "d_original": float(analysis["plane_d_original"]),
+            "raise_amount": float(analysis["plane_raise_amount"]),
+            "raise_ratio": float(analysis["plane_raise_ratio"]),
+            "vertical_extent": float(analysis["vertical_extent"]),
             "source": str(analysis["plane_source"]),
             "selected_shift": round(float(analysis["selected_shift"]), 6),
             "selected_loop_area": round(float(selected_loop.area), 6) if selected_loop is not None else 0.0,
