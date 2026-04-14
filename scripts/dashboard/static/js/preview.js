@@ -709,10 +709,17 @@ export class PreviewPanel {
       : `${mtlPath}?rev=${encodeURIComponent(String(cacheToken))}`;
     let materials = null;
 
+    // Resolve texture references relative to the MTL's directory so bare
+    // ``map_Kd texture.png`` entries in a subfolder MTL (e.g. the stage-6
+    // ``{object_name}/textured_mesh_cleaned.mtl``) pick up the texture sitting
+    // next to the MTL, not a same-named file at the output root.
+    const lastSlash = mtlPath.lastIndexOf('/');
+    const mtlDir = lastSlash >= 0 ? mtlPath.substring(0, lastSlash + 1) : '';
+
     try {
       const mtlLoader = new MTLLoader();
       mtlLoader.setPath('/api/preview/file/');
-      mtlLoader.setResourcePath('/api/preview/file/');
+      mtlLoader.setResourcePath(`/api/preview/file/${mtlDir}`);
       materials = await new Promise((resolve, reject) => {
         mtlLoader.load(mtlPathWithRevision, resolve, undefined, reject);
       });
