@@ -21,6 +21,20 @@ const TRANSLATIONS = {
   'stage.texture': { en: 'Texture', ja: 'テクスチャ' },
   'stage.post_cleanup': { en: 'Post Cleanup', ja: '後処理' },
 
+  // COLMAP config labels
+  'config.colmap.gpu_sift': {
+    en: 'GPU SIFT (requires CUDA COLMAP)',
+    ja: 'GPU SIFT (CUDA版COLMAP必要)',
+  },
+  'config.colmap.dsp_sift': {
+    en: 'DSP-SIFT (higher accuracy, slower)',
+    ja: 'DSP-SIFT (高精度・低速)',
+  },
+  'config.colmap.first_octave': {
+    en: 'First Octave -1 (2x upsample, more memory)',
+    ja: 'First Octave -1 (2xアップサンプル・メモリ増)',
+  },
+
   // Section titles
   'config.title': { en: 'Configuration', ja: '設定' },
   'log.title': { en: 'Log', ja: 'ログ' },
