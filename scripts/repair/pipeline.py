@@ -424,7 +424,13 @@ def run_contact_hole_repair(
 
         _emit_progress(progress_cb, 45.0, "Contact Hole Repair: capping ground boundary")
         _check_cancel(cancel_cb)
-        capped_verts, capped_faces, cap_vertex_ids, matched_boundary_area = _cap_boundary_at_plane(
+        (
+            capped_verts,
+            capped_faces,
+            cap_vertex_ids,
+            matched_boundary_area,
+            _cap_face_indices,
+        ) = _cap_boundary_at_plane(
             clipped_verts,
             clipped_faces,
             gp_normal,

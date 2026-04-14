@@ -208,7 +208,11 @@ Examples:
         print(f"  → Decision: {decision}")
         print(f"  → {cleaned_obj_path}")
         if decision == "apply":
-            print(f"  → Cap texture: {cleaned_obj_path.parent / 'texture_cap.png'}")
+            cap_png = cleaned_obj_path.parent / "texture_cap.png"
+            if cap_png.exists():
+                print(f"  → Cap texture: {cap_png}")
+            else:
+                print("  → Cap texels packed into texture.png (single-material output)")
     else:
         final_root = Path(output_dir) / Path(output_dir).name
         cleaned_obj_path = final_root / "textured_mesh_cleaned.obj"
