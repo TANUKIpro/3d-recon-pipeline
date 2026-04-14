@@ -200,7 +200,10 @@ _CHECKPOINTS: dict[int, Any] = {
             label="Write cleaned mesh",
             patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped|preparing cleanup geometry"),
             cleanup_dirs=("post_texture_contact_cleanup",),
-            cleanup_files=("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+            # The cleaned mesh artifacts live in the dynamic ``{object_name}/``
+            # final subfolder; ``cleanup_checkpoint_outputs`` removes that
+            # directory explicitly for stage 6.
+            cleanup_files=(),
         ),
     ),
 }
@@ -219,7 +222,9 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
     6: {
         "dirs": ("post_texture_contact_cleanup",),
-        "files": ("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+        # The cleaned mesh outputs live under the dynamic ``{object_name}/``
+        # subfolder, which is wiped directly in ``cleanup_checkpoint_outputs``.
+        "files": (),
     },
 }
 
@@ -316,6 +321,15 @@ def cleanup_checkpoint_outputs(
         if target.is_file():
             target.unlink()
             removed_files.append(rel)
+
+    # Stage 6 writes its final deliverables into ``{output_dir}/{object_name}/``
+    # (a subfolder named after the output directory itself). Remove it when
+    # cleaning the "apply" checkpoint or a fallback reset of stage 6.
+    if int(stage) == 6 and (checkpoint_id in (None, "s6.apply") or used_fallback):
+        final_dir = out / out.name
+        if final_dir.is_dir():
+            shutil.rmtree(final_dir)
+            removed_dirs.append(out.name)
 
     return {
         "stage": int(stage),

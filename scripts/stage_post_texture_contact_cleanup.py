@@ -103,16 +103,44 @@ def _overlay_path(output_dir: str | Path) -> Path:
     return _proposal_dir(output_dir) / _PROPOSAL_OVERLAY_NAME
 
 
+def _final_dir(output_dir: str | Path) -> Path:
+    """Subdirectory (named after the object) that collects the final deliverables.
+
+    The cleaned textured mesh and its texture assets are written here so the
+    folder is a self-contained package that can be shipped independently of the
+    intermediate artifacts (frames, masks, COLMAP, point clouds, un-cleaned
+    textured mesh) that remain under ``output_dir``.
+    """
+    root = Path(output_dir)
+    return root / root.name
+
+
 def _cleaned_obj_path(output_dir: str | Path) -> Path:
-    return Path(output_dir) / _CLEANED_OBJ_NAME
+    return _final_dir(output_dir) / _CLEANED_OBJ_NAME
 
 
 def _cleaned_mtl_path(output_dir: str | Path) -> Path:
-    return Path(output_dir) / _CLEANED_MTL_NAME
+    return _final_dir(output_dir) / _CLEANED_MTL_NAME
 
 
 def _cap_texture_path(output_dir: str | Path) -> Path:
-    return Path(output_dir) / _CAP_TEXTURE_NAME
+    return _final_dir(output_dir) / _CAP_TEXTURE_NAME
+
+
+def _prepare_final_dir(output_dir: str | Path) -> Path:
+    """Create the final-deliverable subfolder and copy texture.png into it.
+
+    The cleaned MTL references ``texture.png`` as a bare filename, so the
+    baked texture (written by stage 5 under ``output_dir/texture.png``) must be
+    present alongside the cleaned OBJ/MTL for the subfolder to be self-contained.
+    """
+    root = Path(output_dir)
+    final = _final_dir(root)
+    final.mkdir(parents=True, exist_ok=True)
+    src_texture = root / "texture.png"
+    if src_texture.is_file():
+        shutil.copy2(src_texture, final / "texture.png")
+    return final
 
 
 def _safe_read_json(path: Path) -> dict[str, Any]:
@@ -2127,6 +2155,7 @@ def prepare_cleanup_review(
 
 def _copy_stage5_outputs(output_dir: str | Path) -> str:
     output_root = Path(output_dir)
+    _prepare_final_dir(output_root)
     src_obj = output_root / "textured_mesh.obj"
     src_mtl = output_root / "textured_mesh.mtl"
     dst_obj = _cleaned_obj_path(output_root)
@@ -2183,6 +2212,7 @@ def apply_cleanup_proposal(
     cancel_cb=None,
 ) -> str:
     output_root = Path(output_dir)
+    _prepare_final_dir(output_root)
     proposal = _safe_read_json(_proposal_path(output_root))
     if not proposal:
         raise FileNotFoundError("Cleanup proposal not found")

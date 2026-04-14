@@ -41,6 +41,13 @@ export class PreviewPanel {
       data: null,        // parsed ground_plane.json
       visible: true,
     };
+    // Object name of the currently-hydrated run. Used to resolve the stage-6
+    // "final deliverable" subfolder at ``{object_name}/textured_mesh_cleaned.obj``.
+    this._activeObjectName = '';
+  }
+
+  setActiveObjectName(name) {
+    this._activeObjectName = String(name || '').trim();
   }
 
   _syncViewportSize(stageNum, retries = 0) {
@@ -511,10 +518,14 @@ export class PreviewPanel {
    * Auto-load the appropriate result file for a stage.
    */
   async loadStageResult(stageNum, opts = {}) {
+    // Stage 6 writes its cleaned textured mesh into the ``{object_name}/``
+    // subfolder so the deliverable is a self-contained package. Resolve that
+    // prefix at call time because the active object varies per run.
+    const objectPrefix = this._activeObjectName ? `${this._activeObjectName}/` : '';
     const fileMap = {
       4: 'object_mesh.ply',
       5: 'textured_mesh.obj',
-      6: 'textured_mesh_cleaned.obj',
+      6: `${objectPrefix}textured_mesh_cleaned.obj`,
     };
 
     const overrideFile = String(opts.file || '').trim();

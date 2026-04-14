@@ -39,9 +39,12 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         "files": ("object_mesh.ply",),
     },
     5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    # Stage 6 also clears the final-deliverable subfolder ``{object_name}/``
+    # (created by the cleanup stage). That path is resolved dynamically in
+    # ``reset_outputs_from_stage`` because it depends on the object's name.
     6: {
         "dirs": ("post_texture_contact_cleanup",),
-        "files": ("textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl", "texture_cap.png"),
+        "files": (),
     },
 }
 
@@ -202,6 +205,10 @@ def reset_outputs_from_stage(out: Path, start_stage: int) -> None:
             target = out / rel
             if target.is_file():
                 target.unlink()
+        if stage == int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
+            final_dir = out / out.name
+            if final_dir.is_dir():
+                shutil.rmtree(final_dir)
 
 
 def infer_resume_stage(out: Path) -> int:
@@ -267,7 +274,12 @@ def summarize_object(
     meta = safe_json_load(object_dir / OBJECT_META_FILE)
     files = list_preview_files(object_dir)
     file_map = {f["path"]: f for f in files}
-    primary_files = [file_map[p] for p in PRIMARY_ARTIFACT_PATHS if p in file_map]
+    # Primary artifacts are matched by basename so deliverables living in the
+    # final subfolder (e.g. ``Coffee_1/textured_mesh_cleaned.obj``) still match.
+    files_by_name: dict[str, dict[str, Any]] = {}
+    for f in files:
+        files_by_name.setdefault(f["name"], f)
+    primary_files = [files_by_name[p] for p in PRIMARY_ARTIFACT_PATHS if p in files_by_name]
     stages, frame_count, mask_count = _stage_completion_flags(object_dir)
     updated_at = _latest_update_ts(object_dir, meta.get("updated_at"))
     total_bytes = sum(f["size_bytes"] for f in files)
