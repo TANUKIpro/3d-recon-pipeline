@@ -103,6 +103,9 @@ COPY scripts/ /app/scripts/
 COPY tests/ /app/tests/
 RUN pip install --no-cache-dir pytest pytest-asyncio
 
+# Allow git to read /app/.git even though the bind-mounted dir is owned by the host UID
+RUN git config --system --add safe.directory /app
+
 # Add repos to Python path
 ENV PYTHONPATH="/app:/opt/MILo:/opt/sam2:${PYTHONPATH}"
 

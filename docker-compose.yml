@@ -13,9 +13,9 @@ services:
     volumes:
       - ./data:/data
       - model-cache:/root/.cache
+      # Host git state — runtime branch detection via detect_branch() in scripts/dashboard/git_utils.py
+      - ./.git:/app/.git:ro
     environment:
-      # Git branch for object isolation (auto-detect: GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD) docker compose up)
-      - GIT_BRANCH=${GIT_BRANCH:-}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
