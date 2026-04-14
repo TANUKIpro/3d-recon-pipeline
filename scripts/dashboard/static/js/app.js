@@ -357,6 +357,12 @@ ws.on('colmap_preview_ready', () => {
 });
 
 ws.on('post_texture_cleanup_review_ready', async (msg) => {
+  const autoAccepted = msg.auto_accepted === true;
+  if (autoAccepted) {
+    const decision = String(msg.proposal?.recommended_decision || 'apply');
+    appendLog('stdout', `Post-texture cleanup auto-accepted (decision: ${decision}).\n`, { stage: 6 });
+    return;
+  }
   checkpoints.onStageInteractive(6, 'Waiting for cleanup review', 's6.review');
   pipelineUI.stageInteractive(6);
   stageCtrl.setStageState(6, 'interactive');

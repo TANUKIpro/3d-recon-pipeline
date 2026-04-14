@@ -813,6 +813,9 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
         if session.config.post_texture_cleanup_enabled and proposal.get("requires_review") is True:
             session.cleanup_review_event.clear()
             session.cleanup_decision = None
+            auto_accepted = bool(session.config.auto_accept)
+            if auto_accepted:
+                session.cleanup_decision = str(proposal.get("recommended_decision") or "apply")
             session.stage_interactive(stage)
             await _broadcast_stage_progress(
                 session,
@@ -827,9 +830,12 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
                     "type": "post_texture_cleanup_review_ready",
                     "proposal": proposal,
                     "proposal_path": session.cleanup_proposal_path,
+                    "auto_accepted": auto_accepted,
                     "overall_progress": session.overall_progress(),
                 },
             )
+            if auto_accepted:
+                session.cleanup_review_event.set()
             await session.cleanup_review_event.wait()
             _check_cancelled(session)
             decision = str(session.cleanup_decision or "skip")
