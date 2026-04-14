@@ -401,7 +401,7 @@ export class PreviewPanel {
     const cacheToken = this._nextPreviewRevision();
 
     // Load point cloud
-    const loaded = await this._loadPLYIntoStage(2, plyFile, { cacheToken });
+    const loaded = await this._loadPLYIntoStage(2, plyFile, { cacheToken, densityCenter: true, fitToStage: true });
     if (!loaded) {
       console.warn(`COLMAP sparse points not ready: ${plyFile}`);
       if (empty) empty.classList.remove('hidden');
@@ -582,6 +582,81 @@ export class PreviewPanel {
   }
 
   /**
+   * Estimate the densest region of a point cloud via a 32^3 voxel grid.
+   * Returns the centroid of points falling in the densest voxel's 3x3x3
+   * neighborhood, or null if the input is degenerate (caller should fall
+   * back to the bbox center).
+   */
+  _computeDensityCenter(geometry, bbox) {
+    const positions = geometry.attributes?.position;
+    if (!positions) return null;
+    const count = positions.count;
+    if (count < 32) return null;
+
+    const minX = bbox.min.x, minY = bbox.min.y, minZ = bbox.min.z;
+    const extX = bbox.max.x - minX;
+    const extY = bbox.max.y - minY;
+    const extZ = bbox.max.z - minZ;
+    if (!(extX > 0) || !(extY > 0) || !(extZ > 0)) return null;
+
+    const GRID = 32;
+    const counts = new Int32Array(GRID * GRID * GRID);
+    const arr = positions.array;
+    const stride = positions.itemSize || 3;
+
+    const invX = GRID / extX;
+    const invY = GRID / extY;
+    const invZ = GRID / extZ;
+    const maxIdx = GRID - 1;
+
+    for (let i = 0; i < count; i++) {
+      const b = i * stride;
+      let ix = Math.floor((arr[b]     - minX) * invX);
+      let iy = Math.floor((arr[b + 1] - minY) * invY);
+      let iz = Math.floor((arr[b + 2] - minZ) * invZ);
+      if (ix < 0) ix = 0; else if (ix > maxIdx) ix = maxIdx;
+      if (iy < 0) iy = 0; else if (iy > maxIdx) iy = maxIdx;
+      if (iz < 0) iz = 0; else if (iz > maxIdx) iz = maxIdx;
+      counts[(iz * GRID + iy) * GRID + ix]++;
+    }
+
+    let best = -1, bx = 0, by = 0, bz = 0;
+    for (let z = 0; z < GRID; z++) {
+      for (let y = 0; y < GRID; y++) {
+        const row = (z * GRID + y) * GRID;
+        for (let x = 0; x < GRID; x++) {
+          const c = counts[row + x];
+          if (c > best) { best = c; bx = x; by = y; bz = z; }
+        }
+      }
+    }
+    if (best <= 0) return null;
+
+    const loX = Math.max(0, bx - 1), hiX = Math.min(maxIdx, bx + 1);
+    const loY = Math.max(0, by - 1), hiY = Math.min(maxIdx, by + 1);
+    const loZ = Math.max(0, bz - 1), hiZ = Math.min(maxIdx, bz + 1);
+
+    let sumX = 0, sumY = 0, sumZ = 0, n = 0;
+    for (let i = 0; i < count; i++) {
+      const b = i * stride;
+      const px = arr[b], py = arr[b + 1], pz = arr[b + 2];
+      let ix = Math.floor((px - minX) * invX);
+      let iy = Math.floor((py - minY) * invY);
+      let iz = Math.floor((pz - minZ) * invZ);
+      if (ix < 0) ix = 0; else if (ix > maxIdx) ix = maxIdx;
+      if (iy < 0) iy = 0; else if (iy > maxIdx) iy = maxIdx;
+      if (iz < 0) iz = 0; else if (iz > maxIdx) iz = maxIdx;
+      if (ix < loX || ix > hiX || iy < loY || iy > hiY || iz < loZ || iz > hiZ) continue;
+      sumX += px; sumY += py; sumZ += pz; n++;
+    }
+    if (n === 0) return null;
+
+    const cx = sumX / n, cy = sumY / n, cz = sumZ / n;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(cz)) return null;
+    return new THREE.Vector3(cx, cy, cz);
+  }
+
+  /**
    * Load a PLY file into a specific stage's scene.
    */
   async _loadPLYIntoStage(stageNum, relativePath, opts = {}) {
@@ -607,8 +682,14 @@ export class PreviewPanel {
       }
 
       geometry.computeBoundingBox();
-      const center = new THREE.Vector3();
-      geometry.boundingBox.getCenter(center);
+      let center = null;
+      if (opts.densityCenter === true) {
+        center = this._computeDensityCenter(geometry, geometry.boundingBox);
+      }
+      if (!center) {
+        center = new THREE.Vector3();
+        geometry.boundingBox.getCenter(center);
+      }
       geometry.translate(-center.x, -center.y, -center.z);
       stage.centerOffset = center;
       // Recompute bounds after centering so the camera fit uses the updated box.
@@ -680,7 +761,11 @@ export class PreviewPanel {
       stage.sceneRoot.add(obj);
       // clearFromStage() can hide initialized containers; show it again on successful load.
       stage.container?.classList.add('visible');
-      this._fitCamera(stage, geometry.boundingBox);
+      if (opts.fitToStage === true) {
+        this._fitCameraToStage(stage);
+      } else {
+        this._fitCamera(stage, geometry.boundingBox);
+      }
       return true;
     } catch (e) {
       if (stage._loadGeneration !== gen) return false;
@@ -927,6 +1012,7 @@ Object.assign(PreviewPanel.prototype, {
   _cleanupCurrentObject: SceneHelpers._cleanupCurrentObject,
   _cleanupOverlayObject: SceneHelpers._cleanupOverlayObject,
   _fitCamera: SceneHelpers._fitCamera,
+  _fitCameraToStage: SceneHelpers._fitCameraToStage,
   _setMeshShadowProfile: SceneHelpers._setMeshShadowProfile,
   _applyStageCenterOffset: SceneHelpers._applyStageCenterOffset,
   showGroundPlane: SceneHelpers.showGroundPlane,
