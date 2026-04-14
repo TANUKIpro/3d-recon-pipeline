@@ -647,6 +647,638 @@ def _write_cap_texture(path: Path, color_rgb: np.ndarray) -> None:
     cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
 
+_CAP_INPAINT_ATLAS_SIZE_SMALL = 512
+_CAP_INPAINT_ATLAS_SIZE_LARGE = 1024
+_CAP_INPAINT_ATLAS_PADDING = 0.05
+_CAP_INPAINT_SEED_DISK_RADIUS = 2
+_CAP_INPAINT_MAX_ITERS = 400
+_CAP_STRIPS_TEXTURE_NAME = "texture_cap_strips.png"
+
+# Phase 2 — empty-region packing constants
+_CAP_PACK_EMPTY_THRESHOLD = 8
+_CAP_PACK_MIN_RECT_SIZE = 64
+_CAP_PACK_BLOCK_SIZE = 32
+_CAP_PACK_RECT_INSET = 4
+_CAP_PACK_STRIP_BAND_PX = 8
+_CAP_PACK_STRIP_GAP_PX = 4
+_CAP_PACK_PROJ_PADDING_PX = 6
+_CAP_PACK_SEED_DISK_RADIUS = 2
+
+
+def _planar_project_cap_uvs(
+    cap_vertices_xyz: np.ndarray,
+    plane_normal: np.ndarray,
+    padding: float = _CAP_INPAINT_ATLAS_PADDING,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Project cap vertices to a 2D basis on the ground plane and normalize.
+
+    Returns ``(uvs_unit, basis_u, basis_v)`` where ``uvs_unit`` has shape
+    ``(N, 2)`` with values in ``[padding, 1 - padding]``. Returns ``None`` if
+    the basis is degenerate or the projected footprint is degenerate.
+    """
+    if cap_vertices_xyz.shape[0] < 3:
+        return None
+    n = np.asarray(plane_normal, dtype=np.float64)
+    n_norm = float(np.linalg.norm(n))
+    if n_norm < 1e-12:
+        return None
+    n = n / n_norm
+
+    # Pick a seed axis not parallel to the plane normal.
+    world_x = np.array([1.0, 0.0, 0.0])
+    world_y = np.array([0.0, 1.0, 0.0])
+    seed = world_x if abs(float(n @ world_x)) < 0.9 else world_y
+    basis_u = seed - n * float(n @ seed)
+    u_norm = float(np.linalg.norm(basis_u))
+    if u_norm < 1e-9:
+        return None
+    basis_u = basis_u / u_norm
+    basis_v = np.cross(n, basis_u)
+    v_norm = float(np.linalg.norm(basis_v))
+    if v_norm < 1e-9:
+        return None
+    basis_v = basis_v / v_norm
+
+    coords = np.stack(
+        (cap_vertices_xyz @ basis_u, cap_vertices_xyz @ basis_v),
+        axis=1,
+    )
+    mn = coords.min(axis=0)
+    mx = coords.max(axis=0)
+    extent = mx - mn
+    extent_max = float(extent.max())
+    if extent_max < 1e-9:
+        return None
+    # Reject essentially-1D footprints (e.g. colinear hole loops).
+    if float(extent.min()) / extent_max < 1e-4:
+        return None
+    # Normalize into a square (preserve aspect ratio) within [padding, 1-padding].
+    span = float(extent.max())
+    center = (mn + mx) * 0.5
+    scale = (1.0 - 2.0 * padding) / span
+    normalized = (coords - center) * scale + 0.5
+    normalized = np.clip(normalized, padding, 1.0 - padding)
+    return normalized, basis_u, basis_v
+
+
+def _rasterize_cap_mask(
+    atlas_hw: tuple[int, int],
+    uvs_unit: np.ndarray,
+    cap_faces_local: np.ndarray,
+) -> np.ndarray:
+    """Rasterize the cap triangles into a boolean texel mask.
+
+    ``uvs_unit`` is in ``[0, 1]`` with V increasing upward (OBJ convention);
+    we flip to pixel-row space via ``(1 - v) * (h - 1)``.
+    """
+    h, w = atlas_hw
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if cap_faces_local.size == 0:
+        return mask.astype(bool)
+    pts_x = np.clip(uvs_unit[:, 0] * (w - 1), 0.0, float(w - 1))
+    pts_y = np.clip((1.0 - uvs_unit[:, 1]) * (h - 1), 0.0, float(h - 1))
+    polys = []
+    for face in cap_faces_local:
+        tri = np.array(
+            [
+                [int(round(float(pts_x[face[0]]))), int(round(float(pts_y[face[0]])))],
+                [int(round(float(pts_x[face[1]]))), int(round(float(pts_y[face[1]])))],
+                [int(round(float(pts_x[face[2]]))), int(round(float(pts_y[face[2]])))],
+            ],
+            dtype=np.int32,
+        )
+        polys.append(tri)
+    if polys:
+        cv2.fillPoly(mask, polys, 1)
+    return mask.astype(bool)
+
+
+def _sample_single_vertex_color(
+    texture_rgb: np.ndarray,
+    obj_mesh: _ObjMesh,
+    obj_vid_index: dict[int, list[tuple[int, int]]],
+    obj_vid: int,
+) -> np.ndarray | None:
+    """Median-sample a single OBJ vertex's texture color via its UV corners."""
+    entries = obj_vid_index.get(int(obj_vid))
+    if not entries:
+        return None
+    h, w = texture_rgb.shape[:2]
+    colors: list[np.ndarray] = []
+    for fi, corner in entries:
+        vt_idx = obj_mesh.faces[fi].texcoord_indices[corner]
+        if vt_idx <= 0 or vt_idx > len(obj_mesh.texcoords):
+            continue
+        uv = obj_mesh.texcoords[vt_idx - 1]
+        x = int(np.clip(round(float(uv[0]) * (w - 1)), 0, w - 1))
+        y = int(np.clip(round((1.0 - float(uv[1])) * (h - 1)), 0, h - 1))
+        colors.append(texture_rgb[y, x].astype(np.float64))
+    if not colors:
+        return None
+    return np.clip(np.round(np.median(np.vstack(colors), axis=0)), 0, 255).astype(np.uint8)
+
+
+def _build_cap_inpainted_atlas(
+    texture_path: Path,
+    obj_mesh: _ObjMesh,
+    capped_vertices: np.ndarray,
+    cap_faces_global: np.ndarray,
+    merged_original_count: int,
+    merged_to_originals: list[list[int]],
+    obj_vid_index: dict[int, list[tuple[int, int]]],
+    boundary_merged_vids: list[int],
+    plane_normal: np.ndarray,
+    out_atlas_path: Path,
+) -> tuple[dict[int, tuple[float, float]], int, dict[str, Any]] | None:
+    """Build a UV-space inpainted texture for the ground-plane cap faces.
+
+    Plans a planar UV layout for the cap on its own dedicated atlas, seeds
+    boundary pixels with kept-body vertex colors sampled from ``texture.png``,
+    then diffuses inward via ``scripts.texture.cap_region._fill_cap_region``.
+
+    Returns ``(merged_vid_to_uv, atlas_size, stats)`` on success or ``None``
+    on a recoverable failure (caller falls back to the strip atlas).
+    """
+    from scripts.texture.cap_region import _fill_cap_region
+
+    stats: dict[str, Any] = {
+        "cap_face_count": int(cap_faces_global.shape[0]),
+        "unique_cap_verts": 0,
+        "seed_boundary_vids": 0,
+        "seed_pixels": 0,
+        "atlas_size": 0,
+        "cap_mask_pixels": 0,
+        "fill_iterations": 0,
+    }
+    if cap_faces_global.size == 0:
+        return None
+
+    cap_vert_ids = np.unique(cap_faces_global.reshape(-1).astype(np.int64))
+    stats["unique_cap_verts"] = int(cap_vert_ids.shape[0])
+    if cap_vert_ids.shape[0] < 3:
+        return None
+
+    xyz = capped_vertices[cap_vert_ids]
+    projection = _planar_project_cap_uvs(xyz, plane_normal)
+    if projection is None:
+        return None
+    uvs_unit, _basis_u, _basis_v = projection
+
+    # Remap global vertex ids → local indices for rasterization.
+    id_to_local = {int(vid): int(i) for i, vid in enumerate(cap_vert_ids)}
+    cap_faces_local = np.asarray(
+        [
+            [id_to_local[int(f[0])], id_to_local[int(f[1])], id_to_local[int(f[2])]]
+            for f in cap_faces_global
+        ],
+        dtype=np.int64,
+    )
+
+    atlas_size = (
+        _CAP_INPAINT_ATLAS_SIZE_LARGE
+        if cap_faces_global.shape[0] > 200
+        else _CAP_INPAINT_ATLAS_SIZE_SMALL
+    )
+    stats["atlas_size"] = atlas_size
+
+    image = cv2.imread(str(texture_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    texture_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Pre-sample boundary vertex colors from kept-body UVs.
+    seed_colors_by_local: dict[int, np.ndarray] = {}
+    for mvid in boundary_merged_vids:
+        local = id_to_local.get(int(mvid))
+        if local is None:
+            continue
+        if int(mvid) < 0 or int(mvid) >= merged_original_count:
+            continue
+        originals = merged_to_originals[int(mvid)] if int(mvid) < len(merged_to_originals) else []
+        sampled: list[np.ndarray] = []
+        for orig_obj_vid in originals:
+            color = _sample_single_vertex_color(texture_rgb, obj_mesh, obj_vid_index, int(orig_obj_vid))
+            if color is not None:
+                sampled.append(color.astype(np.float64))
+        if sampled:
+            seed_colors_by_local[local] = np.clip(
+                np.round(np.median(np.vstack(sampled), axis=0)), 0, 255
+            ).astype(np.uint8)
+    stats["seed_boundary_vids"] = len(seed_colors_by_local)
+    if not seed_colors_by_local:
+        return None
+
+    atlas = np.full((atlas_size, atlas_size, 3), 176, dtype=np.uint8)
+    valid_mask = np.zeros((atlas_size, atlas_size), dtype=bool)
+
+    cap_mask = _rasterize_cap_mask((atlas_size, atlas_size), uvs_unit, cap_faces_local)
+    stats["cap_mask_pixels"] = int(cap_mask.sum())
+    if stats["cap_mask_pixels"] == 0:
+        return None
+
+    # Convert unit UVs to pixel coordinates for seed splatting.
+    pxs = np.clip((uvs_unit[:, 0] * (atlas_size - 1)).round().astype(np.int64), 0, atlas_size - 1)
+    pys = np.clip(((1.0 - uvs_unit[:, 1]) * (atlas_size - 1)).round().astype(np.int64), 0, atlas_size - 1)
+
+    radius = _CAP_INPAINT_SEED_DISK_RADIUS
+    seed_pixel_count = 0
+    for local, color in seed_colors_by_local.items():
+        cx_px = int(pxs[local])
+        cy_px = int(pys[local])
+        y0 = max(0, cy_px - radius)
+        y1 = min(atlas_size, cy_px + radius + 1)
+        x0 = max(0, cx_px - radius)
+        x1 = min(atlas_size, cx_px + radius + 1)
+        atlas[y0:y1, x0:x1] = color.reshape(1, 1, 3)
+        valid_mask[y0:y1, x0:x1] = True
+        seed_pixel_count += (y1 - y0) * (x1 - x0)
+    stats["seed_pixels"] = int(seed_pixel_count)
+
+    # Seeds only count where the cap mask is True; intersect to avoid leaking
+    # seeds into non-cap texels (which would then get picked up by diffusion).
+    valid_mask &= cap_mask
+    if not np.any(valid_mask):
+        return None
+
+    # Detect disconnected cap islands lacking seeds and splat a median-color
+    # centroid seed so diffusion can reach them.
+    num_labels, labels = cv2.connectedComponents(cap_mask.astype(np.uint8))
+    if num_labels > 2:
+        median_seed = np.clip(
+            np.round(np.median(np.vstack(list(seed_colors_by_local.values())), axis=0)),
+            0,
+            255,
+        ).astype(np.uint8)
+        for label in range(1, num_labels):
+            island = labels == label
+            if not np.any(island & valid_mask):
+                ys, xs = np.where(island)
+                cy_px = int(round(float(ys.mean())))
+                cx_px = int(round(float(xs.mean())))
+                atlas[cy_px, cx_px] = median_seed
+                valid_mask[cy_px, cx_px] = True
+
+    filled = _fill_cap_region(atlas, cap_mask, valid_mask, max_iters=_CAP_INPAINT_MAX_ITERS)
+    stats["fill_iterations"] = int(filled)
+
+    cv2.imwrite(str(out_atlas_path), cv2.cvtColor(atlas, cv2.COLOR_RGB2BGR))
+
+    merged_vid_to_uv: dict[int, tuple[float, float]] = {
+        int(vid): (float(uvs_unit[i, 0]), float(uvs_unit[i, 1]))
+        for i, vid in enumerate(cap_vert_ids)
+    }
+    return merged_vid_to_uv, atlas_size, stats
+
+
+def _find_largest_empty_rect(
+    image_rgb: np.ndarray,
+    empty_threshold: int = _CAP_PACK_EMPTY_THRESHOLD,
+    min_size: int = _CAP_PACK_MIN_RECT_SIZE,
+    inset: int = _CAP_PACK_RECT_INSET,
+    block_size: int = _CAP_PACK_BLOCK_SIZE,
+) -> tuple[int, int, int, int] | None:
+    """Return the largest ``(x0, y0, x1, y1)`` empty rectangle in ``image_rgb``.
+
+    "Empty" means every pixel in the block satisfies
+    ``image_rgb.max(axis=2) < empty_threshold``. Detection runs on a
+    down-sampled grid of ``block_size²`` blocks via the standard
+    largest-rectangle-in-binary-matrix algorithm, then the winning block
+    coordinates are rescaled back to pixel space and padded inward by
+    ``inset`` to stay clear of xatlas gutter pixels. Returns ``None`` if the
+    largest rect has a side below ``min_size``.
+    """
+    if image_rgb.ndim != 3 or image_rgb.shape[2] < 3:
+        return None
+    h, w = image_rgb.shape[:2]
+    if h < block_size or w < block_size:
+        return None
+
+    per_pixel_max = image_rgb[:, :, :3].max(axis=2)
+    pixel_empty = per_pixel_max < empty_threshold
+
+    # Crop to a multiple of block_size so the reshape below is valid.
+    bh = h // block_size
+    bw = w // block_size
+    if bh == 0 or bw == 0:
+        return None
+    usable_h = bh * block_size
+    usable_w = bw * block_size
+    block_view = pixel_empty[:usable_h, :usable_w].reshape(bh, block_size, bw, block_size)
+    block_empty = block_view.all(axis=(1, 3))  # (bh, bw) bool
+
+    if not np.any(block_empty):
+        return None
+
+    best_area = 0
+    best_rect: tuple[int, int, int, int] | None = None  # block coords (bx0, by0, bx1, by1)
+    heights = np.zeros(bw, dtype=np.int32)
+
+    for by in range(bh):
+        row = block_empty[by]
+        for bx in range(bw):
+            heights[bx] = heights[bx] + 1 if row[bx] else 0
+
+        stack: list[int] = []
+        for bx in range(bw + 1):
+            cur_h = int(heights[bx]) if bx < bw else 0
+            while stack and int(heights[stack[-1]]) > cur_h:
+                top = stack.pop()
+                hh = int(heights[top])
+                left_bx = stack[-1] + 1 if stack else 0
+                right_bx = bx - 1
+                width_blocks = right_bx - left_bx + 1
+                area = hh * width_blocks
+                if area > best_area:
+                    best_area = area
+                    best_rect = (left_bx, by - hh + 1, right_bx, by)
+            stack.append(bx)
+
+    if best_rect is None:
+        return None
+
+    bx0, by0, bx1, by1 = best_rect
+    x0 = bx0 * block_size + inset
+    y0 = by0 * block_size + inset
+    x1 = (bx1 + 1) * block_size - 1 - inset
+    y1 = (by1 + 1) * block_size - 1 - inset
+    if x1 - x0 + 1 < min_size or y1 - y0 + 1 < min_size:
+        return None
+    return int(x0), int(y0), int(x1), int(y1)
+
+
+def _pack_cleanup_into_main_texture(
+    texture_path: Path,
+    obj_mesh: _ObjMesh,
+    capped_vertices: np.ndarray,
+    cleanup_faces: np.ndarray,
+    cleanup_face_is_ground_cap: np.ndarray,
+    cleanup_face_groups: np.ndarray,
+    group_colors: dict[int, np.ndarray],
+    merged_original_count: int,
+    merged_to_originals: list[list[int]],
+    obj_vid_index: dict[int, list[tuple[int, int]]],
+    boundary_merged_vids: list[int],
+    plane_normal: np.ndarray,
+) -> tuple[list[tuple[float, float, float, float, float, float]], dict[str, Any]] | None:
+    """Pack all cleanup-face texels into an empty region of ``texture.png``.
+
+    On success, overwrites ``texture_path`` in place with the modified image
+    (cap region inpainted + a single unified color band for non-cap cleanup
+    faces) and returns ``(per_face_uvs, stats)`` where ``per_face_uvs`` is a
+    list of length ``cleanup_faces.shape[0]`` with per-corner
+    ``(ua, va, ub, vb, uc, vc)`` tuples in ``[0, 1]`` full-texture
+    coordinates. Returns ``None`` on any recoverable failure so the caller
+    can fall back to the Phase-1 dual-atlas path.
+    """
+    from scripts.texture.cap_region import _fill_cap_region
+
+    if cleanup_faces.size == 0:
+        return None
+    n_cleanup = int(cleanup_faces.shape[0])
+    if cleanup_face_is_ground_cap.shape[0] != n_cleanup:
+        return None
+    if cleanup_face_groups is None or cleanup_face_groups.shape[0] != n_cleanup:
+        return None
+
+    image = cv2.imread(str(texture_path), cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    img_h, img_w = rgb.shape[:2]
+
+    rect = _find_largest_empty_rect(rgb)
+    if rect is None:
+        return None
+    rect_x0, rect_y0, rect_x1, rect_y1 = rect
+    rect_w = rect_x1 - rect_x0 + 1
+    rect_h = rect_y1 - rect_y0 + 1
+
+    cap_mask_flags = cleanup_face_is_ground_cap.astype(bool)
+    has_cap_faces = bool(np.any(cap_mask_flags))
+    non_cap_count = int((~cap_mask_flags).sum())
+    has_non_cap_faces = non_cap_count > 0
+
+    # === Allocate sub-regions inside the empty rect ===
+    # A single unified strip band (bottom of the rect) carries the flat
+    # color for every non-cap cleanup face (split / skirt / hole-fill), so
+    # the per-group strip layout — which starved at >100 groups — is gone.
+    strip_band_h = _CAP_PACK_STRIP_BAND_PX if has_non_cap_faces else 0
+    strip_gap = _CAP_PACK_STRIP_GAP_PX if (has_non_cap_faces and has_cap_faces) else 0
+    strip_y_start = rect_y1 - strip_band_h + 1 if has_non_cap_faces else rect_y1 + 1
+
+    cap_sub_y0 = rect_y0
+    cap_sub_y1 = (strip_y_start - strip_gap - 1) if has_non_cap_faces else rect_y1
+    cap_sub_x0 = rect_x0
+    cap_sub_x1 = rect_x1
+    cap_sub_h = cap_sub_y1 - cap_sub_y0 + 1
+    cap_sub_w = cap_sub_x1 - cap_sub_x0 + 1
+    if has_cap_faces and (cap_sub_h < _CAP_PACK_MIN_RECT_SIZE or cap_sub_w < _CAP_PACK_MIN_RECT_SIZE):
+        return None
+
+    stats: dict[str, Any] = {
+        "rect": (int(rect_x0), int(rect_y0), int(rect_x1), int(rect_y1)),
+        "cap_sub_rect": (int(cap_sub_x0), int(cap_sub_y0), int(cap_sub_x1), int(cap_sub_y1)),
+        "strip_band_px": int(strip_band_h),
+        "strip_band_width": int(rect_w if has_non_cap_faces else 0),
+        "cap_face_count": int(cap_mask_flags.sum()),
+        "non_cap_face_count": non_cap_count,
+        "seed_count": 0,
+        "cap_mask_pixels": 0,
+        "fill_iterations": 0,
+    }
+
+    per_face_uvs: list[tuple[float, float, float, float, float, float] | None] = [None] * n_cleanup
+
+    # === Cap inpaint (happens on the shared rgb array) ===
+    cap_merged_vid_to_uv: dict[int, tuple[float, float]] = {}
+    if has_cap_faces:
+        cap_face_subset = cleanup_faces[cap_mask_flags]
+        cap_vert_ids = np.unique(cap_face_subset.reshape(-1).astype(np.int64))
+        if cap_vert_ids.shape[0] < 3:
+            return None
+        xyz = capped_vertices[cap_vert_ids]
+        projection = _planar_project_cap_uvs(xyz, plane_normal)
+        if projection is None:
+            return None
+        uvs_unit, _bu, _bv = projection
+
+        # Map unit UVs into pixel coordinates within the cap sub-rect.
+        pad = _CAP_PACK_PROJ_PADDING_PX
+        usable_w = max(cap_sub_w - 2 * pad, 1)
+        usable_h = max(cap_sub_h - 2 * pad, 1)
+        px = cap_sub_x0 + pad + uvs_unit[:, 0] * (usable_w - 1)
+        py_from_top = cap_sub_y0 + pad + (1.0 - uvs_unit[:, 1]) * (usable_h - 1)
+        px = np.clip(np.round(px), cap_sub_x0, cap_sub_x1).astype(np.int64)
+        py_from_top = np.clip(np.round(py_from_top), cap_sub_y0, cap_sub_y1).astype(np.int64)
+
+        # Full-texture (u, v) coordinates with OBJ V-up convention.
+        full_u = px.astype(np.float64) / float(img_w - 1)
+        full_v = 1.0 - py_from_top.astype(np.float64) / float(img_h - 1)
+        for i, vid in enumerate(cap_vert_ids):
+            cap_merged_vid_to_uv[int(vid)] = (float(full_u[i]), float(full_v[i]))
+
+        # Rasterize cap mask directly into a full-size bool mask.
+        id_to_local = {int(vid): int(i) for i, vid in enumerate(cap_vert_ids)}
+        cap_mask_full = np.zeros((img_h, img_w), dtype=np.uint8)
+        polys = []
+        for face in cap_face_subset:
+            a = id_to_local[int(face[0])]
+            b = id_to_local[int(face[1])]
+            c = id_to_local[int(face[2])]
+            polys.append(
+                np.array(
+                    [
+                        [int(px[a]), int(py_from_top[a])],
+                        [int(px[b]), int(py_from_top[b])],
+                        [int(px[c]), int(py_from_top[c])],
+                    ],
+                    dtype=np.int32,
+                )
+            )
+        if polys:
+            cv2.fillPoly(cap_mask_full, polys, 1)
+        cap_mask_full_bool = cap_mask_full.astype(bool)
+
+        # Constrain cap mask to the cap sub-rect — any pixels that bled into
+        # the strip area or rect inset get trimmed.
+        sub_clip = np.zeros_like(cap_mask_full_bool)
+        sub_clip[cap_sub_y0 : cap_sub_y1 + 1, cap_sub_x0 : cap_sub_x1 + 1] = True
+        cap_mask_full_bool &= sub_clip
+        stats["cap_mask_pixels"] = int(cap_mask_full_bool.sum())
+        if stats["cap_mask_pixels"] == 0:
+            return None
+
+        # Seed boundary pixels from kept-body vertex colors.
+        valid_mask_full = np.zeros((img_h, img_w), dtype=bool)
+        seed_colors_by_local: dict[int, np.ndarray] = {}
+        for mvid in boundary_merged_vids:
+            local = id_to_local.get(int(mvid))
+            if local is None:
+                continue
+            if int(mvid) < 0 or int(mvid) >= merged_original_count:
+                continue
+            originals = merged_to_originals[int(mvid)] if int(mvid) < len(merged_to_originals) else []
+            sampled: list[np.ndarray] = []
+            for orig_obj_vid in originals:
+                color = _sample_single_vertex_color(rgb, obj_mesh, obj_vid_index, int(orig_obj_vid))
+                if color is not None:
+                    sampled.append(color.astype(np.float64))
+            if sampled:
+                seed_colors_by_local[local] = np.clip(
+                    np.round(np.median(np.vstack(sampled), axis=0)), 0, 255
+                ).astype(np.uint8)
+        stats["seed_count"] = len(seed_colors_by_local)
+        if not seed_colors_by_local:
+            return None
+
+        radius = _CAP_PACK_SEED_DISK_RADIUS
+        for local, color in seed_colors_by_local.items():
+            cx_px = int(px[local])
+            cy_px = int(py_from_top[local])
+            y0 = max(cap_sub_y0, cy_px - radius)
+            y1 = min(cap_sub_y1 + 1, cy_px + radius + 1)
+            x0 = max(cap_sub_x0, cx_px - radius)
+            x1 = min(cap_sub_x1 + 1, cx_px + radius + 1)
+            rgb[y0:y1, x0:x1] = color.reshape(1, 1, 3)
+            valid_mask_full[y0:y1, x0:x1] = True
+        valid_mask_full &= cap_mask_full_bool
+        if not np.any(valid_mask_full):
+            return None
+
+        # Connected-component fallback seeding.
+        num_labels, labels = cv2.connectedComponents(cap_mask_full_bool.astype(np.uint8))
+        if num_labels > 2:
+            median_seed = np.clip(
+                np.round(np.median(np.vstack(list(seed_colors_by_local.values())), axis=0)),
+                0,
+                255,
+            ).astype(np.uint8)
+            for label in range(1, num_labels):
+                island = labels == label
+                if not np.any(island & valid_mask_full):
+                    ys, xs = np.where(island)
+                    cy_px = int(round(float(ys.mean())))
+                    cx_px = int(round(float(xs.mean())))
+                    rgb[cy_px, cx_px] = median_seed
+                    valid_mask_full[cy_px, cx_px] = True
+
+        filled = _fill_cap_region(
+            rgb, cap_mask_full_bool, valid_mask_full, max_iters=_CAP_INPAINT_MAX_ITERS
+        )
+        stats["fill_iterations"] = int(filled)
+
+        # Emit per-corner cap UVs.
+        for fi in range(n_cleanup):
+            if not bool(cap_mask_flags[fi]):
+                continue
+            face = cleanup_faces[fi]
+            ua, va = cap_merged_vid_to_uv[int(face[0])]
+            ub, vb = cap_merged_vid_to_uv[int(face[1])]
+            uc, vc = cap_merged_vid_to_uv[int(face[2])]
+            per_face_uvs[fi] = (ua, va, ub, vb, uc, vc)
+
+    # === Unified strip band for every non-cap cleanup face ===
+    if has_non_cap_faces:
+        fallback_color = np.asarray([176, 176, 176], dtype=np.uint8)
+        # Collect one sample color per group actually used by non-cap faces,
+        # then reduce to a single median so pack time is independent of the
+        # number of groups (Pass 9 can emit 100+ loops).
+        non_cap_face_indices = np.where(~cap_mask_flags)[0]
+        seen_gids: set[int] = set()
+        sampled_colors: list[np.ndarray] = []
+        for fi in non_cap_face_indices:
+            gid = int(cleanup_face_groups[int(fi)])
+            if gid in seen_gids:
+                continue
+            seen_gids.add(gid)
+            color = group_colors.get(gid, fallback_color)
+            if not isinstance(color, np.ndarray):
+                color = np.asarray(color, dtype=np.uint8)
+            sampled_colors.append(np.asarray(color).reshape(-1)[:3].astype(np.float64))
+        if sampled_colors:
+            unified_color = np.clip(
+                np.round(np.median(np.vstack(sampled_colors), axis=0)),
+                0,
+                255,
+            ).astype(np.uint8)
+        else:
+            unified_color = fallback_color
+        # Paint the unified band AFTER cap inpaint so diffusion can't reach it.
+        rgb[strip_y_start : rect_y1 + 1, rect_x0 : rect_x1 + 1] = unified_color.reshape(1, 1, 3)
+        center_px_x = (rect_x0 + rect_x1) * 0.5
+        center_px_y = (strip_y_start + rect_y1) * 0.5
+        strip_uv_u = float(center_px_x) / float(img_w - 1)
+        strip_uv_v = 1.0 - float(center_px_y) / float(img_h - 1)
+        stats["unified_color"] = tuple(int(c) for c in unified_color)
+        stats["unified_strip_group_count"] = int(len(seen_gids))
+        for fi in range(n_cleanup):
+            if bool(cap_mask_flags[fi]):
+                continue
+            per_face_uvs[fi] = (
+                strip_uv_u,
+                strip_uv_v,
+                strip_uv_u,
+                strip_uv_v,
+                strip_uv_u,
+                strip_uv_v,
+            )
+
+    # Defensive: every face must have a UV assigned.
+    for fi in range(n_cleanup):
+        if per_face_uvs[fi] is None:
+            return None
+
+    # Write modified texture in place.
+    try:
+        ok = cv2.imwrite(str(texture_path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+    except Exception:
+        return None
+    if not ok:
+        return None
+
+    return [tuple(uv) for uv in per_face_uvs], stats  # type: ignore[misc]
+
+
 def _write_overlay_ply(path: Path, vertices: np.ndarray, faces: np.ndarray) -> None:
     if faces.size == 0 or vertices.size == 0:
         if path.exists():
@@ -1060,13 +1692,19 @@ def _pass_post_holefill_cleanup(
     cleanup_faces: np.ndarray,
     capped_vertices: np.ndarray,
     cleanup_face_groups: np.ndarray | None = None,
-) -> tuple[np.ndarray, dict[str, Any], np.ndarray | None]:
+    cleanup_face_flags: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, Any], np.ndarray | None, np.ndarray | None]:
     """Pass 8/10: remove disconnected components after hole-fill.
 
     After Pass 7 generates skirt + floor cap faces the combined mesh may still
     contain small disconnected fragments that survived earlier passes.  This
     pass builds a single adjacency graph over *all* remaining faces (kept
     merged + cleanup) and removes every connected component except the largest.
+
+    ``cleanup_face_flags`` is an optional parallel boolean array (same length
+    as ``cleanup_faces``) that is filtered in lock-step, so downstream stages
+    can tag specific cleanup faces (e.g. ear-clip ground-plane cap faces for
+    UV-inpainting) and preserve the tag across removals.
     """
     _empty_stats: dict[str, Any] = {
         "removed_components": 0,
@@ -1078,7 +1716,7 @@ def _pass_post_holefill_cleanup(
     n_merged = len(kept_merged_indices)
 
     if n_merged == 0 and cleanup_faces.size == 0:
-        return cleanup_faces, _empty_stats, cleanup_face_groups
+        return cleanup_faces, _empty_stats, cleanup_face_groups, cleanup_face_flags
 
     # Build combined face array indexing into capped_vertices
     parts = []
@@ -1090,7 +1728,7 @@ def _pass_post_holefill_cleanup(
     total_combined = len(combined_faces)
 
     if total_combined <= 1:
-        return cleanup_faces, _empty_stats, cleanup_face_groups
+        return cleanup_faces, _empty_stats, cleanup_face_groups, cleanup_face_flags
 
     adjacency = _build_face_adjacency(combined_faces)
 
@@ -1114,7 +1752,7 @@ def _pass_post_holefill_cleanup(
         components.append(comp)
 
     if len(components) <= 1:
-        return cleanup_faces, _empty_stats, cleanup_face_groups
+        return cleanup_faces, _empty_stats, cleanup_face_groups, cleanup_face_flags
 
     # Keep only the largest component
     largest_comp = max(components, key=len)
@@ -1139,16 +1777,19 @@ def _pass_post_holefill_cleanup(
         cleanup_faces = cleanup_faces[cleanup_keep_mask]
         if cleanup_face_groups is not None:
             cleanup_face_groups = cleanup_face_groups[cleanup_keep_mask]
+        if cleanup_face_flags is not None:
+            cleanup_face_flags = cleanup_face_flags[cleanup_keep_mask]
         if cleanup_faces.size == 0:
             cleanup_faces = np.zeros((0, 3), dtype=np.int64)
             cleanup_face_groups = np.zeros(0, dtype=np.int32) if cleanup_face_groups is not None else None
+            cleanup_face_flags = np.zeros(0, dtype=bool) if cleanup_face_flags is not None else None
 
     return cleanup_faces, {
         "removed_components": len(components) - 1,
         "removed_faces_merged": removed_merged,
         "removed_faces_cleanup": removed_cleanup,
         "removed_faces_total": removed_merged + removed_cleanup,
-    }, cleanup_face_groups
+    }, cleanup_face_groups, cleanup_face_flags
 
 
 def _build_edge_counts(faces: np.ndarray) -> dict[tuple[int, int], int]:
@@ -1683,7 +2324,13 @@ def _analyze_cleanup(
         plane_d,
         offset=float(selected_shift),
     )
-    capped_vertices, capped_faces, cap_vertex_ids, matched_boundary_area = _cap_boundary_at_plane(
+    (
+        capped_vertices,
+        capped_faces,
+        cap_vertex_ids,
+        matched_boundary_area,
+        split_cap_face_indices,
+    ) = _cap_boundary_at_plane(
         clipped_vertices,
         clipped_faces,
         plane_normal,
@@ -1840,12 +2487,22 @@ def _analyze_cleanup(
         split_faces = split_faces[_split_dot >= 0.0]
         if split_faces.size == 0:
             split_faces = np.zeros((0, 3), dtype=np.int64)
-    cap_faces = capped_faces[int(clipped_faces.shape[0]):].copy()
-    if cap_faces.size == 0:
+    if split_cap_face_indices.size > 0:
+        cap_faces = capped_faces[split_cap_face_indices].copy()
+    else:
         cap_faces = np.zeros((0, 3), dtype=np.int64)
     cleanup_faces = np.vstack([arr for arr in (split_faces, cap_faces) if arr.size > 0]) if (split_faces.size > 0 or cap_faces.size > 0) else np.zeros((0, 3), dtype=np.int64)
     # Group 0 = split/cap faces from passes 1-6
     cleanup_face_groups = np.zeros(cleanup_faces.shape[0], dtype=np.int32)
+    # Parallel flag marking the faces that close the on-plane ground contact
+    # hole in the final output. Initially all False; after Pass 9 runs we
+    # detect which of its hole-fill loops corresponds to the ground plane
+    # and set those faces' flag to True. (The ear-clip cap produced at
+    # L1686 by `_cap_boundary_at_plane` is almost always removed by Pass 8
+    # as a disconnected component once Pass 3b deletes its body neighbours,
+    # so we don't tag it here — Pass 9 re-fills the same hole and is the
+    # real inpaint target.)
+    cleanup_face_is_ground_cap = np.zeros(cleanup_faces.shape[0], dtype=bool)
 
     # === Pass 7: Bottom hole-fill (skirt + floor cap) ===
     kept_merged = merged_faces[keep_merged_mask]
@@ -1871,6 +2528,10 @@ def _analyze_cleanup(
             cleanup_face_groups,
             np.ones(skirt_cap_faces.shape[0], dtype=np.int32),
         ))
+        cleanup_face_is_ground_cap = np.concatenate((
+            cleanup_face_is_ground_cap,
+            np.zeros(skirt_cap_faces.shape[0], dtype=bool),
+        ))
     print(
         f"  Pass 7 (bottom hole-fill): {skirt_stats['loops_found']} loops,"
         f" {skirt_stats['skirt_faces']} skirt + {skirt_stats['cap_faces']} cap faces,"
@@ -1878,9 +2539,10 @@ def _analyze_cleanup(
     )
 
     # === Pass 8: Post-hole-fill disconnected component removal ===
-    cleanup_faces, pass8, cleanup_face_groups = _pass_post_holefill_cleanup(
+    cleanup_faces, pass8, cleanup_face_groups, cleanup_face_is_ground_cap = _pass_post_holefill_cleanup(
         keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
         cleanup_face_groups,
+        cleanup_face_is_ground_cap,
     )
     print(f"  Pass 8 (post-holefill noise): {pass8['removed_components']} components"
           f" ({pass8['removed_faces_total']} faces)  →  {int(keep_merged_mask.sum())}/{total_faces} kept")
@@ -1891,15 +2553,88 @@ def _analyze_cleanup(
     )
     # Groups 2+ = one per capped general hole-fill loop
     p9_loop_counts = pass9.get("per_loop_face_counts", [])
+    p9_boundary_loops: list[list[int]] = pass9.get("boundary_loops", [])
     p9_group_start = int(cleanup_face_groups.max()) + 1 if cleanup_face_groups.size > 0 else 2
+    ground_cap_boundary_merged_vids: list[int] = []
     if p9_loop_counts:
         next_group = p9_group_start
         new_group_tags: list[np.ndarray] = []
+        total_p9_faces = 0
         for lfc in p9_loop_counts:
             new_group_tags.append(np.full(lfc, next_group, dtype=np.int32))
             next_group += 1
+            total_p9_faces += int(lfc)
         cleanup_face_groups = np.concatenate(
             [cleanup_face_groups] + new_group_tags,
+        )
+
+        # Detect which Pass 9 loop corresponds to the on-plane ground
+        # contact hole — the biggest loop whose vertices sit near the
+        # ground plane in the signed-distance mean (robust to outlier
+        # vertices that stick slightly above/below the plane after
+        # clipping). We pick the LARGEST qualifying loop (by vertex
+        # count) so trivial 3-vertex plane-tangent fragments don't win.
+        p9_face_flags = np.zeros(total_p9_faces, dtype=bool)
+        if p9_boundary_loops and len(p9_boundary_loops) == len(p9_loop_counts):
+            bbox_diag = float(
+                np.linalg.norm(
+                    capped_vertices.max(axis=0) - capped_vertices.min(axis=0)
+                )
+            )
+            threshold_mean = 0.02 * max(bbox_diag, 1e-6)
+            plane_shift = float(selected_shift)
+            loop_stats: list[tuple[int, int, float, float]] = []
+            for idx, loop_verts in enumerate(p9_boundary_loops):
+                if not loop_verts or len(loop_verts) < 4:
+                    continue
+                lv = np.asarray(loop_verts, dtype=np.int64)
+                pts = capped_vertices[lv]
+                dists = pts @ plane_normal + plane_d - plane_shift
+                abs_mean = float(abs(float(dists.mean())))
+                abs_max = float(np.abs(dists).max())
+                loop_stats.append((idx, int(len(loop_verts)), abs_mean, abs_max))
+
+            # Diagnostic: dump the 5 biggest loops with their plane-distance stats.
+            by_size = sorted(loop_stats, key=lambda r: -r[1])[:5]
+            print(
+                "  ground cap candidates (top 5 by size): "
+                + " | ".join(
+                    f"idx={r[0]} n={r[1]} mean={r[2]:.4f} max={r[3]:.4f}"
+                    for r in by_size
+                )
+                + f"  [mean_threshold={threshold_mean:.4f}]"
+            )
+
+            best_idx = -1
+            best_vert_count = 0
+            best_mean = float("inf")
+            for idx, n_verts, abs_mean, abs_max in loop_stats:
+                if abs_mean >= threshold_mean:
+                    continue
+                if n_verts > best_vert_count:
+                    best_idx = idx
+                    best_vert_count = n_verts
+                    best_mean = abs_mean
+            if best_idx >= 0:
+                face_offset_in_p9 = int(sum(int(c) for c in p9_loop_counts[:best_idx]))
+                face_count = int(p9_loop_counts[best_idx])
+                p9_face_flags[face_offset_in_p9 : face_offset_in_p9 + face_count] = True
+                ground_cap_boundary_merged_vids = [
+                    int(v)
+                    for v in p9_boundary_loops[best_idx]
+                    if 0 <= int(v) < int(merged_vertices.shape[0])
+                ]
+                print(
+                    f"  ground cap loop: idx={best_idx} verts={best_vert_count}"
+                    f" faces={face_count} mean_dist={best_mean:.6f}"
+                )
+            else:
+                print(
+                    f"  ground cap loop: none detected"
+                    f" (threshold={threshold_mean:.4f}, {len(loop_stats)} loops scanned)"
+                )
+        cleanup_face_is_ground_cap = np.concatenate(
+            (cleanup_face_is_ground_cap, p9_face_flags)
         )
     print(
         f"  Pass 9 (general hole-fill): {pass9['loops_found']} loops"
@@ -1910,9 +2645,10 @@ def _analyze_cleanup(
     )
 
     # === Pass 10: Final disconnected component removal ===
-    cleanup_faces, pass10, cleanup_face_groups = _pass_post_holefill_cleanup(
+    cleanup_faces, pass10, cleanup_face_groups, cleanup_face_is_ground_cap = _pass_post_holefill_cleanup(
         keep_merged_mask, merged_faces, cleanup_faces, capped_vertices,
         cleanup_face_groups,
+        cleanup_face_is_ground_cap,
     )
     print(
         f"  Pass 10 (final cleanup): {pass10['removed_components']} components"
@@ -2015,6 +2751,8 @@ def _analyze_cleanup(
         "cap_color": group_colors[0],
         "group_colors": group_colors,
         "cleanup_face_groups": cleanup_face_groups,
+        "cleanup_face_is_ground_cap": cleanup_face_is_ground_cap,
+        "ground_cap_boundary_merged_vids": sorted(set(ground_cap_boundary_merged_vids)),
         "matched_boundary_area": float(matched_boundary_area),
         "skirt_stats": skirt_stats,
         "pass8_stats": pass8,
@@ -2272,11 +3010,145 @@ def apply_cleanup_proposal(
     merged_to_originals = analysis["merged_to_originals"]
     merged_original_count = int(analysis["merged_vertices"].shape[0])
     plane_normal = analysis["plane_normal"]
-
-    texture_cap = _cap_texture_path(output_root)
-    group_colors: dict[int, np.ndarray] = analysis["group_colors"]
     cleanup_face_groups: np.ndarray | None = analysis["cleanup_face_groups"]
-    _atlas_h, group_v_centers = _write_cap_texture_atlas(texture_cap, group_colors)
+    cleanup_face_is_ground_cap: np.ndarray = analysis.get(
+        "cleanup_face_is_ground_cap", np.zeros(cleanup_faces.shape[0], dtype=bool)
+    )
+    ground_cap_boundary_merged_vids: list[int] = analysis.get(
+        "ground_cap_boundary_merged_vids", []
+    )
+
+    group_colors: dict[int, np.ndarray] = analysis["group_colors"]
+
+    texture_cap_main = _cap_texture_path(output_root)
+    texture_cap_strips_path = _final_dir(output_root) / _CAP_STRIPS_TEXTURE_NAME
+    final_texture_path = _final_dir(output_root) / "texture.png"
+
+    # Resolve the stage-5 body material name (for Tier A emission).
+    target_material = next(
+        (f.material for f in obj_mesh.faces if getattr(f, "material", None)),
+        "material_0",
+    )
+
+    # Pre-build obj_vid_index once — used by Tier A and Tier B.
+    obj_vid_index: dict[int, list[tuple[int, int]]] = (
+        _build_obj_vertex_uv_index(obj_mesh) if cleanup_faces.size > 0 else {}
+    )
+
+    has_ground_cap_faces = bool(
+        cleanup_faces.size > 0
+        and cleanup_face_is_ground_cap.size == cleanup_faces.shape[0]
+        and np.any(cleanup_face_is_ground_cap)
+    )
+
+    # === Tier A: pack all cleanup face texels into final/texture.png ===
+    pack_per_face_uvs: list[tuple[float, float, float, float, float, float]] | None = None
+    pack_fallback_reason: str | None = None
+    if cleanup_faces.size > 0 and final_texture_path.is_file():
+        try:
+            pack_result = _pack_cleanup_into_main_texture(
+                texture_path=final_texture_path,
+                obj_mesh=obj_mesh,
+                capped_vertices=capped_vertices,
+                cleanup_faces=cleanup_faces,
+                cleanup_face_is_ground_cap=cleanup_face_is_ground_cap,
+                cleanup_face_groups=cleanup_face_groups if cleanup_face_groups is not None
+                else np.zeros(cleanup_faces.shape[0], dtype=np.int32),
+                group_colors=group_colors,
+                merged_original_count=merged_original_count,
+                merged_to_originals=merged_to_originals,
+                obj_vid_index=obj_vid_index,
+                boundary_merged_vids=ground_cap_boundary_merged_vids,
+                plane_normal=plane_normal,
+            )
+            if pack_result is None:
+                pack_fallback_reason = "pack_cleanup_into_main_texture returned None"
+            else:
+                pack_per_face_uvs, pack_stats = pack_result
+                print(
+                    "  cap pack: "
+                    f"rect={pack_stats['rect']} "
+                    f"cap_sub={pack_stats['cap_sub_rect']} "
+                    f"cap_faces={pack_stats['cap_face_count']} "
+                    f"non_cap={pack_stats['non_cap_face_count']} "
+                    f"strip={pack_stats['strip_band_width']}x{pack_stats['strip_band_px']} "
+                    f"seeds={pack_stats['seed_count']} "
+                    f"mask_px={pack_stats['cap_mask_pixels']} "
+                    f"filled={pack_stats['fill_iterations']}"
+                )
+        except Exception as exc:  # noqa: BLE001 — fallback path is intentional
+            pack_fallback_reason = f"{type(exc).__name__}: {exc}"
+            pack_per_face_uvs = None
+    elif cleanup_faces.size > 0:
+        pack_fallback_reason = f"texture not found at {final_texture_path}"
+
+    use_main_texture_pack = pack_per_face_uvs is not None
+
+    # === Tier B: dual-atlas inpainted cap (only if Tier A failed) ===
+    inpaint_cap_uvs: dict[int, tuple[float, float]] | None = None
+    inpaint_fallback_reason: str | None = None
+    if not use_main_texture_pack and has_ground_cap_faces:
+        if pack_fallback_reason is not None:
+            print(f"  cap pack: fallback tier B — {pack_fallback_reason}")
+        try:
+            ground_cap_face_array = cleanup_faces[cleanup_face_is_ground_cap]
+            source_texture_path = final_texture_path
+            if not source_texture_path.is_file():
+                source_texture_path = output_root / "texture.png"
+            result = _build_cap_inpainted_atlas(
+                texture_path=source_texture_path,
+                obj_mesh=obj_mesh,
+                capped_vertices=capped_vertices,
+                cap_faces_global=ground_cap_face_array,
+                merged_original_count=merged_original_count,
+                merged_to_originals=merged_to_originals,
+                obj_vid_index=obj_vid_index,
+                boundary_merged_vids=ground_cap_boundary_merged_vids,
+                plane_normal=plane_normal,
+                out_atlas_path=texture_cap_main,
+            )
+            if result is None:
+                inpaint_fallback_reason = "build_cap_inpainted_atlas returned None"
+            else:
+                inpaint_cap_uvs, _atlas_size, cap_stats = result
+                print(
+                    "  cap inpaint: "
+                    f"faces={cap_stats['cap_face_count']} "
+                    f"verts={cap_stats['unique_cap_verts']} "
+                    f"seeds={cap_stats['seed_boundary_vids']} "
+                    f"seed_px={cap_stats['seed_pixels']} "
+                    f"mask_px={cap_stats['cap_mask_pixels']} "
+                    f"filled={cap_stats['fill_iterations']} "
+                    f"atlas={cap_stats['atlas_size']}"
+                )
+        except Exception as exc:  # noqa: BLE001 — fallback path is intentional
+            inpaint_fallback_reason = f"{type(exc).__name__}: {exc}"
+            inpaint_cap_uvs = None
+
+    use_dual_material = (not use_main_texture_pack) and inpaint_cap_uvs is not None
+
+    # === Strip atlas (Tier B/C only — Tier A paints strips directly into
+    # texture.png inside _pack_cleanup_into_main_texture). ===
+    group_v_centers: dict[int, float] = {}
+    if use_main_texture_pack:
+        # Clean up stale cap-texture files from prior runs so the deliverable
+        # contains only a single texture.
+        for stale in (texture_cap_main, texture_cap_strips_path):
+            try:
+                if stale.exists():
+                    stale.unlink()
+            except OSError:
+                pass
+    elif use_dual_material:
+        _atlas_h, group_v_centers = _write_cap_texture_atlas(
+            texture_cap_strips_path, group_colors
+        )
+    else:
+        if inpaint_fallback_reason is not None:
+            print(f"  cap inpaint: fallback tier C — {inpaint_fallback_reason}")
+        _atlas_h, group_v_centers = _write_cap_texture_atlas(
+            texture_cap_main, group_colors
+        )
 
     cleanup_vertex_ids = sorted({int(idx) for idx in cleanup_faces.reshape(-1)}) if cleanup_faces.size > 0 else []
 
@@ -2291,20 +3163,53 @@ def apply_cleanup_proposal(
             appended_vertices.append(capped_vertices[int(merged_vid)])
             next_vertex_index += 1
 
-    # Per-face-corner UV allocation: each cleanup face gets 3 UV entries
-    # mapped to (0.5, group_v_center) for its group.  This avoids the
-    # vertex-sharing-between-groups issue.
+    # Per-face-corner UV allocation.
+    #   Tier A: per-face UVs come from the packer (full-texture coords).
+    #   Tier B: split-cap faces → planar UVs in the inpainted atlas,
+    #           others → flat (0.5, group_v_center) in the strip atlas.
+    #   Tier C: all faces → flat (0.5, group_v_center) in the strip atlas.
     next_vt_index = int(obj_mesh.texcoords.shape[0]) + 1
     appended_vts: list[np.ndarray] = []
     cleanup_face_vt_indices: list[tuple[int, int, int]] = []
+    cleanup_face_materials: list[str] = []
     for fi in range(cleanup_faces.shape[0]):
-        gid = int(cleanup_face_groups[fi]) if cleanup_face_groups is not None and fi < len(cleanup_face_groups) else 0
-        v_center = group_v_centers.get(gid, group_v_centers.get(0, 0.5))
-        uv = np.array([0.5, v_center], dtype=np.float64)
+        is_cap = bool(cleanup_face_is_ground_cap[fi]) if (
+            cleanup_face_is_ground_cap.size == cleanup_faces.shape[0]
+        ) else False
+        if use_main_texture_pack and pack_per_face_uvs is not None:
+            ua, va, ub, vb, uc, vc = pack_per_face_uvs[fi]
+            appended_vts.extend(
+                [
+                    np.array((ua, va), dtype=np.float64),
+                    np.array((ub, vb), dtype=np.float64),
+                    np.array((uc, vc), dtype=np.float64),
+                ]
+            )
+            cleanup_face_materials.append(target_material)
+        elif use_dual_material and is_cap and inpaint_cap_uvs is not None:
+            face = cleanup_faces[fi]
+            uv_a = inpaint_cap_uvs[int(face[0])]
+            uv_b = inpaint_cap_uvs[int(face[1])]
+            uv_c = inpaint_cap_uvs[int(face[2])]
+            appended_vts.extend(
+                [
+                    np.array(uv_a, dtype=np.float64),
+                    np.array(uv_b, dtype=np.float64),
+                    np.array(uv_c, dtype=np.float64),
+                ]
+            )
+            cleanup_face_materials.append("material_cap")
+        else:
+            gid = int(cleanup_face_groups[fi]) if cleanup_face_groups is not None and fi < len(cleanup_face_groups) else 0
+            v_center = group_v_centers.get(gid, group_v_centers.get(0, 0.5))
+            uv = np.array([0.5, v_center], dtype=np.float64)
+            appended_vts.extend([uv, uv, uv])
+            cleanup_face_materials.append(
+                "material_cap_strips" if use_dual_material else "material_cap"
+            )
         t0 = next_vt_index
         t1 = next_vt_index + 1
         t2 = next_vt_index + 2
-        appended_vts.extend([uv, uv, uv])
         next_vt_index += 3
         cleanup_face_vt_indices.append((t0, t1, t2))
 
@@ -2325,17 +3230,30 @@ def apply_cleanup_proposal(
             "illum 1\n"
             "map_Kd texture.png\n\n"
         )
-    cleaned_mtl.write_text(
-        base_mtl_text
-        + "newmtl material_cap\n"
-        + "Ka 1.0 1.0 1.0\n"
-        + "Kd 1.0 1.0 1.0\n"
-        + "Ks 0.0 0.0 0.0\n"
-        + "d 1.0\n"
-        + "illum 1\n"
-        + f"map_Kd {_CAP_TEXTURE_NAME}\n",
-        encoding="utf-8",
-    )
+    if use_main_texture_pack:
+        mtl_text = base_mtl_text
+    else:
+        mtl_text = (
+            base_mtl_text
+            + "newmtl material_cap\n"
+            + "Ka 1.0 1.0 1.0\n"
+            + "Kd 1.0 1.0 1.0\n"
+            + "Ks 0.0 0.0 0.0\n"
+            + "d 1.0\n"
+            + "illum 1\n"
+            + f"map_Kd {_CAP_TEXTURE_NAME}\n"
+        )
+        if use_dual_material:
+            mtl_text += (
+                "\nnewmtl material_cap_strips\n"
+                "Ka 1.0 1.0 1.0\n"
+                "Kd 1.0 1.0 1.0\n"
+                "Ks 0.0 0.0 0.0\n"
+                "d 1.0\n"
+                "illum 1\n"
+                f"map_Kd {_CAP_STRIPS_TEXTURE_NAME}\n"
+            )
+    cleaned_mtl.write_text(mtl_text, encoding="utf-8")
 
     cleaned_obj = _cleaned_obj_path(output_root)
     lines: list[str] = [f"mtllib {_CLEANED_MTL_NAME}\n"]
@@ -2364,8 +3282,11 @@ def apply_cleanup_proposal(
         )
 
     if cleanup_faces.size > 0:
-        lines.append("usemtl material_cap\n")
         for fi, face in enumerate(cleanup_faces):
+            face_mat = cleanup_face_materials[fi]
+            if face_mat != current_material:
+                lines.append(f"usemtl {face_mat}\n")
+                current_material = face_mat
             a, b, c = (int(face[0]), int(face[1]), int(face[2]))
             va = merged_to_output_vertex[a]
             vb = merged_to_output_vertex[b]
@@ -2445,11 +3366,18 @@ def finalize_post_texture_cleanup(
     if proposal:
         proposal["final_decision"] = normalized
         proposal["applied"] = bool(applied)
-        proposal["outputs"] = {
+        outputs: dict[str, str] = {
             "obj": _CLEANED_OBJ_NAME,
             "mtl": _CLEANED_MTL_NAME,
-            "texture_cap": _CAP_TEXTURE_NAME,
         }
+        # Only advertise cap texture files that actually landed in final/
+        # (Tier A packs everything into texture.png, so neither exists).
+        final_dir = _final_dir(output_dir)
+        if (final_dir / _CAP_TEXTURE_NAME).is_file():
+            outputs["texture_cap"] = _CAP_TEXTURE_NAME
+        if (final_dir / _CAP_STRIPS_TEXTURE_NAME).is_file():
+            outputs["texture_cap_strips"] = _CAP_STRIPS_TEXTURE_NAME
+        proposal["outputs"] = outputs
         proposal_path.write_text(json.dumps(proposal, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {

@@ -577,12 +577,18 @@ def _cap_boundary_at_plane(
     original_vertex_count: int | None = None,
     tolerance: float = 0.01,
     target_loop: GroundPlaneSectionLoop | None = None,
-) -> tuple[np.ndarray, np.ndarray, set[int], float]:
+) -> tuple[np.ndarray, np.ndarray, set[int], float, np.ndarray]:
     """Cap open boundary loops that lie near the ground plane.
 
     Uses the existing boundary extraction and ear-clip triangulation helpers
     to fill loops whose centroid is close to the clipping plane.
+
+    The 5th return value ``cap_face_indices`` gives the face indices (into the
+    returned ``augmented_faces``) of the newly appended cap triangles, so
+    downstream stages can tag and specially handle them (e.g. UV-space
+    inpainting of the hole texture).
     """
+    empty_cap_indices = np.zeros((0,), dtype=np.int64)
     plane_normal, plane_d = _normalize_plane(plane_normal, plane_d)
 
     selected_loop = _select_matching_plane_boundary_loop(
@@ -595,7 +601,7 @@ def _cap_boundary_at_plane(
         target_loop=target_loop,
     )
     if selected_loop is None:
-        return vertices, faces, set(), 0.0
+        return vertices, faces, set(), 0.0, empty_cap_indices
 
     loop_vertices = list(selected_loop.vertex_indices)
     loop_indices = np.asarray(loop_vertices, dtype=np.int64)
@@ -603,7 +609,7 @@ def _cap_boundary_at_plane(
     loop_uv = _loop_projection_uv(loop_points, plane_normal)
     local_tris = _triangulate_polygon_ear_clip(loop_uv)
     if not local_tris:
-        return vertices, faces, set(), float(selected_loop.area)
+        return vertices, faces, set(), float(selected_loop.area), empty_cap_indices
 
     new_faces = np.asarray(
         [[loop_vertices[a], loop_vertices[b], loop_vertices[c]] for a, b, c in local_tris],
@@ -613,15 +619,26 @@ def _cap_boundary_at_plane(
     tri_cross = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
     tri_area2 = np.linalg.norm(tri_cross, axis=1)
     if np.any(tri_area2 <= 1e-11):
-        return vertices, faces, set(), float(selected_loop.area)
+        return vertices, faces, set(), float(selected_loop.area), empty_cap_indices
 
     desired_normal = -plane_normal
     mean_dot = float(np.mean(tri_cross @ desired_normal))
     if mean_dot < 0.0:
         new_faces = new_faces[:, [0, 2, 1]]
 
+    cap_face_indices = np.arange(
+        int(faces.shape[0]),
+        int(faces.shape[0]) + int(new_faces.shape[0]),
+        dtype=np.int64,
+    )
     augmented_faces = np.vstack((faces, new_faces))
-    return vertices, augmented_faces, {int(idx) for idx in loop_vertices}, float(selected_loop.area)
+    return (
+        vertices,
+        augmented_faces,
+        {int(idx) for idx in loop_vertices},
+        float(selected_loop.area),
+        cap_face_indices,
+    )
 
 
 def _generate_bottom_skirt_cap(
@@ -879,7 +896,13 @@ def _probe_ground_plane_shift(
         target_loop=selected_loop,
     )
 
-    capped_verts, capped_faces, _cap_vertex_ids, matched_boundary_area_before = _cap_boundary_at_plane(
+    (
+        capped_verts,
+        capped_faces,
+        _cap_vertex_ids,
+        matched_boundary_area_before,
+        _cap_face_indices,
+    ) = _cap_boundary_at_plane(
         clipped_verts,
         clipped_faces,
         plane_normal,
