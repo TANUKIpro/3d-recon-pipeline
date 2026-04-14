@@ -7,6 +7,8 @@ import numpy as np
 from scripts.config_defaults import (
     _REPAIR_GROUND_SECTION_MIN_AREA_RATIO as _GROUND_SECTION_MIN_AREA_RATIO,
     _REPAIR_GROUND_SECTION_START_QUANTILE as _GROUND_SECTION_START_QUANTILE,
+    _REPAIR_SKIRT_MIN_AREA_RATIO as _SKIRT_MIN_AREA_RATIO,
+    _REPAIR_SKIRT_SLENDERNESS_MAX as _SKIRT_SLENDERNESS_MAX,
 )
 from scripts.repair.boundary import (
     _extract_boundary_edges,
@@ -641,6 +643,66 @@ def _cap_boundary_at_plane(
     )
 
 
+def _seal_loop_in_place(
+    loop_verts: list[int],
+    loop_points: np.ndarray,
+    loop_normal: np.ndarray,
+    plane_normal: np.ndarray,
+    next_vertex: int,
+) -> tuple[list[np.ndarray], np.ndarray, int]:
+    """Triangulate a boundary loop in place on its own best-fit plane.
+
+    Used when a bottom-facing loop would otherwise produce a visually poor
+    thin-pillar skirt — instead we close the hole at the loop's actual height.
+    Returns (new_vertices, new_faces, next_vertex) where *new_faces* indexes
+    into the original vertex array augmented by *new_vertices*.
+    """
+    n = len(loop_verts)
+    new_vertices: list[np.ndarray] = []
+
+    uv = _loop_projection_uv(loop_points, loop_normal)
+    local_tris = _triangulate_polygon_ear_clip(uv)
+
+    cap_faces: np.ndarray
+    tri_pts: np.ndarray
+    if local_tris:
+        local_idx = np.asarray(local_tris, dtype=np.int64)
+        tri_pts = loop_points[local_idx]  # (T, 3, 3)
+        loop_verts_arr = np.asarray(loop_verts, dtype=np.int64)
+        cap_faces = loop_verts_arr[local_idx]
+    else:
+        centroid_pt = loop_points.mean(axis=0)
+        centroid_idx = next_vertex
+        new_vertices.append(centroid_pt)
+        next_vertex += 1
+        fan_tris_idx: list[list[int]] = []
+        fan_tris_pts: list[np.ndarray] = []
+        for i in range(n):
+            i_next = (i + 1) % n
+            fan_tris_idx.append([centroid_idx, loop_verts[i], loop_verts[i_next]])
+            fan_tris_pts.append(
+                np.stack([centroid_pt, loop_points[i], loop_points[i_next]])
+            )
+        cap_faces = np.asarray(fan_tris_idx, dtype=np.int64)
+        tri_pts = np.asarray(fan_tris_pts, dtype=np.float64)
+
+    if cap_faces.shape[0] > 0:
+        tri_cross = np.cross(
+            tri_pts[:, 1] - tri_pts[:, 0],
+            tri_pts[:, 2] - tri_pts[:, 0],
+        )
+        tri_area2 = np.linalg.norm(tri_cross, axis=1)
+        valid_mask = tri_area2 > 1e-10
+        cap_faces = cap_faces[valid_mask]
+        tri_cross = tri_cross[valid_mask]
+        if cap_faces.shape[0] > 0:
+            dots = tri_cross @ (-plane_normal)
+            flip_mask = dots < 0
+            cap_faces[flip_mask] = cap_faces[flip_mask][:, [0, 2, 1]]
+
+    return new_vertices, cap_faces, next_vertex
+
+
 def _generate_bottom_skirt_cap(
     vertices: np.ndarray,
     faces: np.ndarray,
@@ -657,6 +719,12 @@ def _generate_bottom_skirt_cap(
     skirt triangles connecting the original boundary to the projected loop,
     plus a triangulated floor cap on the ground plane.
 
+    Loops that would produce thin-pillar skirts (very small footprint relative
+    to the largest candidate, or a large height/footprint slenderness ratio)
+    are instead "sealed in place" — closed with a patch cap at the loop's own
+    height via :func:`_seal_loop_in_place` — to avoid isolated pillar geometry
+    while still keeping the mesh watertight.
+
     Returns:
         (augmented_vertices, new_faces, stats) where *new_faces* contains only
         the newly generated skirt+cap faces (not the input faces).
@@ -665,8 +733,10 @@ def _generate_bottom_skirt_cap(
     stats: dict = {
         "loops_found": 0,
         "loops_capped": 0,
+        "loops_sealed": 0,
         "skirt_faces": 0,
         "cap_faces": 0,
+        "seal_faces": 0,
         "new_vertices": 0,
     }
 
@@ -690,11 +760,8 @@ def _generate_bottom_skirt_cap(
     on_plane_threshold = 0.005 * bbox_diag  # 0.5% of bbox diagonal
     mesh_center = vertices.mean(axis=0)
 
-    new_vertices_list: list[np.ndarray] = []
-    new_faces_list: list[np.ndarray] = []
-    boundary_loop_verts: list[list[int]] = []
-    next_vertex = int(vertices.shape[0])
-
+    # --- Pass 1: gather eligible candidates and compute cap areas ---
+    candidates: list[dict] = []
     for path in raw_paths:
         if len(path) < min_loop_vertices + 1:
             continue
@@ -708,39 +775,92 @@ def _generate_bottom_skirt_cap(
         loop_points = vertices[loop_indices]
         loop_dists = signed_dist[loop_indices]
 
-        # Centroid must be within bottom portion of model height
         avg_dist = float(loop_dists.mean())
         dist_from_bottom = avg_dist - dist_min
         if dist_from_bottom > bottom_height_ratio * bbox_height:
             continue
 
-        # Must be above (or on) ground plane
         if avg_dist < 0:
             continue
 
-        # Loop normal must point downward (toward -plane_normal)
         centroid = loop_points.mean(axis=0)
         loop_normal = _fit_loop_normal(loop_points, centroid, mesh_center)
         if float(np.dot(loop_normal, plane_normal)) > -0.1:
             continue
 
-        # Must NOT already be on the ground plane (those are handled by _cap_boundary_at_plane)
         max_dist = float(np.abs(loop_dists).max())
         if max_dist <= on_plane_threshold:
             continue
 
-        stats["loops_found"] += 1
+        # Projected loop on the ground plane + its 2D area
+        proj_points = loop_points - loop_dists[:, None] * plane_normal[None, :]
+        uv_on_plane = _loop_projection_uv(proj_points, plane_normal)
+        cap_area = abs(_polygon_area_2d(uv_on_plane))
+
+        candidates.append(
+            {
+                "loop_verts": loop_verts,
+                "loop_points": loop_points,
+                "loop_dists": loop_dists,
+                "avg_dist": avg_dist,
+                "loop_normal": loop_normal,
+                "proj_points": proj_points,
+                "uv_on_plane": uv_on_plane,
+                "cap_area": cap_area,
+            }
+        )
+
+    stats["loops_found"] = len(candidates)
+    if not candidates:
+        return vertices, np.zeros((0, 3), dtype=np.int64), stats
+
+    largest_area = max(c["cap_area"] for c in candidates)
+    area_floor = _SKIRT_MIN_AREA_RATIO * largest_area
+
+    # --- Pass 2: classify and build faces ---
+    new_vertices_list: list[np.ndarray] = []
+    new_faces_list: list[np.ndarray] = []
+    boundary_loop_verts: list[list[int]] = []
+    next_vertex = int(vertices.shape[0])
+
+    for c in candidates:
+        loop_verts = c["loop_verts"]
+        loop_points = c["loop_points"]
+        loop_dists = c["loop_dists"]
+        avg_dist = c["avg_dist"]
+        loop_normal = c["loop_normal"]
+        proj_points = c["proj_points"]
+        uv_on_plane = c["uv_on_plane"]
+        cap_area = c["cap_area"]
         n = len(loop_verts)
 
-        # Project loop vertices onto the ground plane
-        proj_points = loop_points - loop_dists[:, None] * plane_normal[None, :]
+        slenderness = avg_dist / np.sqrt(max(cap_area, 1e-12))
+        is_thin_pillar = (
+            cap_area < area_floor or slenderness > _SKIRT_SLENDERNESS_MAX
+        )
 
-        # Allocate new vertex indices for projected points
+        if is_thin_pillar:
+            seal_verts, seal_faces, next_vertex = _seal_loop_in_place(
+                loop_verts=loop_verts,
+                loop_points=loop_points,
+                loop_normal=loop_normal,
+                plane_normal=plane_normal,
+                next_vertex=next_vertex,
+            )
+            if seal_verts:
+                new_vertices_list.extend(seal_verts)
+            if seal_faces.shape[0] > 0:
+                new_faces_list.append(seal_faces)
+                stats["seal_faces"] += int(seal_faces.shape[0])
+            stats["loops_sealed"] += 1
+            boundary_loop_verts.append(list(loop_verts))
+            continue
+
+        # --- Full skirt + floor cap (original path) ---
         proj_indices = list(range(next_vertex, next_vertex + n))
         new_vertices_list.extend(proj_points)
         next_vertex += n
 
-        # --- Skirt triangles ---
         skirt_tris: list[list[int]] = []
         for i in range(n):
             i_next = (i + 1) % n
@@ -753,7 +873,6 @@ def _generate_bottom_skirt_cap(
 
         skirt_faces = np.asarray(skirt_tris, dtype=np.int64)
 
-        # Orient skirt normals outward (away from mesh center)
         all_verts_so_far = np.vstack(
             (vertices, np.asarray(new_vertices_list, dtype=np.float64))
         )
@@ -770,9 +889,7 @@ def _generate_bottom_skirt_cap(
         new_faces_list.append(skirt_faces)
         stats["skirt_faces"] += int(skirt_faces.shape[0])
 
-        # --- Floor cap ---
-        uv = _loop_projection_uv(proj_points, plane_normal)
-        local_tris = _triangulate_polygon_ear_clip(uv)
+        local_tris = _triangulate_polygon_ear_clip(uv_on_plane)
         cap_faces: np.ndarray | None = None
         if local_tris:
             cap_faces = np.asarray(
@@ -783,9 +900,6 @@ def _generate_bottom_skirt_cap(
                 dtype=np.int64,
             )
         else:
-            # Fallback: centroid fan triangulation.
-            # Projected polygon may self-intersect or have near-degenerate
-            # edges after collapsing heights, causing ear-clip to fail.
             centroid_pt = proj_points.mean(axis=0)
             centroid_idx = next_vertex
             new_vertices_list.append(centroid_pt)
@@ -797,11 +911,9 @@ def _generate_bottom_skirt_cap(
             cap_faces = np.asarray(fan_tris, dtype=np.int64)
 
         if cap_faces is not None and cap_faces.shape[0] > 0:
-            # Rebuild vertex lookup to include any centroid vertex just added
             all_verts_cap = np.vstack(
                 (vertices, np.asarray(new_vertices_list, dtype=np.float64))
             )
-            # Remove degenerate triangles (area ≈ 0)
             tri_pts = all_verts_cap[cap_faces]
             tri_cross = np.cross(
                 tri_pts[:, 1] - tri_pts[:, 0],
@@ -813,7 +925,6 @@ def _generate_bottom_skirt_cap(
             tri_cross = tri_cross[valid_mask]
 
         if cap_faces is not None and cap_faces.shape[0] > 0:
-            # Orient each cap triangle so its normal aligns with -plane_normal
             dots = tri_cross @ (-plane_normal)
             flip_mask = dots < 0
             cap_faces[flip_mask] = cap_faces[flip_mask][:, [0, 2, 1]]

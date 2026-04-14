@@ -186,6 +186,8 @@ _REPAIR_MIN_DOWNWARD_NORMAL_Y = 0.25
 _REPAIR_MIN_LOOP_VERTICES = 4
 _REPAIR_GROUND_SECTION_MIN_AREA_RATIO = 1e-3
 _REPAIR_GROUND_SECTION_START_QUANTILE = 0.75
+_REPAIR_SKIRT_MIN_AREA_RATIO = 0.05  # 底面cap面積が最大capの5%未満なら細い柱扱い
+_REPAIR_SKIRT_SLENDERNESS_MAX = 4.0  # skirt_height / sqrt(cap_area) がこれを超えたら細い柱扱い
 
 # --- Infrastructure --------------------------------------
 _LOG_QUEUE_MAXSIZE = 4096
