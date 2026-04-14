@@ -134,6 +134,22 @@ def run_colmap_sfm(
         json.dump(poses, f, indent=2)
     print(f"Exported {len(poses)} camera poses to {poses_path}")
 
+    # Export camera intrinsics so the texture stage can skip its grid search.
+    try:
+        intrinsics = _read_colmap_intrinsics(recon_dir)
+    except Exception as exc:
+        print(f"  Warning: failed to export COLMAP intrinsics ({exc}); texture stage will re-estimate")
+    else:
+        if intrinsics is not None:
+            intrinsics_path = out / "intrinsics.json"
+            with open(intrinsics_path, "w", encoding="utf-8") as f:
+                json.dump(intrinsics, f, indent=2)
+            print(
+                f"Exported intrinsics to {intrinsics_path}: "
+                f"fx={intrinsics['fx']:.1f} fy={intrinsics['fy']:.1f} "
+                f"cx={intrinsics['cx']:.1f} cy={intrinsics['cy']:.1f}"
+            )
+
     # Step 5: Export sparse point cloud as PLY
     _report(90.0, "Exporting sparse point cloud")
     sparse_ply = out / "colmap_sparse_points.ply"
@@ -212,6 +228,101 @@ def _qvec2rotmat(qw: float, qx: float, qy: float, qz: float) -> list[list[float]
             1 - 2 * qx * qx - 2 * qy * qy,
         ],
     ]
+
+
+# COLMAP camera model IDs → (name, num_params, (fx_idx, fy_idx, cx_idx, cy_idx)).
+# fy_idx == fx_idx when the model shares a single focal length.
+_COLMAP_CAMERA_MODELS: dict[int, tuple[str, int, tuple[int, int, int, int]]] = {
+    0: ("SIMPLE_PINHOLE", 3, (0, 0, 1, 2)),
+    1: ("PINHOLE", 4, (0, 1, 2, 3)),
+    2: ("SIMPLE_RADIAL", 4, (0, 0, 1, 2)),
+    3: ("RADIAL", 5, (0, 0, 1, 2)),
+    4: ("OPENCV", 8, (0, 1, 2, 3)),
+    5: ("OPENCV_FISHEYE", 8, (0, 1, 2, 3)),
+    6: ("FULL_OPENCV", 12, (0, 1, 2, 3)),
+    7: ("FOV", 5, (0, 1, 2, 3)),
+    8: ("SIMPLE_RADIAL_FISHEYE", 4, (0, 0, 1, 2)),
+    9: ("RADIAL_FISHEYE", 5, (0, 0, 1, 2)),
+    10: ("THIN_PRISM_FISHEYE", 12, (0, 1, 2, 3)),
+}
+
+
+def _read_cameras_binary(path: Path) -> dict[int, dict]:
+    """Read COLMAP cameras.bin and return {camera_id: {model, width, height, params}}."""
+    cameras: dict[int, dict] = {}
+    with open(path, "rb") as f:
+        num_cameras = struct.unpack("<Q", f.read(8))[0]
+        for _ in range(num_cameras):
+            camera_id = struct.unpack("<I", f.read(4))[0]
+            model_id = struct.unpack("<i", f.read(4))[0]
+            width = struct.unpack("<Q", f.read(8))[0]
+            height = struct.unpack("<Q", f.read(8))[0]
+
+            if model_id not in _COLMAP_CAMERA_MODELS:
+                raise RuntimeError(
+                    f"Unsupported COLMAP camera model_id={model_id} for camera {camera_id}"
+                )
+            _model_name, num_params, _idx = _COLMAP_CAMERA_MODELS[model_id]
+            params = struct.unpack(f"<{num_params}d", f.read(num_params * 8))
+
+            cameras[camera_id] = {
+                "model_id": model_id,
+                "width": int(width),
+                "height": int(height),
+                "params": list(params),
+            }
+    return cameras
+
+
+def _read_colmap_intrinsics(recon_dir: Path) -> dict | None:
+    """Extract fx/fy/cx/cy from the dominant COLMAP camera.
+
+    Returns a dict in the same schema that ``scripts/texture/intrinsics.py`` writes,
+    or None if the cameras file is missing.  Radial distortion parameters are
+    discarded — the texture stage assumes a pure pinhole model.
+    """
+    cameras_path = recon_dir / "cameras.bin"
+    if not cameras_path.exists():
+        return None
+
+    cameras = _read_cameras_binary(cameras_path)
+    if not cameras:
+        return None
+
+    images_path = recon_dir / "images.bin"
+    dominant_camera_id: int | None = None
+    if images_path.exists():
+        images = _read_images_binary(images_path)
+        counts: dict[int, int] = {}
+        for img in images.values():
+            cid = int(img["camera_id"])
+            counts[cid] = counts.get(cid, 0) + 1
+        if counts:
+            dominant_camera_id = max(counts.items(), key=lambda kv: kv[1])[0]
+
+    if dominant_camera_id is None or dominant_camera_id not in cameras:
+        dominant_camera_id = next(iter(cameras))
+
+    cam = cameras[dominant_camera_id]
+    model_name, _num_params, (fx_i, fy_i, cx_i, cy_i) = _COLMAP_CAMERA_MODELS[cam["model_id"]]
+    params = cam["params"]
+    fx = float(params[fx_i])
+    fy = float(params[fy_i])
+    cx = float(params[cx_i])
+    cy = float(params[cy_i])
+    img_w = int(cam["width"])
+    img_h = int(cam["height"])
+
+    return {
+        "fx": fx,
+        "fy": fy,
+        "cx": cx,
+        "cy": cy,
+        "image_width": img_w,
+        "image_height": img_h,
+        "K": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+        "source": f"colmap:{model_name}",
+    }
 
 
 def _read_images_binary(path: Path) -> dict[int, dict]:

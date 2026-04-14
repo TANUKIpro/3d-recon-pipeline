@@ -164,6 +164,7 @@ _TEXTURE_CACHE_SAFETY_MB = 1024.0
 _TEXTURE_FRAME_BUDGET_RATIO = 0.7
 _TEXTURE_MASK_BUDGET_RATIO = 0.3
 _TEXTURE_MEM_FALLBACK_MB = 4096.0
+_TEXTURE_SEAM_PAD_ITERS = 8  # dilation iterations for the final UV-seam pad
 
 # xatlas UV atlas face budget — auto-scaling parameters
 _TEXTURE_UV_MIN_FACES = 50_000       # 下限: これ以下には簡略化しない

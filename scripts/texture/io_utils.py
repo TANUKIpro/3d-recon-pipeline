@@ -103,7 +103,7 @@ def _load_frame(frames_dir: str, idx: int) -> np.ndarray:
     img = cv2.imread(str(path))
     if img is None:
         raise FileNotFoundError(f"Frame not found: {path}")
-    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float64) / 255.0
+    return (cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / np.float32(255.0))
 
 
 def _load_mask(masks_dir: str, idx: int) -> np.ndarray:
@@ -121,7 +121,7 @@ class _FrameCache:
         avail_mb = _get_available_memory_mb()
         budget_mb = max(0.0, avail_mb - _TEXTURE_CACHE_SAFETY_MB)
 
-        frame_bytes = img_w * img_h * 3 * 8  # float64 RGB
+        frame_bytes = img_w * img_h * 3 * 4  # float32 RGB
         mask_bytes = img_w * img_h  # bool
 
         frame_budget_mb = budget_mb * _TEXTURE_FRAME_BUDGET_RATIO

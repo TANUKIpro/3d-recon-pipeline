@@ -295,8 +295,8 @@ def _update_topk_scores(
     """Update per-texel top-K view scores in-place.
 
     For texels where *valid* is True and *score* exceeds the current worst
-    entry in the top-K list, the worst slot is replaced and the array is
-    re-sorted to maintain descending order.
+    entry in the top-K list, the new sample is inserted into its sorted
+    position and the descending-order invariant is preserved.
 
     Args:
         best_scores: (n_texels, K) float32 — scores kept in descending order.
@@ -306,28 +306,46 @@ def _update_topk_scores(
         vidx: View index to record.
     """
     K = best_scores.shape[1]
+    if K <= 0:
+        return
+
     candidates = valid & (score > best_scores[:, K - 1])
     idx = np.where(candidates)[0]
     if idx.size == 0:
         return
 
-    # Replace worst slot (last column)
-    best_scores[idx, K - 1] = score[idx].astype(np.float32)
-    best_views[idx, K - 1] = vidx
+    rows_s = best_scores[idx]                       # (M, K), descending
+    rows_v = best_views[idx]                        # (M, K)
+    new_scores = score[idx].astype(np.float32)      # (M,)
 
-    # Insert-sort: bubble the new element up from slot K-1
-    for j in range(K - 2, -1, -1):
-        swap = best_scores[idx, j] < best_scores[idx, j + 1]
-        swap_idx = idx[swap]
-        if swap_idx.size == 0:
-            break
-        tmp_s = best_scores[swap_idx, j].copy()
-        best_scores[swap_idx, j] = best_scores[swap_idx, j + 1]
-        best_scores[swap_idx, j + 1] = tmp_s
-        tmp_v = best_views[swap_idx, j].copy()
-        best_views[swap_idx, j] = best_views[swap_idx, j + 1]
-        best_views[swap_idx, j + 1] = tmp_v
-        idx = swap_idx
+    # best_scores is descending, so the first slot where the existing score
+    # is strictly less than the new sample is the insertion index.  The
+    # column-wise filter guarantees at least one such slot exists, so
+    # argmax (which returns the first True) is well-defined.
+    lt_mask = rows_s < new_scores[:, None]          # (M, K)
+    pos = np.argmax(lt_mask, axis=1)                # (M,) ∈ [0, K-1]
+
+    cols = np.arange(K)                             # (K,)
+    col_bcast = cols[None, :]                       # (1, K)
+    pos_bcast = pos[:, None]                        # (M, 1)
+
+    # Right-shift source: slot j inherits from slot (j - 1); slot 0 stays put.
+    shift_idx = np.broadcast_to(
+        np.maximum(cols - 1, 0)[None, :], rows_s.shape
+    )
+    shifted_s = np.take_along_axis(rows_s, shift_idx, axis=1)
+    shifted_v = np.take_along_axis(rows_v, shift_idx, axis=1)
+
+    before_mask = col_bcast < pos_bcast             # keep original
+    at_mask = col_bcast == pos_bcast                # insert new sample
+
+    new_rows_s = np.where(before_mask, rows_s, shifted_s)
+    new_rows_s = np.where(at_mask, new_scores[:, None], new_rows_s)
+    new_rows_v = np.where(before_mask, rows_v, shifted_v)
+    new_rows_v = np.where(at_mask, np.int32(vidx), new_rows_v)
+
+    best_scores[idx] = new_rows_s
+    best_views[idx] = new_rows_v
 
 
 def _apply_view_hardening(
