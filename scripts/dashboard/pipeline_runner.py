@@ -344,6 +344,11 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     session.mask_count = len(list(Path(mask_dir).glob("*.png")))
                     session.ground_mask_dir = ground_mask_dir
 
+                    # Drain any broadcast tasks scheduled by _propagate_cb so
+                    # their closures drop their session references before we
+                    # release the SAM2 model.
+                    await asyncio.sleep(0)
+
                     # Release SAM2 model
                     await asyncio.to_thread(sam2_service.release)
 
