@@ -38,6 +38,13 @@ graph TD
 | NVIDIA Container Toolkit | nvidia-docker2 または nvidia-container-toolkit |
 | OS | Linux (Ubuntu 22.04 で検証済み) |
 
+## セットアップ
+- ここ(https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#with-apt-ubuntu-debian)を参考に、nvidia-container-toolkitを導入する
+- Dockerランタイムを登録して再起動する
+  - `  sudo nvidia-ctk runtime configure --runtime=docker`
+  - `sudo systemctl restart docker `
+
+
 ## クイックスタート
 
 ```bash
