@@ -12,6 +12,14 @@ const TRANSLATIONS = {
   // Header
   'header.title': { en: 'clip2mesh', ja: 'clip2mesh' },
   'header.subtitle': { en: 'RGB Video → Textured 3D Mesh', ja: 'RGB動画 → テクスチャ付き3Dメッシュ' },
+  'header.vramTier.tooltip': {
+    en: 'GPU tier {0} — {1} MB VRAM — TSDF on {2}',
+    ja: 'GPUティア {0} — VRAM {1} MB — TSDF: {2}',
+  },
+  'header.vramTier.unknown': {
+    en: 'GPU tier unknown',
+    ja: 'GPUティア不明',
+  },
 
   // Stage labels
   'stage.extract_frames': { en: 'Extract Frames', ja: 'フレーム抽出' },

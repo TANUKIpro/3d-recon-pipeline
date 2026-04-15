@@ -33,6 +33,7 @@ def gpu_tsdf_reconstruct(
     tsdf_erosion_kernel_size: int = 10,
     tsdf_closing_kernel_size: int = 10,
     block_count: int = 100_000,
+    tsdf_device: str = "CUDA:0",
     progress_cb: Callable[[float, str], None] | None = None,
 ) -> str:
     """Run GPU TSDF fusion and return path to cleaned mesh PLY.
@@ -48,6 +49,7 @@ def gpu_tsdf_reconstruct(
     from scripts.vram_utils import log_vram
 
     root = Path(output_dir_root)
+    device_is_cuda = tsdf_device.lower().startswith("cuda")
     try:
         return _gpu_tsdf_impl(
             root=root,
@@ -66,30 +68,34 @@ def gpu_tsdf_reconstruct(
             tsdf_erosion_kernel_size=tsdf_erosion_kernel_size,
             tsdf_closing_kernel_size=tsdf_closing_kernel_size,
             block_count=block_count,
+            tsdf_device=tsdf_device,
             progress_cb=progress_cb,
         )
     finally:
-        # Open3D's VoxelBlockGrid allocates ~8GB on the GPU at
-        # block_count=100_000 from its OWN memory pool (not PyTorch's).
-        # torch.cuda.empty_cache() cannot free it — we must ask Open3D
-        # directly via open3d.core.cuda.release_cache().
+        # VoxelBlockGrid on CUDA allocates ~8GB directly from Open3D's
+        # own memory pool (not PyTorch's). torch.cuda.empty_cache()
+        # cannot reclaim it — we must call open3d.core.cuda.release_cache()
+        # explicitly. Only do any of this when the run actually used CUDA.
         import gc
 
-        log_vram("before GPU TSDF release")
-        try:
-            o3c.cuda.release_cache()
-        except Exception as exc:  # pragma: no cover — API varies by version
-            print(f"open3d release_cache failed (continuing): {exc}")
-        gc.collect()
-        try:
-            import torch
+        if device_is_cuda:
+            log_vram("before GPU TSDF release")
+            try:
+                o3c.cuda.release_cache()
+            except Exception as exc:  # pragma: no cover — API varies by version
+                print(f"open3d release_cache failed (continuing): {exc}")
+            gc.collect()
+            try:
+                import torch
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-        except ImportError:
-            pass
-        log_vram("after GPU TSDF release")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+            except ImportError:
+                pass
+            log_vram("after GPU TSDF release")
+        else:
+            gc.collect()
 
 
 def _gpu_tsdf_impl(
@@ -110,6 +116,7 @@ def _gpu_tsdf_impl(
     tsdf_erosion_kernel_size: int,
     tsdf_closing_kernel_size: int,
     block_count: int,
+    tsdf_device: str,
     progress_cb: Callable[[float, str], None] | None,
 ) -> str:
     """Core implementation — called from `gpu_tsdf_reconstruct` inside its
@@ -132,9 +139,13 @@ def _gpu_tsdf_impl(
     depth_max = baseline * tsdf_max_depth_baselines / tsdf_scale
 
     # ------------------------------------------------------------------
-    # Create GPU VoxelBlockGrid
+    # Create VoxelBlockGrid — tsdf_device selects CUDA or CPU backend.
+    # On low-VRAM tiers (see scripts/vram_tier.py) this runs on CPU so
+    # the exact same block_count / voxel_size / depth parameters stay
+    # intact; only throughput drops.
     # ------------------------------------------------------------------
-    device = o3c.Device("CUDA:0")
+    device = o3c.Device(tsdf_device)
+    print(f"GPU TSDF: using device={tsdf_device}")
     vbg = o3d.t.geometry.VoxelBlockGrid(
         attr_names=("tsdf", "weight", "color"),
         attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),

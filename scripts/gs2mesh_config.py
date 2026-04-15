@@ -33,6 +33,7 @@ GS2MESH_INTERNAL_CONFIG_FIELDS: tuple[str, ...] = (
     "gs2mesh_tsdf_erosion_kernel_size",
     "gs2mesh_tsdf_closing_kernel_size",
     "gs2mesh_tsdf_block_count",
+    "gs2mesh_tsdf_device",
 )
 
 GS2MESH_CONFIG_FIELDS: tuple[str, ...] = (
@@ -58,6 +59,7 @@ _SETTING_TO_CONFIG_FIELD = {
     "tsdf_erosion_kernel_size": "gs2mesh_tsdf_erosion_kernel_size",
     "tsdf_closing_kernel_size": "gs2mesh_tsdf_closing_kernel_size",
     "block_count": "gs2mesh_tsdf_block_count",
+    "tsdf_device": "gs2mesh_tsdf_device",
 }
 _CONFIG_TO_SETTING_FIELD = {
     config_name: setting_name
@@ -84,6 +86,7 @@ class Gs2meshSettings:
     tsdf_erosion_kernel_size: int
     tsdf_closing_kernel_size: int
     block_count: int
+    tsdf_device: str = "CUDA:0"
 
     @classmethod
     def from_preset(cls, preset: str = GS2MESH_PRESET) -> Gs2meshSettings:

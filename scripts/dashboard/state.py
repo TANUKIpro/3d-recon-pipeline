@@ -528,7 +528,22 @@ class PipelineSession:
             "cleanup_proposal_path": self.cleanup_proposal_path,
             "auto_accept": self.config.auto_accept,
             "overall_progress": self.overall_progress(),
+            "vram_tier": _vram_tier_info_safe(),
         }
+
+
+def _vram_tier_info_safe() -> dict | None:
+    """Return the auto-detected VRAM tier snapshot for the UI header.
+
+    Imported lazily so ``state.py`` stays importable in contexts where
+    nvidia-smi is unavailable (e.g. unit tests).
+    """
+    try:
+        from scripts.vram_tier import tier_info
+
+        return tier_info()
+    except Exception:
+        return None
 
 
 def _terminate_process_tree(process: Any, grace_seconds: float = 1.0) -> bool:

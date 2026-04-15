@@ -99,6 +99,17 @@ def _stage_gs2mesh_reconstruct(
                 "use_masks": use_masks,
             }
         )
+
+    # Layer hardware tier on top of the user-chosen preset so 8 GB
+    # hosts fall back to CPU TSDF automatically. run_gs2mesh re-applies
+    # this as a safety net, but we also do it here so the wrapper's
+    # logs reflect the real device before invocation.
+    from scripts.vram_tier import apply_tier_override, detect_tier
+
+    settings = apply_tier_override(settings)
+    print(
+        f"[gs2mesh] tier={detect_tier()} tsdf_device={settings.tsdf_device}"
+    )
     try:
         result = run_gs2mesh(
             frames_dir,
@@ -239,6 +250,7 @@ def _vram_gate() -> None:
     import os
 
     from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB, _VRAM_GATE_STRICT
+    from scripts.vram_tier import detect_tier, uses_cpu_tsdf
     from scripts.vram_utils import (
         cleanup_pytorch_vram,
         ensure_vram_available,
@@ -248,6 +260,15 @@ def _vram_gate() -> None:
 
     cleanup_pytorch_vram()
     log_vram_detailed("vram gate pre-check")
+
+    # Low-VRAM tiers relocate TSDF to CPU (see scripts/vram_tier.py),
+    # so the gs2mesh stage no longer needs 12 GB of free GPU memory.
+    # Skip the gate entirely rather than adapting the threshold.
+    if uses_cpu_tsdf():
+        print(
+            f"[vram-gate] skipping — tier={detect_tier()} uses CPU TSDF"
+        )
+        return
 
     # Adaptive threshold: use the configured value, but cap it at 75% of
     # total GPU memory so the gate doesn't fail on GPUs where host

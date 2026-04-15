@@ -112,7 +112,13 @@ def _run_gpu_tsdf_with_fallbacks(
     from scripts.gpu_tsdf import gpu_tsdf_reconstruct
     from scripts.vram_utils import cleanup_pytorch_vram
 
-    attempts = _build_gpu_tsdf_attempts(settings)
+    tsdf_device = settings.tsdf_device
+    # CPU TSDF has no VRAM OOM to recover from — skip the
+    # VRAM-reduction fallback ladder entirely so errors surface cleanly.
+    if tsdf_device.lower().startswith("cpu"):
+        attempts = [("requested", settings)]
+    else:
+        attempts = _build_gpu_tsdf_attempts(settings)
     last_exc: RuntimeError | None = None
 
     for idx, (label, attempt_settings) in enumerate(attempts, start=1):
@@ -144,6 +150,7 @@ def _run_gpu_tsdf_with_fallbacks(
                 tsdf_erosion_kernel_size=attempt_settings.tsdf_erosion_kernel_size,
                 tsdf_closing_kernel_size=attempt_settings.tsdf_closing_kernel_size,
                 block_count=attempt_settings.block_count,
+                tsdf_device=tsdf_device,
                 progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
             )
         except RuntimeError as exc:
@@ -200,6 +207,13 @@ def run_gs2mesh(
                 "use_masks": use_masks,
             }
         )
+
+    # Apply the hardware-tier override (CPU TSDF on low-VRAM hosts).
+    # The dashboard wrapper also calls this, so this is the single
+    # safety net for CLI invocations that construct their own settings.
+    from scripts.vram_tier import apply_tier_override
+
+    settings = apply_tier_override(settings)
     gs_iterations = settings.gs_iterations
     runtime_profile = settings.runtime_profile
     stereo_model = settings.stereo_model

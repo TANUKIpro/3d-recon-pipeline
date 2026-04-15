@@ -108,11 +108,18 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 4/6: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
         print("=" * 60)
-        ensure_vram_available(
-            min_free_mb=_VRAM_GATE_MIN_FREE_MB,
-            stage_name="before gs2mesh",
-            strict=_VRAM_GATE_STRICT,
-        )
+        from scripts.vram_tier import detect_tier, uses_cpu_tsdf
+
+        if uses_cpu_tsdf():
+            print(
+                f"[vram-gate] skipping — tier={detect_tier()} uses CPU TSDF"
+            )
+        else:
+            ensure_vram_available(
+                min_free_mb=_VRAM_GATE_MIN_FREE_MB,
+                stage_name="before gs2mesh",
+                strict=_VRAM_GATE_STRICT,
+            )
 
         from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
 

@@ -70,6 +70,10 @@ GS2MESH_TSDF_ERODE_MASK = True
 GS2MESH_TSDF_EROSION_KERNEL_SIZE = 10
 GS2MESH_TSDF_CLOSING_KERNEL_SIZE = 10
 GS2MESH_TSDF_BLOCK_COUNT = 100_000
+# TSDF device — overridden per VRAM tier at runtime via
+# scripts/vram_tier.py (CPU:0 on low-VRAM tiers so the same parameters
+# run reliably without VRAM-reduction fallbacks).
+GS2MESH_TSDF_DEVICE = "CUDA:0"
 GS2MESH_PRESETS: dict[str, dict[str, object]] = {
     "default": {
         "gs_iterations": GS2MESH_GS_ITERATIONS,
@@ -89,6 +93,7 @@ GS2MESH_PRESETS: dict[str, dict[str, object]] = {
         "tsdf_erosion_kernel_size": GS2MESH_TSDF_EROSION_KERNEL_SIZE,
         "tsdf_closing_kernel_size": GS2MESH_TSDF_CLOSING_KERNEL_SIZE,
         "block_count": GS2MESH_TSDF_BLOCK_COUNT,
+        "tsdf_device": GS2MESH_TSDF_DEVICE,
     },
     "high": {
         "gs_iterations": 15000,
@@ -108,6 +113,7 @@ GS2MESH_PRESETS: dict[str, dict[str, object]] = {
         "tsdf_erosion_kernel_size": 8,
         "tsdf_closing_kernel_size": 8,
         "block_count": 100_000,
+        "tsdf_device": GS2MESH_TSDF_DEVICE,
     },
 }
 GS2MESH_PRESET_CHOICES: set[str] = set(GS2MESH_PRESETS) | {
