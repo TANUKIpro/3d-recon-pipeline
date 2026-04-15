@@ -408,7 +408,7 @@ class TestBuildPipelineConfigExtended(unittest.TestCase):
         raw = {
             "milo_preset": "default",
             "milo_preset_base": "default",
-            "milo_iterations": 18000,
+            "milo_iterations": 12000,
             "milo_scene_type": "indoor",
             "milo_mesh_config": "default",
             "milo_extraction_method": "sdf",

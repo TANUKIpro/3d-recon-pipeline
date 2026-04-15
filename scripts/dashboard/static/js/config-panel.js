@@ -224,7 +224,7 @@ export class ConfigPanel {
       milo_preset_base: this._miloPresetBase,
       milo_iterations: this._parsePositiveInt(
         this._inputs.milo_iterations?.value,
-        18000,
+        12000,
       ),
       milo_scene_type: this._inputs.milo_scene_type?.value || 'indoor',
       milo_mesh_config: this._inputs.milo_mesh_config?.value || 'default',

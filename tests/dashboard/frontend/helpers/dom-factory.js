@@ -228,7 +228,7 @@ export function buildConfigPanelDOM() {
         <option value="fast">Fast</option>
         <option value="custom">Custom</option>
       </select>
-      <input type="number" id="cfg-milo-iterations" value="18000">
+      <input type="number" id="cfg-milo-iterations" value="12000">
       <select id="cfg-milo-scene-type">
         <option value="indoor" selected>Indoor</option>
         <option value="outdoor">Outdoor</option>

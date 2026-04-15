@@ -121,7 +121,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(cfg.milo_preset, "default")
-        self.assertEqual(cfg.milo_iterations, 18000)
+        self.assertEqual(cfg.milo_iterations, 12000)
         self.assertEqual(cfg.milo_scene_type, "indoor")
         self.assertTrue(cfg.milo_use_masks)
         self.assertTrue(cfg.colmap_filter_enabled)

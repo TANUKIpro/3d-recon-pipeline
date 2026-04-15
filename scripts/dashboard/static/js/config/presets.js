@@ -9,7 +9,7 @@ export const MILO_PRESET_FAST = 'fast';
 export const MILO_PRESET_CUSTOM = 'custom';
 export const MILO_PUBLIC_PRESETS = {
   [MILO_PRESET_DEFAULT]: {
-    milo_iterations: 18000,
+    milo_iterations: 12000,
     milo_scene_type: 'indoor',
     milo_mesh_config: 'default',
     milo_extraction_method: 'sdf',

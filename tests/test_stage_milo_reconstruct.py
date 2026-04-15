@@ -231,7 +231,7 @@ class TestBuildMiloExtractArgs(unittest.TestCase):
         )
 
         self.assertIn("mesh_extract_sdf.py", args[2])
-        self.assertEqual(args[args.index("--iteration") + 1], "18000")
+        self.assertEqual(args[args.index("--iteration") + 1], "12000")
         self.assertEqual(args[args.index("--config") + 1], "default")
         self.assertEqual(args[args.index("--imp_metric") + 1], "indoor")
 

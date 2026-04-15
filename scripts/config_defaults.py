@@ -59,7 +59,7 @@ SAM2_MODEL_CONFIGS: dict[str, dict[str, str]] = {
 # --- Stage 4: MILo Reconstruction -------------------------
 MILO_PRESET = "default"
 MILO_PRESET_CUSTOM = "custom"
-MILO_ITERATIONS = 18000
+MILO_ITERATIONS = 12000
 MILO_SCENE_TYPE = "indoor"
 MILO_SCENE_TYPES: set[str] = {"indoor", "outdoor"}
 MILO_MESH_CONFIG = "default"
