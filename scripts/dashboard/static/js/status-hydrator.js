@@ -50,9 +50,21 @@ export class StatusHydrator {
 
     cameraOverlay.remove();
     sam2.deactivate();
-    sam2Verify.hide();
     postTextureCleanupReview?.reset?.();
     preview.reset();
+
+    // If stage 3 is done, show frozen verification; otherwise hide
+    if (isStageDone(statusMsg, 3)) {
+      const frameCount = Number(statusMsg.frame_count) || 0;
+      const hasGround = statusMsg.has_ground_plane === true;
+      if (frameCount > 0) {
+        sam2Verify.showFrozen(frameCount, hasGround);
+      } else {
+        sam2Verify.hide();
+      }
+    } else {
+      sam2Verify.hide();
+    }
 
     if (isStageDone(statusMsg, 1)) {
       const empty = document.querySelector('#stage-panel-1 .stage-panel-empty');
