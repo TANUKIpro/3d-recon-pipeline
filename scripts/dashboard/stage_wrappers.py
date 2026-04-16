@@ -138,6 +138,7 @@ def _stage_extract_ground_plane(
     poses_path: str,
     intrinsics_path: str,
     object_mask_dir: str | None = None,
+    colmap_sparse_dir: str | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -152,6 +153,7 @@ def _stage_extract_ground_plane(
         poses_path,
         intrinsics_path,
         object_mask_dir=object_mask_dir,
+        colmap_sparse_dir=colmap_sparse_dir,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )

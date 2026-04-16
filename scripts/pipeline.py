@@ -161,7 +161,7 @@ Examples:
             ground_masks_dir = Path(output_dir) / "masks_ground"
             if ground_masks_dir.is_dir() and any(ground_masks_dir.glob("*.png")):
                 from scripts.ground_plane_extraction import extract_ground_plane_from_mesh
-                print("  Extracting ground plane from mesh + ground masks...")
+                print("  Extracting ground plane from COLMAP sparse + ground masks...")
                 extract_ground_plane_from_mesh(
                     str(Path(output_dir) / "object_mesh.ply"),
                     str(ground_masks_dir),
@@ -169,6 +169,7 @@ Examples:
                     str(poses_path),
                     str(Path(output_dir) / "intrinsics.json"),
                     object_mask_dir=mask_dir,
+                    colmap_sparse_dir=colmap_sparse_dir,
                 )
         proposal = prepare_cleanup_review(
             str(obj_path),

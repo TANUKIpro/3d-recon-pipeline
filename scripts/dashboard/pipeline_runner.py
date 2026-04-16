@@ -769,14 +769,23 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
             )
 
     try:
-        # Extract ground plane from mesh + SAM2 ground masks if not yet done
+        # Extract ground plane from COLMAP sparse points + SAM2 ground masks
         if session.ground_plane_path is None and session.ground_mask_dir is not None:
             intrinsics_file = Path(output_dir) / "intrinsics.json"
             mesh_ply = session.mesh_ply or str(Path(output_dir) / "object_mesh.ply")
-            if Path(mesh_ply).is_file() and intrinsics_file.is_file() and session.poses_path:
+            colmap_sparse = session.colmap_sparse_path or str(Path(output_dir) / "colmap_sparse")
+            # COLMAP sparse primary needs only colmap_sparse_dir + ground masks;
+            # mesh fallback additionally needs mesh, poses, and intrinsics.
+            has_colmap = Path(colmap_sparse).is_dir()
+            has_mesh_fallback = (
+                Path(mesh_ply).is_file()
+                and intrinsics_file.is_file()
+                and session.poses_path
+            )
+            if has_colmap or has_mesh_fallback:
                 await _broadcast_stage_progress(
                     session, stage, progress=5.0,
-                    detail="Extracting ground plane from mesh",
+                    detail="Extracting ground plane",
                 )
                 gp_result = await asyncio.to_thread(
                     _run_blocking,
@@ -784,9 +793,10 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
                     mesh_ply,
                     session.ground_mask_dir,
                     output_dir,
-                    session.poses_path,
+                    session.poses_path or "",
                     str(intrinsics_file),
                     session.mask_dir,
+                    colmap_sparse if has_colmap else None,
                 )
                 if gp_result is not None:
                     gp_path = Path(output_dir) / "ground_plane.json"

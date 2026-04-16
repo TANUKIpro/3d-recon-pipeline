@@ -206,12 +206,22 @@ def _count_matched_masks(images: dict[int, ColmapImage], mask_dir: Path) -> int:
     )
 
 
-def _select_point_ids(
+def classify_points_by_mask(
     model: ColmapModel,
-    mask_dir: Path,
-    settings: SparseFilterSettings,
+    mask_dir: str | Path,
+    *,
+    min_inside_views: int = 2,
+    min_inside_ratio: float = 0.6,
+    mask_dilate: int = 0,
 ) -> set[int]:
-    mask_map = _build_mask_map(mask_dir)
+    """Return 3D point IDs whose tracked 2D observations land inside masks.
+
+    Generic multi-view voting: for each COLMAP 3D point, check how many of
+    its tracked 2D observations fall inside the masks.  A point is selected
+    when it has at least *min_inside_views* inside votes and the inside
+    fraction exceeds *min_inside_ratio*.
+    """
+    mask_map = _build_mask_map(Path(mask_dir))
     mask_cache: dict[Path, np.ndarray] = {}
     keep_ids: set[int] = set()
 
@@ -230,7 +240,7 @@ def _select_point_ids(
                 continue
             mask = mask_cache.get(resolved_mask)
             if mask is None:
-                mask = _load_mask_array(resolved_mask, settings.mask_dilate)
+                mask = _load_mask_array(resolved_mask, mask_dilate)
                 mask_cache[resolved_mask] = mask
 
             # Use COLMAP's tracked 2D observation directly because SAM2 masks
@@ -248,13 +258,27 @@ def _select_point_ids(
                 outside += 1
 
         total_votes = inside + outside
-        if inside < settings.min_inside_views or total_votes <= 0:
+        if inside < min_inside_views or total_votes <= 0:
             continue
-        if (inside / total_votes) < settings.min_inside_ratio:
+        if (inside / total_votes) < min_inside_ratio:
             continue
         keep_ids.add(point_id)
 
     return keep_ids
+
+
+def _select_point_ids(
+    model: ColmapModel,
+    mask_dir: Path,
+    settings: SparseFilterSettings,
+) -> set[int]:
+    return classify_points_by_mask(
+        model,
+        mask_dir,
+        min_inside_views=settings.min_inside_views,
+        min_inside_ratio=settings.min_inside_ratio,
+        mask_dilate=settings.mask_dilate,
+    )
 
 
 def _build_filtered_model(model: ColmapModel, keep_ids: set[int]) -> ColmapModel:
