@@ -52,6 +52,9 @@ const TRANSLATIONS = {
   'overview.title': { en: 'Objects', ja: 'オブジェクト一覧' },
   'overview.new_pipeline': { en: 'New Pipeline', ja: '新規パイプライン' },
   'overview.empty': { en: 'No objects yet. Start a new pipeline to create one.', ja: 'オブジェクトがありません。新規パイプラインを開始してください。' },
+  'overview.sort.asc': { en: 'Name A→Z', ja: '名前 昇順' },
+  'overview.sort.desc': { en: 'Name Z→A', ja: '名前 降順' },
+  'overview.sort.updated': { en: 'Recently Updated', ja: '更新順' },
   'overview.open': { en: 'Open', ja: '開く' },
   'overview.stages': { en: 'Stages', ja: 'ステージ' },
   'overview.updated': { en: 'Updated', ja: '更新日時' },
@@ -106,6 +109,14 @@ export class I18n {
     const els = document.querySelectorAll('[data-i18n]');
     for (const el of els) {
       const key = el.getAttribute('data-i18n');
+      if (key) {
+        el.textContent = this.t(key);
+      }
+    }
+    // Translate <option> elements with data-i18n-value
+    const opts = document.querySelectorAll('[data-i18n-value]');
+    for (const el of opts) {
+      const key = el.getAttribute('data-i18n-value');
       if (key) {
         el.textContent = this.t(key);
       }

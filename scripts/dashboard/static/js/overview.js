@@ -3,7 +3,7 @@
  * processed objects with thumbnails, stage-dot progress, and actions.
  */
 
-import { STAGE_COUNT } from './constants.js';
+import { STAGE_COUNT, STORAGE_KEYS } from './constants.js';
 
 const STAGE_LABELS = [
   'Frames', 'COLMAP', 'SAM2', 'gs2mesh', 'Texture', 'Post Cleanup',
@@ -16,6 +16,7 @@ export class OverviewPanel {
     this._objects = [];
     this._stale = true;
     this._activeObject = null;
+    this._sortOrder = localStorage.getItem(STORAGE_KEYS.sortOrder) || 'asc';
     this.currentBranchSlug = null;
 
     /** @type {((name: string, branch?: string) => void) | null} */
@@ -28,6 +29,17 @@ export class OverviewPanel {
     if (newBtn) {
       newBtn.addEventListener('click', () => {
         if (this.onNewPipeline) this.onNewPipeline();
+      });
+    }
+
+    // Wire sort selector
+    this._sortSelect = document.getElementById('overview-sort');
+    if (this._sortSelect) {
+      this._sortSelect.value = this._sortOrder;
+      this._sortSelect.addEventListener('change', () => {
+        this._sortOrder = this._sortSelect.value;
+        localStorage.setItem(STORAGE_KEYS.sortOrder, this._sortOrder);
+        this._render();
       });
     }
   }
@@ -71,9 +83,26 @@ export class OverviewPanel {
     }
     this._empty.classList.add('hidden');
 
-    for (const obj of this._objects) {
+    const sorted = this._sortedObjects();
+    for (const obj of sorted) {
       this._grid.appendChild(this._createCard(obj));
     }
+  }
+
+  _sortedObjects() {
+    const list = [...this._objects];
+    switch (this._sortOrder) {
+      case 'asc':
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case 'desc':
+        list.sort((a, b) => b.name.localeCompare(a.name));
+        break;
+      case 'updated':
+        list.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+        break;
+    }
+    return list;
   }
 
   _createCard(obj) {
