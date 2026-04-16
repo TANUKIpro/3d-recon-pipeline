@@ -31,7 +31,14 @@
   <div id="overview-container">
     <div class="overview-header">
       <h2 data-i18n="overview.title">Objects</h2>
-      <button id="overview-new-btn" class="btn-primary btn-small" data-i18n="overview.new_pipeline">New Pipeline</button>
+      <div class="overview-header-right">
+        <select id="overview-sort" class="overview-sort-select">
+          <option value="asc" data-i18n-value="overview.sort.asc">Name A→Z</option>
+          <option value="desc" data-i18n-value="overview.sort.desc">Name Z→A</option>
+          <option value="updated" data-i18n-value="overview.sort.updated">Recently Updated</option>
+        </select>
+        <button id="overview-new-btn" class="btn-primary btn-small" data-i18n="overview.new_pipeline">New Pipeline</button>
+      </div>
     </div>
     <div id="overview-grid"></div>
     <div id="overview-empty" class="overview-empty hidden">

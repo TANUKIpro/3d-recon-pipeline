@@ -11,4 +11,5 @@ export const STORAGE_KEYS = {
   autoScroll: 'clip2mesh:log.autoScroll',
   maxLines: 'clip2mesh:log.maxLines',
   autoAccept: 'clip2mesh:autoAccept',
+  sortOrder: 'clip2mesh:sortOrder',
 };

@@ -18,6 +18,28 @@
   font-weight: 700;
 }
 
+.overview-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.overview-sort-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+}
+
+.overview-sort-select:focus {
+  border-color: var(--accent);
+}
+
 #overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
