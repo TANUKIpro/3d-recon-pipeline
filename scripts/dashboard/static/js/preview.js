@@ -547,7 +547,7 @@ export class PreviewPanel {
 
     const ext = file.split('.').pop().toLowerCase();
     const renderMode = String(opts.renderMode || (isMesh ? 'mesh' : '')).toLowerCase();
-    const stripVertexColors = opts.stripVertexColors ?? isMesh;
+    const stripVertexColors = opts.stripVertexColors ?? false;
     const enableShadows = opts.enableShadows ?? isMesh;
     const loaded = await this._loadPreviewAssetForStage(stageNum, file, {
       ext,
@@ -725,18 +725,20 @@ export class PreviewPanel {
         mesh.castShadow = enableShadows;
         mesh.receiveShadow = enableShadows;
 
-        // Lightweight edge overlay to reveal silhouette when no texture is present.
+        // Lightweight edge overlay to reveal silhouette when no vertex color or texture is present.
         let overlay = null;
-        try {
-          const edges = new THREE.EdgesGeometry(geometry, 25);
-          const lineMat = new THREE.LineBasicMaterial({
-            color: SCENE_THEMES[this._currentTheme].edgeColor,
-            transparent: true,
-            opacity: SCENE_THEMES[this._currentTheme].edgeOpacity,
-          });
-          overlay = new THREE.LineSegments(edges, lineMat);
-        } catch (edgeErr) {
-          console.warn('Edge overlay skipped:', edgeErr);
+        if (!hasColor) {
+          try {
+            const edges = new THREE.EdgesGeometry(geometry, 25);
+            const lineMat = new THREE.LineBasicMaterial({
+              color: SCENE_THEMES[this._currentTheme].edgeColor,
+              transparent: true,
+              opacity: SCENE_THEMES[this._currentTheme].edgeOpacity,
+            });
+            overlay = new THREE.LineSegments(edges, lineMat);
+          } catch (edgeErr) {
+            console.warn('Edge overlay skipped:', edgeErr);
+          }
         }
 
         obj = new THREE.Group();
