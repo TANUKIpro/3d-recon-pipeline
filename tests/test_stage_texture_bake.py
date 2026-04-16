@@ -1468,7 +1468,7 @@ class BakeTextureRegressionTests(unittest.TestCase):
                         ):
                             with patch(
                                 "scripts.texture.bake.orient_mesh_outward",
-                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                                side_effect=lambda vertices, faces, **kw: (faces, False, 1.0, 1.0),
                             ):
                                 result = bake_texture(
                                     str(mesh_path),
@@ -1574,7 +1574,7 @@ class BakeTextureRegressionTests(unittest.TestCase):
                         ):
                             with patch(
                                 "scripts.texture.bake.orient_mesh_outward",
-                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                                side_effect=lambda vertices, faces, **kw: (faces, False, 1.0, 1.0),
                             ):
                                 with patch(
                                     "scripts.texture.bake._evaluate_view_samples",

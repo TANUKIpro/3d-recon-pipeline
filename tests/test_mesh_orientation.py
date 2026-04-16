@@ -219,6 +219,63 @@ class OrientMeshOutwardTests(unittest.TestCase):
         np.testing.assert_array_equal(result_faces, faces)
 
 
+class VertexNormalOrientTests(unittest.TestCase):
+    """Tests for orient_mesh_outward with vertex_normals parameter."""
+
+    @staticmethod
+    def _make_box_with_normals(
+        inward_winding: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Box with per-vertex normals pointing outward from centroid."""
+        verts = np.array(
+            [
+                [-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
+                [-1, -1,  1], [1, -1,  1], [1, 1,  1], [-1, 1,  1],
+            ],
+            dtype=np.float64,
+        )
+        faces = np.array(
+            [
+                [0, 3, 2], [0, 2, 1],
+                [4, 5, 6], [4, 6, 7],
+                [0, 4, 7], [0, 7, 3],
+                [1, 2, 6], [1, 6, 5],
+                [0, 1, 5], [0, 5, 4],
+                [2, 3, 7], [2, 7, 6],
+            ],
+            dtype=np.int32,
+        )
+        if inward_winding:
+            faces = faces[:, [0, 2, 1]]
+        # Vertex normals: point outward from centre (normalised vertex positions)
+        vnormals = verts / np.linalg.norm(verts, axis=1, keepdims=True)
+        return verts, faces, vnormals
+
+    def test_outward_with_normals_not_flipped(self) -> None:
+        verts, faces, vnormals = self._make_box_with_normals(inward_winding=False)
+        result, flipped, _, _ = orient_mesh_outward(verts, faces, vertex_normals=vnormals)
+        self.assertFalse(flipped)
+        np.testing.assert_array_equal(result, faces)
+
+    def test_inward_with_normals_flipped(self) -> None:
+        verts, faces, vnormals = self._make_box_with_normals(inward_winding=True)
+        result, flipped, _, _ = orient_mesh_outward(verts, faces, vertex_normals=vnormals)
+        self.assertTrue(flipped)
+        expected = faces[:, [0, 2, 1]]
+        np.testing.assert_array_equal(result, expected)
+
+    def test_normals_preferred_over_heuristic(self) -> None:
+        """When vertex normals are provided, they should override boundary heuristic."""
+        verts, faces, vnormals = self._make_box_with_normals(inward_winding=False)
+        # Flip normals so they disagree with correct winding — the function
+        # should trust the vertex normals and flip the faces
+        flipped_vnormals = -vnormals
+        result, flipped, _, _ = orient_mesh_outward(
+            verts, faces, vertex_normals=flipped_vnormals,
+        )
+        self.assertTrue(flipped)
+
+
 if __name__ == "__main__":
     unittest.main()
 

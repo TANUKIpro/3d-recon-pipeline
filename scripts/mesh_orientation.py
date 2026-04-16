@@ -115,23 +115,29 @@ def _boundary_face_vote(
 def orient_mesh_outward(
     vertices: np.ndarray,
     faces: np.ndarray,
+    *,
+    vertex_normals: np.ndarray | None = None,
 ) -> tuple[np.ndarray, bool, float | None, float | None]:
-    """Orient faces outward using boundary-face normal verification.
+    """Orient faces outward using vertex normals or boundary-face heuristic.
 
-    Unlike ``orient_faces_outward`` which uses a centroid-based heuristic that
-    fails on non-convex meshes, this function checks normals at the bounding-box
-    boundaries where faces are reliably on the convex hull.
+    When ``vertex_normals`` are provided (e.g. from MILo SDF extraction),
+    face winding is validated against those normals — this is far more reliable
+    than geometric heuristics for non-convex shapes.
+
+    Falls back to boundary-face normal voting when vertex normals are unavailable.
 
     Returns (faces, flipped, ratio_before, ratio_after) — same signature as
     ``orient_faces_outward`` for drop-in compatibility.
     """
     tris = np.asarray(faces)
-
     ratio_before = face_outward_ratio(vertices, tris)
-    is_outward = _boundary_face_vote(vertices, tris)
+
+    if vertex_normals is not None:
+        is_outward = _vertex_normal_vote(vertices, tris, vertex_normals)
+    else:
+        is_outward = _boundary_face_vote(vertices, tris)
 
     if is_outward is None:
-        # Can't determine — leave as-is
         return tris, False, ratio_before, ratio_before
 
     if is_outward:
@@ -141,4 +147,49 @@ def orient_mesh_outward(
     flipped = tris[:, [0, 2, 1]].copy()
     ratio_after = face_outward_ratio(vertices, flipped)
     return flipped, True, ratio_before, ratio_after
+
+
+def _vertex_normal_vote(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    vertex_normals: np.ndarray,
+) -> bool | None:
+    """Check face winding against known vertex normals.
+
+    For each face, compute its geometric normal from vertex winding order
+    and compare with the average of its vertex normals (from SDF extraction).
+    If the majority of faces agree (dot > 0), the winding is correct.
+
+    Returns True if outward, False if inward, None if indeterminate.
+    """
+    verts = np.asarray(vertices, dtype=np.float64)
+    tris = np.asarray(faces, dtype=np.int64)
+    vnorms = np.asarray(vertex_normals, dtype=np.float64)
+
+    if verts.size == 0 or tris.size == 0 or vnorms.size == 0:
+        return None
+
+    tri_pts = verts[tris]
+    face_normals = np.cross(
+        tri_pts[:, 1] - tri_pts[:, 0],
+        tri_pts[:, 2] - tri_pts[:, 0],
+    )
+    fn_len = np.linalg.norm(face_normals, axis=1)
+    valid = fn_len > 1e-12
+    if not np.any(valid):
+        return None
+
+    # Average vertex normals per face
+    avg_vn = (vnorms[tris[:, 0]] + vnorms[tris[:, 1]] + vnorms[tris[:, 2]]) / 3.0
+
+    # Dot product: face normal vs average vertex normal
+    dots = np.einsum("ij,ij->i", face_normals[valid], avg_vn[valid])
+    agree_ratio = float(np.mean(dots > 0.0))
+
+    # Strong majority required to be confident
+    if 0.4 <= agree_ratio <= 0.6:
+        # Ambiguous — face winding is mixed, can't decide globally
+        return None
+
+    return agree_ratio > 0.5
 

@@ -230,6 +230,23 @@ def bake_texture(
     faces = np.vstack(f["vertex_indices"]).astype(np.int32)
     print(f"  {len(vertices)} verts, {len(faces)} faces")
 
+    # Try to read vertex normals (from SDF extraction — more reliable than heuristic)
+    ply_vertex_normals = None
+    try:
+        ply_vertex_normals = np.column_stack(
+            [v["nx"], v["ny"], v["nz"]]
+        ).astype(np.float64)
+        _vn_len = np.linalg.norm(ply_vertex_normals, axis=1, keepdims=True)
+        _valid_vn = _vn_len.ravel() > 1e-12
+        if _valid_vn.sum() < len(ply_vertex_normals) * 0.5:
+            ply_vertex_normals = None
+            print("  Vertex normals: found but mostly degenerate, ignoring")
+        else:
+            ply_vertex_normals[_valid_vn] /= _vn_len[_valid_vn]
+            print(f"  Vertex normals: loaded from PLY ({_valid_vn.sum()}/{len(ply_vertex_normals)} valid)")
+    except (ValueError, KeyError):
+        print("  Vertex normals: not present in PLY, will use geometric heuristic")
+
     # Try to read vertex colors (used to detect cap faces from repair stage)
     vert_colors = None
     try:
@@ -374,10 +391,15 @@ def bake_texture(
     _uv_dt = _time.monotonic() - _uv_t0
     print(f"  UV atlas generated in {_uv_dt:.1f}s")
     new_vertices = uv_vertices[vmapping]
+    # Use PLY vertex normals for orientation if available and mesh wasn't simplified
+    _orient_vnormals = None
+    if ply_vertex_normals is not None and not uv_simplified:
+        _orient_vnormals = ply_vertex_normals[vmapping]
     new_faces, flipped_winding, ratio_before, ratio_after = orient_mesh_outward(
-        new_vertices, new_faces
+        new_vertices, new_faces, vertex_normals=_orient_vnormals,
     )
-    print(f"  {len(new_vertices)} verts, {len(new_faces)} faces")
+    _orient_method = "vertex normals" if _orient_vnormals is not None else "boundary heuristic"
+    print(f"  {len(new_vertices)} verts, {len(new_faces)} faces (orient: {_orient_method})")
     if flipped_winding:
         print(
             "  Orientation fix: flipped UV faces "
