@@ -1,4 +1,4 @@
-"""Bake MILo vertex colors into a UV-mapped texture.
+"""Bake vertex colors into a UV-mapped texture.
 
 Reads a PLY mesh with per-vertex RGB colors, generates a UV atlas via xatlas,
 rasterises the vertex colours into a texture image, and writes the same
@@ -28,7 +28,7 @@ def bake_vertex_color_texture(
     """Bake vertex colors from a PLY mesh into a UV-mapped textured OBJ.
 
     Args:
-        mesh_ply: Path to vertex-colored PLY mesh (from MILo).
+        mesh_ply: Path to vertex-colored PLY mesh.
         output_dir: Output directory for OBJ/MTL/PNG.
         tex_size: Texture resolution. 0 or None = auto (1024).
         progress_cb: Optional ``(progress, detail)`` callback.

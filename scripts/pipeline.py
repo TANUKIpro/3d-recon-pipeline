@@ -41,7 +41,7 @@ Examples:
         "--texture-mode",
         default="multi_view",
         choices=["multi_view", "vertex_color"],
-        help="Texture mode: multi_view (camera projection) or vertex_color (MILo colors)",
+        help="Texture mode: multi_view (camera projection) or vertex_color (gs2mesh colors)",
     )
     parser.add_argument(
         "--post-texture-cleanup-selection-json",
@@ -148,7 +148,7 @@ Examples:
         print("Stage 5/6: Texture Baking")
         print("=" * 60)
         if args.texture_mode == "vertex_color":
-            print("  Mode: vertex_color (MILo vertex colors)")
+            print("  Mode: vertex_color (gs2mesh vertex colors)")
             from scripts.texture.vertex_color_bake import bake_vertex_color_texture
             obj_path = bake_vertex_color_texture(str(mesh_ply), output_dir)
         else:
