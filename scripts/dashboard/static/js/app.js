@@ -245,8 +245,23 @@ config.onCancel = async () => {
 // ── WebSocket handlers ───────────────────────────────────────
 
 ws.on('status', async (msg) => {
+  updateVramTierBadge(msg?.vram_tier);
   await statusHydrator.applySnapshot(msg, { applyConfig: false });
 });
+
+function updateVramTierBadge(info) {
+  const badge = document.getElementById('vram-tier-badge');
+  if (!badge) return;
+  if (!info) {
+    badge.textContent = '\u2764';
+    badge.title = i18n.t('header.vramTier.unknown');
+    return;
+  }
+  badge.textContent = info.hearts || '\u2764';
+  const mb = info.total_vram_mb != null ? info.total_vram_mb : '?';
+  const tier = info.tier || '?';
+  badge.title = i18n.t('header.vramTier.tooltip', tier, mb);
+}
 
 ws.on('stage_start', (msg) => {
   checkpoints.onStageStart(msg.stage);
