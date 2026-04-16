@@ -17,6 +17,16 @@ export function initThree(threeModule) {
 
 // ── Disposal & cleanup ────────────────────────────────────────────
 
+const _TEX_PROPS = ['map', 'normalMap', 'bumpMap', 'specularMap', 'emissiveMap', 'alphaMap'];
+
+function _disposeMaterial(mat) {
+  if (!mat) return;
+  for (const prop of _TEX_PROPS) {
+    if (mat[prop]?.dispose) mat[prop].dispose();
+  }
+  if (typeof mat.dispose === 'function') mat.dispose();
+}
+
 export function _disposeObject(object3d) {
   if (!object3d) return;
   object3d.traverse((node) => {
@@ -25,12 +35,10 @@ export function _disposeObject(object3d) {
     }
     if (!node.material) return;
     if (Array.isArray(node.material)) {
-      for (const material of node.material) {
-        if (material && typeof material.dispose === 'function') material.dispose();
-      }
+      for (const material of node.material) _disposeMaterial(material);
       return;
     }
-    if (typeof node.material.dispose === 'function') node.material.dispose();
+    _disposeMaterial(node.material);
   });
 }
 

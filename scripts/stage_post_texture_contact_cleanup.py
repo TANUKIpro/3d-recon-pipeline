@@ -2942,7 +2942,7 @@ def _copy_stage5_outputs(output_dir: str | Path) -> str:
     else:
         dst_mtl.write_text(
             "newmtl material_0\n"
-            "Ka 1.0 1.0 1.0\n"
+            "Ka 0.0 0.0 0.0\n"
             "Kd 1.0 1.0 1.0\n"
             "Ks 0.0 0.0 0.0\n"
             "d 1.0\n"
@@ -3248,7 +3248,7 @@ def apply_cleanup_proposal(
     elif proposal.get("artifacts", {}).get("output_mtl"):
         base_mtl_text = (
             "newmtl material_0\n"
-            "Ka 1.0 1.0 1.0\n"
+            "Ka 0.0 0.0 0.0\n"
             "Kd 1.0 1.0 1.0\n"
             "Ks 0.0 0.0 0.0\n"
             "d 1.0\n"
@@ -3261,7 +3261,7 @@ def apply_cleanup_proposal(
         mtl_text = (
             base_mtl_text
             + "newmtl material_cap\n"
-            + "Ka 1.0 1.0 1.0\n"
+            + "Ka 0.0 0.0 0.0\n"
             + "Kd 1.0 1.0 1.0\n"
             + "Ks 0.0 0.0 0.0\n"
             + "d 1.0\n"
@@ -3271,7 +3271,7 @@ def apply_cleanup_proposal(
         if use_dual_material:
             mtl_text += (
                 "\nnewmtl material_cap_strips\n"
-                "Ka 1.0 1.0 1.0\n"
+                "Ka 0.0 0.0 0.0\n"
                 "Kd 1.0 1.0 1.0\n"
                 "Ks 0.0 0.0 0.0\n"
                 "d 1.0\n"

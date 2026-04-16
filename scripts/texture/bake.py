@@ -985,7 +985,7 @@ def bake_texture(
     # MTL
     with open(mtl_path, "w") as f_out:
         f_out.write(
-            f"newmtl material_0\nKa 1.0 1.0 1.0\nKd 1.0 1.0 1.0\n"
+            f"newmtl material_0\nKa 0.0 0.0 0.0\nKd 1.0 1.0 1.0\n"
             f"Ks 0.0 0.0 0.0\nd 1.0\nillum 1\nmap_Kd texture.png\n"
         )
     print(f"Saved: {mtl_path}")

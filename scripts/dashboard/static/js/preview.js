@@ -802,7 +802,18 @@ export class PreviewPanel {
     const mtlDir = lastSlash >= 0 ? mtlPath.substring(0, lastSlash + 1) : '';
 
     try {
-      const mtlLoader = new MTLLoader();
+      // Track texture load failures via a custom LoadingManager so a missing
+      // texture.png does not silently produce a featureless white mesh.
+      const textureErrors = [];
+      let resolveTextures;
+      const texturesReady = new Promise((resolve) => { resolveTextures = resolve; });
+      const manager = new THREE.LoadingManager(
+        () => resolveTextures(),
+        undefined,
+        (url) => { textureErrors.push(url); },
+      );
+
+      const mtlLoader = new MTLLoader(manager);
       mtlLoader.setPath('/api/preview/file/');
       mtlLoader.setResourcePath(`/api/preview/file/${mtlDir}`);
       materials = await new Promise((resolve, reject) => {
@@ -810,6 +821,17 @@ export class PreviewPanel {
       });
       if (stage._loadGeneration !== gen) return false;
       materials.preload();
+
+      // Wait for textures to finish loading (10 s safety timeout).
+      await Promise.race([
+        texturesReady,
+        new Promise((resolve) => setTimeout(resolve, 10000)),
+      ]);
+
+      if (textureErrors.length > 0) {
+        console.warn(`[preview] Texture load failed for stage ${stageNum}:`, textureErrors);
+        materials = null; // fall through to gray fallback
+      }
     } catch (e) {
       if (stage._loadGeneration !== gen) return false;
       console.warn(`[preview] MTL load failed for stage ${stageNum}:`, e);
@@ -853,6 +875,15 @@ export class PreviewPanel {
           }
         });
       }
+
+      // Force DoubleSide on all mesh materials — automated mesh generation
+      // commonly produces inconsistent face normals, causing back-facing
+      // triangles to be invisible with the default FrontSide.
+      object.traverse((node) => {
+        if (!node.isMesh) return;
+        const mats = Array.isArray(node.material) ? node.material : [node.material];
+        for (const mat of mats) mat.side = THREE.DoubleSide;
+      });
 
       this._cleanupCurrentObject(stage);
       stage.currentObject = object;
