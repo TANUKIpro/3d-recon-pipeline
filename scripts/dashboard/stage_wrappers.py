@@ -210,6 +210,7 @@ def _stage_post_texture_contact_cleanup_prepare(
 def _stage_post_texture_contact_cleanup_apply(
     output_dir: str,
     cleanup_lower_half_threshold: float | None = None,
+    untextured_fill_enabled: bool = True,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -221,6 +222,7 @@ def _stage_post_texture_contact_cleanup_apply(
         output_dir,
         sam2_only=True,
         cleanup_lower_half_threshold=cleanup_lower_half_threshold,
+        untextured_fill_enabled=untextured_fill_enabled,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )
@@ -228,6 +230,7 @@ def _stage_post_texture_contact_cleanup_apply(
 
 def _stage_post_texture_contact_cleanup_skip(
     output_dir: str,
+    untextured_fill_enabled: bool = True,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -237,6 +240,7 @@ def _stage_post_texture_contact_cleanup_skip(
     from scripts.stage_post_texture_contact_cleanup import copy_stage5_as_cleaned
     return copy_stage5_as_cleaned(
         output_dir,
+        untextured_fill_enabled=untextured_fill_enabled,
         progress_cb=progress_cb,
         cancel_cb=cancel_cb,
     )

@@ -127,6 +127,7 @@ TEXTURE_BLEND_HARD_RATIO = 2.0
 # --- Stage 6: PostTextureContactCleanup -------------------
 POST_TEXTURE_CLEANUP_ENABLED = True
 CLEANUP_LOWER_HALF_THRESHOLD = 0.2
+UNTEXTURED_FILL_ENABLED = True
 
 # --- Shared Repair Defaults -------------------------------
 # Contact-hole repair helpers are reused by post-texture cleanup.
@@ -190,6 +191,11 @@ _REPAIR_GROUND_SECTION_MIN_AREA_RATIO = 1e-3
 _REPAIR_GROUND_SECTION_START_QUANTILE = 0.75
 _REPAIR_SKIRT_MIN_AREA_RATIO = 0.05  # 底面cap面積が最大capの5%未満なら細い柱扱い
 _REPAIR_SKIRT_SLENDERNESS_MAX = 4.0  # skirt_height / sqrt(cap_area) がこれを超えたら細い柱扱い
+
+# --- Stage 6: Untextured Face Fill -----------------------
+_UNTEXTURED_FILL_EMPTY_THRESHOLD = 10    # sum(RGB) < この値で「空テクセル」判定
+_UNTEXTURED_FILL_EMPTY_FRACTION = 0.90   # 面のテクセルの90%以上が空なら「無テクスチャ面」
+_UNTEXTURED_FILL_INPAINT_RADIUS = 5      # cv2.inpaint の補間半径
 
 # --- Infrastructure --------------------------------------
 _LOG_QUEUE_MAXSIZE = 4096

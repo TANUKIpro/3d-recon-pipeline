@@ -29,6 +29,7 @@ from scripts.config_defaults import (
     MILO_SCENE_TYPES,
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
+    UNTEXTURED_FILL_ENABLED,
     SAM2_DEFAULT_MODEL,
     TEXTURE_MODE,
     TEXTURE_MODES,
@@ -431,6 +432,10 @@ def build_pipeline_config(
                     env_float("CLEANUP_LOWER_HALF_THRESHOLD", CLEANUP_LOWER_HALF_THRESHOLD, env_map),
                 ),
             ),
+        ),
+        untextured_fill_enabled=parse_bool(
+            raw.get("untextured_fill_enabled"),
+            env_bool("UNTEXTURED_FILL_ENABLED", UNTEXTURED_FILL_ENABLED, env_map),
         ),
         ground_plane_enabled=parse_bool(
             raw.get("ground_plane_enabled"),

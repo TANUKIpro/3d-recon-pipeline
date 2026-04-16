@@ -876,12 +876,14 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
                 _stage_post_texture_contact_cleanup_apply,
                 output_dir,
                 session.config.cleanup_lower_half_threshold,
+                session.config.untextured_fill_enabled,
             )
         else:
             cleaned_obj = await asyncio.to_thread(
                 _run_blocking,
                 _stage_post_texture_contact_cleanup_skip,
                 output_dir,
+                session.config.untextured_fill_enabled,
             )
         session.cleaned_obj_path = str(cleaned_obj)
     except _CancelledError:

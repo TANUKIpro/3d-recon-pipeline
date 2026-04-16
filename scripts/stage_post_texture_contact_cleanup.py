@@ -2956,12 +2956,25 @@ def _copy_stage5_outputs(output_dir: str | Path) -> str:
 def copy_stage5_as_cleaned(
     output_dir: str | Path,
     *,
+    untextured_fill_enabled: bool = True,
     progress_cb=None,
     cancel_cb=None,
 ) -> str:
     _check_cancel(cancel_cb)
     _emit_progress(progress_cb, 20.0, "Copying textured mesh without cleanup")
     out = _copy_stage5_outputs(output_dir)
+
+    if untextured_fill_enabled:
+        final_tex = _final_dir(output_dir) / "texture.png"
+        if final_tex.is_file():
+            _emit_progress(progress_cb, 60.0, "Detecting untextured faces")
+            from scripts.texture.untextured_fill import fill_untextured_faces
+
+            fill_untextured_faces(
+                _cleaned_obj_path(output_dir), final_tex,
+                progress_cb=progress_cb,
+            )
+
     _emit_progress(progress_cb, 100.0, "Post-texture cleanup skipped")
     return out
 
@@ -2971,6 +2984,7 @@ def apply_cleanup_proposal(
     *,
     sam2_only: bool = False,
     cleanup_lower_half_threshold: float | None = None,
+    untextured_fill_enabled: bool = True,
     progress_cb=None,
     cancel_cb=None,
 ) -> str:
@@ -2991,7 +3005,18 @@ def apply_cleanup_proposal(
         cleanup_lower_half_threshold=cleanup_lower_half_threshold,
     )
     if not analysis["has_candidate"]:
-        return _copy_stage5_outputs(output_root)
+        out = _copy_stage5_outputs(output_root)
+        if untextured_fill_enabled:
+            final_tex = _final_dir(output_root) / "texture.png"
+            if final_tex.is_file():
+                _emit_progress(progress_cb, 60.0, "Detecting untextured faces")
+                from scripts.texture.untextured_fill import fill_untextured_faces
+
+                fill_untextured_faces(
+                    _cleaned_obj_path(output_root), final_tex,
+                    progress_cb=progress_cb,
+                )
+        return out
 
     _check_cancel(cancel_cb)
 
@@ -3320,6 +3345,16 @@ def apply_cleanup_proposal(
             lines.append(f"f {va}/{ta} {vb}/{tb} {vc}/{tc}\n")
 
     cleaned_obj.write_text("".join(lines), encoding="utf-8")
+
+    if untextured_fill_enabled and final_texture_path.is_file():
+        _emit_progress(progress_cb, 90.0, "Detecting untextured faces")
+        from scripts.texture.untextured_fill import fill_untextured_faces
+
+        fill_untextured_faces(
+            cleaned_obj, final_texture_path,
+            progress_cb=progress_cb,
+        )
+
     _emit_progress(progress_cb, 100.0, "Post-texture cleanup complete")
     return str(cleaned_obj)
 

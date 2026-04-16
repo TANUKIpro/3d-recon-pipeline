@@ -39,6 +39,7 @@ from scripts.config_defaults import (
     MILO_USE_MASKS,
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
+    UNTEXTURED_FILL_ENABLED,
     SAM2_DEFAULT_MODEL,
     TEXTURE_MODE,
     TEXTURE_QUALITY_BOOST,
@@ -161,6 +162,7 @@ class PipelineConfig:
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST
     post_texture_cleanup_enabled: bool = POST_TEXTURE_CLEANUP_ENABLED
     cleanup_lower_half_threshold: float = CLEANUP_LOWER_HALF_THRESHOLD
+    untextured_fill_enabled: bool = UNTEXTURED_FILL_ENABLED
     ground_plane_enabled: bool = GROUND_PLANE_ENABLED
     auto_accept: bool = False
 
