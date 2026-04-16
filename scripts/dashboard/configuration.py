@@ -39,8 +39,6 @@ from scripts.config_defaults import (
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
-    TEXTURE_MODE,
-    TEXTURE_MODES,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
@@ -356,11 +354,6 @@ def build_pipeline_config(
         gs2mesh_tsdf_erosion_kernel_size=int(gs2mesh_cfg["gs2mesh_tsdf_erosion_kernel_size"]),
         gs2mesh_tsdf_closing_kernel_size=int(gs2mesh_cfg["gs2mesh_tsdf_closing_kernel_size"]),
         gs2mesh_tsdf_block_count=int(gs2mesh_cfg["gs2mesh_tsdf_block_count"]),
-        texture_mode=parse_choice(
-            raw.get("texture_mode") or env_map.get("TEXTURE_MODE"),
-            TEXTURE_MODES,
-            TEXTURE_MODE,
-        ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", TEXTURE_SIZE, env_map)),
         texture_view_assign_mode=parse_choice(
             raw.get("texture_view_assign_mode") or env_map.get("TEXTURE_VIEW_ASSIGN_MODE"),

@@ -43,7 +43,6 @@ from scripts.config_defaults import (
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
-    TEXTURE_MODE,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
@@ -161,7 +160,6 @@ class PipelineConfig:
     gs2mesh_tsdf_erosion_kernel_size: int = GS2MESH_TSDF_EROSION_KERNEL_SIZE
     gs2mesh_tsdf_closing_kernel_size: int = GS2MESH_TSDF_CLOSING_KERNEL_SIZE
     gs2mesh_tsdf_block_count: int = GS2MESH_TSDF_BLOCK_COUNT
-    texture_mode: str = TEXTURE_MODE
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST

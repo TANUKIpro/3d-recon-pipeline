@@ -64,7 +64,6 @@ export class ConfigPanel {
       gs2mesh_use_masks: document.getElementById('cfg-gs2mesh-use-masks'),
 
       // Stage 5: Texture Bake
-      texture_mode: document.getElementById('cfg-texture-mode'),
       texture_size: document.getElementById('cfg-texture-size'),
       texture_view_assign_mode: document.getElementById('cfg-texture-view-assign-mode'),
       texture_quality_boost: document.getElementById('cfg-texture-quality-boost'),
@@ -91,7 +90,6 @@ export class ConfigPanel {
     this._gs2meshPresetBase = GS2MESH_PRESET_DEFAULT;
 
     this._updateTextureAutoOption(null);
-    this._syncTextureModeVisibility();
     this._bindEvents();
     this._loadVideos();
     this.refreshObjects();
@@ -210,7 +208,6 @@ export class ConfigPanel {
       gs2mesh_use_masks: this._inputs.gs2mesh_use_masks?.checked ?? true,
 
       // Stage 5: Texture Bake
-      texture_mode: this._inputs.texture_mode?.value || 'multi_view',
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
       texture_view_assign_mode: this._inputs.texture_view_assign_mode?.value || 'legacy',
       texture_quality_boost: Boolean(this._inputs.texture_quality_boost?.checked),
@@ -306,10 +303,6 @@ export class ConfigPanel {
         const display = document.getElementById('cfg-cleanup-lower-half-threshold-value');
         if (display) display.textContent = this._inputs.cleanup_lower_half_threshold.value;
       });
-    }
-
-    if (this._inputs.texture_mode) {
-      this._inputs.texture_mode.addEventListener('change', () => this._syncTextureModeVisibility());
     }
 
     if (this._inputs.gs2mesh_preset) {
@@ -671,10 +664,6 @@ export class ConfigPanel {
     this._suppressGs2meshPresetSync = false;
 
     // Stage 5: Texture Bake
-    if (cfg.texture_mode != null && this._inputs.texture_mode) {
-      this._setSelectValue(this._inputs.texture_mode, String(cfg.texture_mode));
-      this._syncTextureModeVisibility();
-    }
     if (cfg.texture_size != null && this._inputs.texture_size) {
       this._inputs.texture_size.value = String(cfg.texture_size);
     }
@@ -788,13 +777,4 @@ Object.assign(ConfigPanel.prototype, {
   _parseNonNegativeInt: FormHelpers._parseNonNegativeInt,
   _parsePositiveFloat: FormHelpers._parsePositiveFloat,
   _parseNonNegativeFloat: FormHelpers._parseNonNegativeFloat,
-
-  _syncTextureModeVisibility() {
-    const mode = this._inputs.texture_mode?.value || 'multi_view';
-    const section = this._inputs.texture_mode?.closest('.config-section');
-    if (!section) return;
-    for (const group of section.querySelectorAll('[data-texture-mode]')) {
-      group.style.display = group.dataset.textureMode === mode ? '' : 'none';
-    }
-  },
 });

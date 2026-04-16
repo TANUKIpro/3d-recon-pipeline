@@ -121,8 +121,6 @@ GS2MESH_PRESET_CHOICES: set[str] = set(GS2MESH_PRESETS) | {
 }
 
 # --- Stage 5: TextureBake --------------------------------
-TEXTURE_MODE = "multi_view"
-TEXTURE_MODES: set[str] = {"multi_view", "vertex_color"}
 TEXTURE_SIZE = 0
 TEXTURE_VIEW_ASSIGN_MODE = "region_gc"
 TEXTURE_VIEW_ASSIGN_MODES: set[str] = {"legacy", "region_gc"}
