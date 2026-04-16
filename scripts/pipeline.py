@@ -38,6 +38,12 @@ Examples:
     parser.add_argument("--skip-to", type=int, default=1, choices=range(1, 7),
                         help="Skip to stage N (for resuming after interruption)")
     parser.add_argument(
+        "--texture-mode",
+        default="multi_view",
+        choices=["multi_view", "vertex_color"],
+        help="Texture mode: multi_view (camera projection) or vertex_color (MILo colors)",
+    )
+    parser.add_argument(
         "--post-texture-cleanup-selection-json",
         default="",
         help="JSON file containing {\"decision\": \"apply\"|\"skip\"} for Stage 6 review",
@@ -141,11 +147,16 @@ Examples:
         print("\n" + "=" * 60)
         print("Stage 5/6: Texture Baking")
         print("=" * 60)
-        from scripts.stage_texture_bake import bake_texture
-
-        obj_path = bake_texture(
-            str(mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
-        )
+        if args.texture_mode == "vertex_color":
+            print("  Mode: vertex_color (MILo vertex colors)")
+            from scripts.texture.vertex_color_bake import bake_vertex_color_texture
+            obj_path = bake_vertex_color_texture(str(mesh_ply), output_dir)
+        else:
+            print("  Mode: multi_view (camera projection)")
+            from scripts.stage_texture_bake import bake_texture
+            obj_path = bake_texture(
+                str(mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            )
         print(f"  → {obj_path}")
     else:
         obj_path = str(Path(output_dir) / "textured_mesh.obj")
