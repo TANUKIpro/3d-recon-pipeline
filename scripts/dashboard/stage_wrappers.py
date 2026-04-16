@@ -131,6 +131,23 @@ def _stage_texture_bake(
     )
 
 
+def _stage_vertex_color_bake(
+    mesh_ply: str, output_dir: str, texture_size: int,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> None:
+    del cancel_cb, register_process, unregister_process
+    from scripts.texture.vertex_color_bake import bake_vertex_color_texture
+    bake_vertex_color_texture(
+        mesh_ply,
+        output_dir,
+        tex_size=texture_size,
+        progress_cb=progress_cb,
+    )
+
+
 def _stage_extract_ground_plane(
     mesh_ply: str,
     ground_mask_dir: str,

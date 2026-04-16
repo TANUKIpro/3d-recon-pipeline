@@ -30,6 +30,8 @@ from scripts.config_defaults import (
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
+    TEXTURE_MODE,
+    TEXTURE_MODES,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
@@ -401,6 +403,11 @@ def build_pipeline_config(
         milo_dense_gaussians=bool(milo_cfg["milo_dense_gaussians"]),
         milo_data_device=str(milo_cfg["milo_data_device"]),
         milo_mesh_res=int(milo_cfg["milo_mesh_res"]),
+        texture_mode=parse_choice(
+            raw.get("texture_mode") or env_map.get("TEXTURE_MODE"),
+            TEXTURE_MODES,
+            TEXTURE_MODE,
+        ),
         texture_size=parse_int(raw.get("texture_size"), env_int("TEXTURE_SIZE", TEXTURE_SIZE, env_map)),
         texture_view_assign_mode=parse_choice(
             raw.get("texture_view_assign_mode") or env_map.get("TEXTURE_VIEW_ASSIGN_MODE"),

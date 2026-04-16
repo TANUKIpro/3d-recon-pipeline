@@ -399,6 +399,13 @@
         <!-- Stage 5: Texture -->
         <div class="config-section" data-stages="5">
           <div class="form-group">
+            <label for="cfg-texture-mode">Texture Mode</label>
+            <select id="cfg-texture-mode">
+              <option value="multi_view" selected>Multi-View Bake</option>
+              <option value="vertex_color">MILo Vertex Color</option>
+            </select>
+          </div>
+          <div class="form-group" data-texture-mode="multi_view">
             <label for="cfg-texture-size">Texture Size</label>
             <select id="cfg-texture-size">
               <option value="0" selected>Auto</option>
@@ -407,14 +414,14 @@
               <option value="4096">4096</option>
             </select>
           </div>
-          <div class="form-group">
+          <div class="form-group" data-texture-mode="multi_view">
             <label for="cfg-texture-view-assign-mode">View Assignment</label>
             <select id="cfg-texture-view-assign-mode">
               <option value="legacy">Legacy Blend</option>
               <option value="region_gc" selected>Region Optimized</option>
             </select>
           </div>
-          <div class="form-group">
+          <div class="form-group" data-texture-mode="multi_view">
             <label class="checkbox-label" for="cfg-texture-quality-boost">
               <input type="checkbox" id="cfg-texture-quality-boost">
               High Quality Region Refinement

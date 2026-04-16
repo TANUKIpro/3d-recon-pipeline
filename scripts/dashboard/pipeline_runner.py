@@ -25,6 +25,7 @@ from scripts.dashboard.stage_wrappers import (
     _stage_post_texture_contact_cleanup_prepare,
     _stage_post_texture_contact_cleanup_skip,
     _stage_texture_bake,
+    _stage_vertex_color_bake,
     _vram_gate,
 )
 from scripts.dashboard.state import (
@@ -429,24 +430,34 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):
             _require_file(session.mesh_ply, "Reconstructed mesh")
-            _require_file(session.poses_path, "Camera poses file")
-            _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
-            _require_dir(session.mask_dir, "SAM2 masks directory", must_have_suffix=".png")
 
             # ── Stage 5: Texture Bake ─────────────────────────────
-            await _run_stage(
-                session,
-                PipelineStage.TEXTURE_BAKE,
-                _stage_texture_bake,
-                session.mesh_ply,
-                session.poses_path,
-                session.frames_dir,
-                session.mask_dir,
-                output_dir,
-                cfg.texture_size,
-                cfg.texture_view_assign_mode,
-                cfg.texture_quality_boost,
-            )
+            if cfg.texture_mode == "vertex_color":
+                await _run_stage(
+                    session,
+                    PipelineStage.TEXTURE_BAKE,
+                    _stage_vertex_color_bake,
+                    session.mesh_ply,
+                    output_dir,
+                    cfg.texture_size,
+                )
+            else:
+                _require_file(session.poses_path, "Camera poses file")
+                _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
+                _require_dir(session.mask_dir, "SAM2 masks directory", must_have_suffix=".png")
+                await _run_stage(
+                    session,
+                    PipelineStage.TEXTURE_BAKE,
+                    _stage_texture_bake,
+                    session.mesh_ply,
+                    session.poses_path,
+                    session.frames_dir,
+                    session.mask_dir,
+                    output_dir,
+                    cfg.texture_size,
+                    cfg.texture_view_assign_mode,
+                    cfg.texture_quality_boost,
+                )
             session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(

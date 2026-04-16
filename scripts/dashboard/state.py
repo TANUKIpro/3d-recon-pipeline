@@ -40,6 +40,7 @@ from scripts.config_defaults import (
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
     SAM2_DEFAULT_MODEL,
+    TEXTURE_MODE,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
@@ -154,6 +155,7 @@ class PipelineConfig:
     milo_dense_gaussians: bool = MILO_DENSE_GAUSSIANS
     milo_data_device: str = MILO_DATA_DEVICE
     milo_mesh_res: int = MILO_MESH_RES
+    texture_mode: str = TEXTURE_MODE
     texture_size: int = TEXTURE_SIZE
     texture_view_assign_mode: str = TEXTURE_VIEW_ASSIGN_MODE
     texture_quality_boost: bool = TEXTURE_QUALITY_BOOST

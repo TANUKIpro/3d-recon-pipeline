@@ -110,6 +110,8 @@ MILO_PRESETS: dict[str, dict[str, object]] = {
 MILO_PRESET_CHOICES: set[str] = set(MILO_PRESETS) | {MILO_PRESET_CUSTOM}
 
 # --- Stage 5: TextureBake --------------------------------
+TEXTURE_MODE = "multi_view"
+TEXTURE_MODES: set[str] = {"multi_view", "vertex_color"}
 TEXTURE_SIZE = 0
 TEXTURE_VIEW_ASSIGN_MODE = "region_gc"
 TEXTURE_VIEW_ASSIGN_MODES: set[str] = {"legacy", "region_gc"}
