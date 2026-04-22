@@ -29,6 +29,7 @@
 
 - Stage 4 (`gs2mesh_reconstruct`) が `masks/` を TSDF 用 `left_mask.npy` へ変換
 - Stage 5 (`texture_bake`) が `masks/` を利用
+- Stage 6 (`post_texture_contact_cleanup`) が `masks/` + `masks_ground/` を接地アーティファクト検出に利用
 
 ## 詳細フロー
 

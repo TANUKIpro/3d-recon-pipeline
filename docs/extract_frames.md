@@ -23,7 +23,7 @@
 
 後段利用:
 
-- Stage 2 (`pi3x_reconstruct`) が `frames/` を直接参照
+- Stage 2 (`colmap_sfm`) が `frames/` を直接参照
 - Stage 3 (`sam2_segment`) も `frames/` を参照
 
 ## 詳細フロー

@@ -2,8 +2,8 @@
 
 ## 対象タスク
 
-- Stage 8: テクスチャベイク
-- 実装: `scripts/stage_texture_bake.py`
+- Stage 5: テクスチャベイク
+- 実装: `scripts/stage_texture_bake.py`, `scripts/texture/` サブパッケージ
 
 ## 概要
 
@@ -14,8 +14,9 @@
 
 前段入力:
 
-- `<output_dir>/object_mesh_repaired.ply`
-- `<output_dir>/camera_poses.json`
+- `<output_dir>/object_mesh.ply` (Stage 4 出力)
+- `<output_dir>/camera_poses.json` (Stage 2 出力)
+- `<output_dir>/intrinsics.json` (Stage 2 出力, 任意 — 存在時はグリッドサーチをスキップ)
 - `<output_dir>/frames/*.jpg`
 - `<output_dir>/masks/*.png`
 
@@ -29,10 +30,10 @@
 ## 詳細フロー
 
 1. メッシュと pose 読み込み、対応フレーム index を解決。
-2. 内部パラメータ推定:
-   - FOV グリッドサーチ
-   - Nelder-Mead で `(fx, fy, cx, cy)` 最適化
-3. `xatlas.parametrize` で UV 展開。
+2. 内部パラメータ取得:
+   - `intrinsics.json` (COLMAP 出力) が存在すれば直接ロード (グリッドサーチをスキップ)
+   - 存在しない場合: FOV グリッドサーチ → Nelder-Mead で `(fx, fy, cx, cy)` 最適化
+3. `xatlas.parametrize` で UV 展開 (並列化: `scripts/texture/parallel_uv.py` により空間分割で最大8ワーカー並列実行)。
 4. 全テクセルで Top-K ビューをスコアリング。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
    - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
@@ -70,8 +71,7 @@
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
 | `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下は `round(sqrt(video_width * video_height))` の正方形を自動適用 |
-| `TEXTURE_VIEW_ASSIGN_MODE` | `legacy` | view 割当モード。`legacy` は従来の face lock、`region_gc` は曖昧な連続曲面を region 最適化して single-view 化 |
-| `TEXTURE_DEVICE` | `cuda` | 実行要求ヒント (`cuda` / `auto` / `cpu`)。現行のチャート選定処理は CPU で実行 |
+| `TEXTURE_VIEW_ASSIGN_MODE` | `region_gc` | view 割当モード。`legacy` は従来の face lock、`region_gc` は曖昧な連続曲面を region 最適化して single-view 化 |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
 | `TEXTURE_ANGLE_EXP` | `4.0` | 角度重み指数 |
@@ -99,14 +99,16 @@
 
 ## パフォーマンス最適化
 
-テクスチャベイク処理には以下の 6 つの最適化が適用されている。
+テクスチャベイク処理には以下の最適化が適用されている。
 
 - **A. メモリ適応型 LRU キャッシュ**: フレーム画像とマスクを `_FrameCache` でキャッシュ。利用可能メモリからキャッシュ容量を自動算出し、フレーム 70% / マスク 30% の予算比率で確保する。
-- **B. 深度ラスタライズ前処理のベクトル化**: 面ごとの UV 座標・バウンディングボックス・重心分母を NumPy でバッチ計算し、ラスタライズループ前にフィルタリングする。
+- **B. GPU 深度ラスタライズ** (`scripts/texture/gpu_raster.py`): nvdiffrast による GPU アクセラレーテッドラスタライゼーションで深度バッファを生成。CPU フォールバックあり。
 - **C. 深度バッファ LRU キャッシュ**: 視点ごとの深度バッファを `@lru_cache` でキャッシュし、同一視点の再計算を回避する。
-- **D. 内在パラメータ推定の並列化**: `ThreadPoolExecutor` で複数フレームの色スコア評価を並列実行する。
-- **E. テクセル UV 座標の事前計算**: 三角形ごとの UV 座標を `np.stack` で事前計算し、`fillConvexPoly` で再利用する。
-- **F. OBJ バッファ書き出し**: OBJ ファイルを文字列リストに蓄積してから一括書き込みする。
+- **D. 並列 UV アトラス生成** (`scripts/texture/parallel_uv.py`): メッシュを空間分割し、最大8ワーカーで並列に xatlas UV 展開を実行。`_TEXTURE_UV_PARALLEL_MIN_TOTAL_FACES` (10,000) 以下のメッシュでは並列化をスキップ。
+- **E. 内在パラメータ推定の並列化**: `ThreadPoolExecutor` で複数フレームの色スコア評価を並列実行する。
+- **F. COLMAP 内部パラメータ直接利用**: `intrinsics.json` (COLMAP 出力) が存在する場合、FOV グリッドサーチ + Nelder-Mead 最適化をスキップし、推定時間を大幅に短縮する。
+- **G. テクセル UV 座標の事前計算**: 三角形ごとの UV 座標を `np.stack` で事前計算し、`fillConvexPoly` で再利用する。
+- **H. OBJ バッファ書き出し**: OBJ ファイルを文字列リストに蓄積してから一括書き込みする。
 
 ### 内部メモリ管理パラメータ
 
@@ -126,4 +128,5 @@
 ## 参考文献
 
 - xatlas repository: <https://github.com/jpcy/xatlas>
+- nvdiffrast: <https://github.com/NVlabs/nvdiffrast>
 - Nelder-Mead (SciPy optimize.minimize): <https://docs.scipy.org/doc/scipy/reference/optimize.minimize-neldermead.html>

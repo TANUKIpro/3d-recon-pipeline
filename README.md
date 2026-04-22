@@ -2,7 +2,7 @@
 
 RGB動画から テクスチャ付き3Dメッシュ (OBJ) を生成する Docker 完結型パイプライン。
 
-Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物体セグメンテーション、古典手法 (法線推定 + Screened Poisson) / DiffCD のメッシュ化、チャート単位の最適視点テクスチャベイキングを1コンテナで実行する。
+COLMAP による Structure-from-Motion、SAM2 によるインタラクティブ物体セグメンテーション、gs2mesh (3D Gaussian Splatting + DLNR ステレオ深度推定 + GPU TSDF Fusion) によるメッシュ再構成、nvdiffrast による GPU テクスチャベイキングを1コンテナで実行する。
 
 ## パイプライン概要
 
@@ -10,23 +10,14 @@ Pi3X による多視点3D再構成、SAM2 によるインタラクティブ物�
 graph TD
     INPUT["🎥 入力: RGB動画 (.mp4)"]
     S1["Stage 1: フレーム抽出<br/><i>CPU</i><br/>動画から等間隔にフレームをJPEG抽出"]
-    S2["Stage 2: Pi3X 3D再構成<br/><i>GPU</i><br/>全フレーム一括推論 → 信頼度+深度エッジで点群抽出"]
-    S3["Stage 3: SAM2 セグメンテーション<br/><i>GPU</i><br/>Web UIで対象物体をクリック → マスク伝播"]
-    S4["Stage 4: 点群デノイズ<br/><i>CPU</i><br/>DBSCAN + Statistical Outlier Removal"]
-    S5{"Stage 5: メッシュ再構成"}
-    S5C["Classical<br/><i>CPU</i><br/>法線推定 → Screened Poisson → 平滑化"]
-    S5D["DiffCD<br/><i>GPU</i><br/>暗黙表面フィッティング → Marching Cubes → 平滑化"]
-    S6["Stage 6: メッシュラップ<br/><i>CPU</i><br/>外皮化で UV 展開を安定化"]
-    S7["Stage 7: メッシュ補修<br/><i>CPU</i><br/>接地候補穴を局所補修"]
-    S8["Stage 8: テクスチャベイキング<br/><i>CPU / GPU要求ヒント</i><br/>カメラ内部パラメータ推定 → xatlas UV展開 → conflict face/region単一視点化 + non-conflict多視点合成"]
-    OUTPUT["📦 出力: textured_mesh.obj / .mtl / texture.png"]
+    S2["Stage 2: COLMAP SfM<br/><i>CPU (GPU optional)</i><br/>SIFT特徴抽出 → マッチング → スパース再構成 → カメラポーズ推定"]
+    S3["Stage 3: SAM2 セグメンテーション<br/><i>GPU</i><br/>Web UIで対象物体をクリック → ground plane指定 → マスク伝播"]
+    S4["Stage 4: gs2mesh 再構成<br/><i>GPU</i><br/>3DGS学習 → DLNR ステレオ深度推定 → GPU TSDF Fusion → Marching Cubes"]
+    S5["Stage 5: テクスチャベイキング<br/><i>GPU / CPU</i><br/>COLMAP内部パラメータ → 並列xatlas UV展開 → nvdiffrast GPUラスタライズ → conflict region最適化 → 多視点合成"]
+    S6["Stage 6: Post-texture Contact Cleanup<br/><i>CPU</i><br/>接地アーティファクト検出 → 提案レビュー → メッシュクリッピング + キャップ生成"]
+    OUTPUT["📦 出力: textured_mesh_cleaned.obj / .mtl / texture.png"]
 
-    INPUT --> S1 --> S2 --> S3 --> S4 --> S5
-    S5 -->|poisson| S5C
-    S5 -->|diffcd| S5D
-    S5C --> S6
-    S5D --> S6
-    S6 --> S7 --> S8 --> OUTPUT
+    INPUT --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> OUTPUT
 ```
 
 ## 動作環境
@@ -37,6 +28,18 @@ graph TD
 | Docker | 20.10 以上 + Docker Compose v2 |
 | NVIDIA Container Toolkit | nvidia-docker2 または nvidia-container-toolkit |
 | OS | Linux (Ubuntu 22.04 で検証済み) |
+
+**VRAM ティア自動検出**: パイプライン起動時に GPU VRAM を自動検出し、ティアに応じて処理を最適化する (`scripts/vram_tier.py`)。
+
+| ティア | VRAM | TSDF デバイス |
+|--------|------|---------------|
+| t18 | ≥ 17 GB | GPU (CUDA) |
+| t16 | 14–17 GB | GPU (CUDA) |
+| t12 | 10–14 GB | GPU (CUDA) |
+| t8 | 7–10 GB | CPU (自動フォールバック) |
+| t_other | < 7 GB | CPU (自動フォールバック) |
+
+環境変数 `VRAM_TIER_OVERRIDE` でティアを手動指定することも可能。
 
 ## セットアップ
 - ここ(https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#with-apt-ubuntu-debian)を参考に、nvidia-container-toolkitを導入する
@@ -70,9 +73,10 @@ docker compose up
 5. Stage 3 で SAM2 Canvas がアクティブになるので、対象物体を左クリック (除外は右クリック)
 6. **Confirm Object** で対象物体を確定し、必要なら ground/contact surface を追加指定
 7. **Confirm Ground & Propagate** または ground を skip して全フレームへ反映
-8. 残りのステージは自動進行
-9. ログ・進捗・3Dプレビューをリアルタイムで確認
-10. キャンセル/停止後の再開は、ステージバーで再開したいタスクを選択して **Start Pipeline** をクリック
+8. Stage 4–5 は自動進行
+9. Stage 6 で接地クリーンアップの提案がダッシュボードに表示され、Apply/Skip を選択
+10. ログ・進捗・3Dプレビューをリアルタイムで確認
+11. キャンセル/停止後の再開は、ステージバーで再開したいタスクを選択して **Start Pipeline** をクリック
 
 ## 使い方
 
@@ -101,7 +105,7 @@ docker compose run --rm --service-ports \
 ```
 
 > **注意**: CLI モードでは Stage 3 で Gradio UI が起動する。
-> CLI で Stage 7 を実行する場合、`--repair-selection-json` が必須 (JSON 形式: `{"selected_loop_ids": [0, 3, 5]}`)。
+> CLI で Stage 6 を実行する場合、`--post-texture-cleanup-selection-json` で判定 JSON を指定可能 (JSON 形式: `{"decision": "apply"}` または `{"decision": "skip"}`)。未指定時はスキップ扱いになる。
 
 ## 環境変数
 
@@ -112,9 +116,33 @@ docker compose run --rm --service-ports \
 
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
+| **Stage 1** | | |
 | `MAX_FRAMES` | `50` | 抽出フレーム数の上限 |
-| `PIXEL_LIMIT` | `255000` | フレームあたり最大ピクセル数 |
-| `MESH_METHOD` | `poisson` | メッシュ再構成手法 (`poisson` / `diffcd`) |
+| `FRAME_INTERVAL` | `10` | フレーム抽出間隔 |
+| **Stage 2** | | |
+| `COLMAP_MATCHER` | `exhaustive` | マッチング方式 (`exhaustive` / `sequential`) |
+| `COLMAP_MAX_FEATURES` | `32768` | SIFT 特徴点の最大数 |
+| `COLMAP_IMAGE_SIZE` | `2048` | 特徴抽出時の最大画像サイズ |
+| `COLMAP_USE_GPU` | `false` | COLMAP の GPU 使用 |
+| `COLMAP_DSP_SIFT` | `true` | DSP-SIFT (アフィン形状推定 + ドメインサイズプーリング) の有効化 |
+| **Stage 3** | | |
+| `SAM2_MODEL` | `large` | SAM2 モデルサイズ (`tiny` / `small` / `base` / `large`) |
+| **Stage 4** | | |
+| `GS2MESH_PRESET` | `default` | gs2mesh プリセット (`default` / `high` / `custom`) |
+| `GS2MESH_GS_ITERATIONS` | `5000` | 3DGS 学習イテレーション数 |
+| `GS2MESH_RUNTIME_PROFILE` | `auto` | ランタイムプロファイル (`auto` / `compat`) |
+| `GS2MESH_STEREO_MODEL` | `DLNR_Middlebury` | ステレオ深度推定モデル |
+| `GS2MESH_TSDF_VOXEL_SIZE` | `0.005` | TSDF ボクセルサイズ (m) |
+| `GS2MESH_TSDF_DEPTH_TRUNC` | `0.04` | TSDF 深度切断距離 (m) |
+| `GS2MESH_USE_MASKS` | `true` | SAM2 マスクを TSDF 統合に使用 |
+| **Stage 5** | | |
+| `TEXTURE_SIZE` | `0` (自動) | テクスチャ解像度。`0` は `round(sqrt(W*H))` を自動適用 |
+| `TEXTURE_VIEW_ASSIGN_MODE` | `region_gc` | view 割当モード (`legacy` / `region_gc`) |
+| `TEXTURE_QUALITY_BOOST` | `false` | 高品質境界 refinement の有効化 |
+| **Stage 6** | | |
+| `POST_TEXTURE_CLEANUP_ENABLED` | `true` | Post-texture contact cleanup の有効/無効 |
+| **VRAM** | | |
+| `VRAM_TIER_OVERRIDE` | (自動検出) | VRAM ティアの手動指定 (`t18` / `t16` / `t12` / `t8` / `t_other`) |
 
 全変数の一覧は各ステージのドキュメント (下記) を参照。
 
@@ -124,31 +152,38 @@ docker compose run --rm --service-ports \
 
 | ファイル | 説明 |
 |---------|------|
-| `textured_mesh.obj` / `.mtl` / `texture.png` | 最終成果物: テクスチャ付き3Dメッシュ |
-| `object.ply` | フィルタ済み点群 |
-| `object_denoised.ply` | デノイズ済み点群 |
-| `object_mesh.ply` | Stage 5 出力メッシュ |
-| `camera_poses.json` | カメラ外部パラメータ |
-| `frames/` / `masks/` | 抽出フレーム / 後段が使う canonical SAM2 final mask |
+| `<object_name>/textured_mesh_cleaned.obj` / `.mtl` / `texture.png` | 最終成果物: クリーンアップ済みテクスチャ付き3Dメッシュ |
+| `<object_name>/texture_cap.png` | 接地キャップテクスチャ (cleanup apply 時) |
+| `textured_mesh.obj` / `.mtl` / `texture.png` | Stage 5 出力: クリーンアップ前のテクスチャ付きメッシュ |
+| `object_mesh.ply` | Stage 4 出力: gs2mesh 再構成メッシュ |
+| `camera_poses.json` | COLMAP カメラ外部パラメータ (c2w 4x4 行列) |
+| `intrinsics.json` | COLMAP カメラ内部パラメータ (fx, fy, cx, cy, K) |
+| `colmap_sparse/` | COLMAP スパース再構成データ |
+| `colmap_sparse_points.ply` | COLMAP スパース点群 |
+| `frames/` | 抽出フレーム |
+| `masks/` | canonical SAM2 final mask (`object_raw AND NOT ground_raw`) |
 | `masks_object_raw/` / `masks_ground/` | raw object mask / raw ground subtraction mask |
+| `gs2mesh_workspace/` | gs2mesh 中間ファイル (3DGS チェックポイント、ステレオ深度マップ等) |
+| `ground_plane.json` | 推定された接地平面パラメータ |
 
 全中間ファイルの詳細は各ステージのドキュメントを参照。
 
 ## VRAM とパフォーマンス
 
-RTX 4090 Laptop (16GB) での実測値:
+RTX 4090 Laptop (16GB) での参考値:
 
-| ステージ | VRAM ピーク | 所要時間 |
+| ステージ | VRAM ピーク | 所要時間 (目安) |
 |----------|-----------|---------|
-| SAM2 (large) | ~2 GB | ~15秒 (伝播) |
-| Pi3X (20フレーム, 150Kpx) | ~14 GB | ~1分 |
-| DiffCD (res=384, 25Kバッチ) | ~10 GB | ~10分 |
-| デノイズ / テクスチャ | CPU / CUDA (Texture) | シーン依存 |
+| COLMAP SfM (CPU モード) | ≈ 0 GB (GPU 不使用) | 2–5 分 |
+| SAM2 (large) | ≈ 2 GB | ≈ 15 秒 (伝播) |
+| 3DGS 学習 (5K iter) | 8–12 GB | 3–5 分 |
+| DLNR ステレオ深度 | 4–6 GB | 2–3 分 |
+| GPU TSDF Fusion | 6–8 GB | ≈ 30 秒 |
+| テクスチャベイキング | 2–4 GB | シーン依存 |
 
-**VRAM 管理**: 各 GPU ステージ終了時にモデルを明示的に解放し VRAM を回収する。Pi3X は VRAM 使用率 95% を目標にフレーム数を自動調整し、OOM 時はフレーム削減 → 解像度縮小 → チャンク推論の順でフォールバックする。
+**VRAM 管理**: 各 GPU ステージ終了時に `cleanup_pytorch_vram()` でモデルを明示的に解放し VRAM を回収する。GPU TSDF は OOM 時に VRAM 削減パラメータで自動リトライ (requested → reduced_vram → safe_vram)。低 VRAM 環境では自動的に CPU TSDF にフォールバックする。
 
-> **ヒント**: 16GB GPU で品質を優先する場合、まず `MAX_FRAMES` を下げて `PIXEL_LIMIT` は高めに維持する。
-> 例: `MAX_FRAMES=20~28, PIXEL_LIMIT=220000~255000`
+> **ヒント**: 16GB GPU で品質を優先する場合、`GS2MESH_GS_ITERATIONS` を増やし (例: 15000)、`GS2MESH_PRESET=high` を使用する。
 
 ## ドキュメント
 
@@ -157,14 +192,11 @@ RTX 4090 Laptop (16GB) での実測値:
 | Stage | ドキュメント |
 |-------|------------|
 | 1. フレーム抽出 | [`docs/extract_frames.md`](docs/extract_frames.md) |
-| 2. Pi3X 3D再構成 | [`docs/pi3x_reconstruct.md`](docs/pi3x_reconstruct.md) |
+| 2. COLMAP SfM | [`docs/colmap_sfm.md`](docs/colmap_sfm.md) |
 | 3. SAM2 セグメンテーション | [`docs/sam2_segment.md`](docs/sam2_segment.md) |
-| 4. 点群デノイズ | [`docs/denoise_point_cloud.md`](docs/denoise_point_cloud.md) |
-| 5a. Classical メッシュ | [`docs/mesh_classical.md`](docs/mesh_classical.md) |
-| 5b. DiffCD メッシュ | [`docs/mesh_diffcd.md`](docs/mesh_diffcd.md) |
-| 6. メッシュラップ | [`docs/mesh_wrap.md`](docs/mesh_wrap.md) |
-| 7. メッシュ補修 | [`docs/contact_hole_repair.md`](docs/contact_hole_repair.md) |
-| 8. テクスチャベイキング | [`docs/texture_bake.md`](docs/texture_bake.md) |
+| 4. gs2mesh 再構成 | [`docs/gs2mesh_reconstruct.md`](docs/gs2mesh_reconstruct.md) |
+| 5. テクスチャベイキング | [`docs/texture_bake.md`](docs/texture_bake.md) |
+| 6. Post-texture Cleanup | [`docs/post_texture_cleanup.md`](docs/post_texture_cleanup.md) |
 
 ## テスト実行方法
 
@@ -190,5 +222,10 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml build test
 本リポジトリのスクリプトは MIT ライセンス。依存プロジェクトは各自のライセンスに従う:
 
 - [SAM2](https://github.com/facebookresearch/sam2) — Apache 2.0
-- [Pi3X](https://github.com/yyfz/Pi3) — MIT
-- [DiffCD](https://github.com/Linusnie/diffcd) — MIT
+- [COLMAP](https://github.com/colmap/colmap) — BSD 3-Clause
+- [gs2mesh](https://github.com/yanivw12/gs2mesh) — Apache 2.0
+- [3D Gaussian Splatting](https://github.com/graphdeco-inria/gaussian-splatting) — Inria / Max Planck Institute 独自ライセンス (**非商用利用のみ**。商用利用には権利者の事前許可が必要)
+- [DLNR](https://github.com/David-Zhao-1997/High-frequency-Stereo-Matching-Network) — (リポジトリのライセンスを確認)
+- [nvdiffrast](https://github.com/NVlabs/nvdiffrast) — NVIDIA Source Code License (**非商用研究/評価用途のみ**。商用利用には NVIDIA の別途ライセンスが必要)
+- [Open3D](https://github.com/isl-org/Open3D) — MIT
+- [xatlas](https://github.com/jpcy/xatlas) — MIT
