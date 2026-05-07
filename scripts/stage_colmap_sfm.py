@@ -247,6 +247,21 @@ _COLMAP_CAMERA_MODELS: dict[int, tuple[str, int, tuple[int, int, int, int]]] = {
 }
 
 
+# Distortion-parameter indices (within ``cam["params"]``) for OpenCV's 5-element
+# ``(k1, k2, p1, p2, k3)`` coefficient layout. Missing slots stay at 0. Models
+# not in this table contribute no distortion (e.g., PINHOLE).
+_COLMAP_DISTORTION_INDICES: dict[int, tuple[int, int, int, int, int]] = {
+    # SIMPLE_RADIAL: (f, cx, cy, k1)
+    2: (3, -1, -1, -1, -1),
+    # RADIAL: (f, cx, cy, k1, k2)
+    3: (3, 4, -1, -1, -1),
+    # OPENCV: (fx, fy, cx, cy, k1, k2, p1, p2)
+    4: (4, 5, 6, 7, -1),
+    # FULL_OPENCV: (fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6) — k4..k6 unused by texture stage
+    6: (4, 5, 6, 7, 8),
+}
+
+
 def _read_cameras_binary(path: Path) -> dict[int, dict]:
     """Read COLMAP cameras.bin and return {camera_id: {model, width, height, params}}."""
     cameras: dict[int, dict] = {}
@@ -275,11 +290,17 @@ def _read_cameras_binary(path: Path) -> dict[int, dict]:
 
 
 def _read_colmap_intrinsics(recon_dir: Path) -> dict | None:
-    """Extract fx/fy/cx/cy from the dominant COLMAP camera.
+    """Extract fx/fy/cx/cy/distortion from the dominant COLMAP camera.
 
-    Returns a dict in the same schema that ``scripts/texture/intrinsics.py`` writes,
-    or None if the cameras file is missing.  Radial distortion parameters are
-    discarded — the texture stage assumes a pure pinhole model.
+    Returns a dict in the same schema that ``scripts/texture/intrinsics.py``
+    writes, or None if the cameras file is missing.
+
+    The returned dict includes ``dist_coeffs`` — the OpenCV-layout 5-vector
+    ``[k1, k2, p1, p2, k3]`` extracted from the COLMAP camera model. The
+    texture stage uses these to undistort frames at load time so that its
+    pure-pinhole projection matches the bundle-adjusted geometry. iPhone
+    captures typically end up with SIMPLE_RADIAL k1≈0.01–0.05, which causes
+    >2 px sub-pixel mismatch on cylindrical objects when ignored.
     """
     cameras_path = recon_dir / "cameras.bin"
     if not cameras_path.exists():
@@ -304,7 +325,8 @@ def _read_colmap_intrinsics(recon_dir: Path) -> dict | None:
         dominant_camera_id = next(iter(cameras))
 
     cam = cameras[dominant_camera_id]
-    model_name, _num_params, (fx_i, fy_i, cx_i, cy_i) = _COLMAP_CAMERA_MODELS[cam["model_id"]]
+    model_id = cam["model_id"]
+    model_name, _num_params, (fx_i, fy_i, cx_i, cy_i) = _COLMAP_CAMERA_MODELS[model_id]
     params = cam["params"]
     fx = float(params[fx_i])
     fy = float(params[fy_i])
@@ -312,6 +334,12 @@ def _read_colmap_intrinsics(recon_dir: Path) -> dict | None:
     cy = float(params[cy_i])
     img_w = int(cam["width"])
     img_h = int(cam["height"])
+
+    dist = [0.0, 0.0, 0.0, 0.0, 0.0]
+    if model_id in _COLMAP_DISTORTION_INDICES:
+        for slot, idx in enumerate(_COLMAP_DISTORTION_INDICES[model_id]):
+            if 0 <= idx < len(params):
+                dist[slot] = float(params[idx])
 
     return {
         "fx": fx,
@@ -321,6 +349,8 @@ def _read_colmap_intrinsics(recon_dir: Path) -> dict | None:
         "image_width": img_w,
         "image_height": img_h,
         "K": [[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]],
+        "dist_coeffs": dist,
+        "distortion_model": model_name,
         "source": f"colmap:{model_name}",
     }
 

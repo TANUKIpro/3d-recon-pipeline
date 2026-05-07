@@ -114,10 +114,36 @@ def _load_mask(masks_dir: str, idx: int) -> np.ndarray:
     return mask > 127
 
 
-class _FrameCache:
-    """LRU cache for decoded frames and masks with memory-aware capacity."""
+def _has_distortion(dist_coeffs: np.ndarray | list | None) -> bool:
+    """Return True iff at least one distortion coefficient is non-trivial."""
+    if dist_coeffs is None:
+        return False
+    arr = np.asarray(dist_coeffs, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return False
+    return bool(np.any(np.abs(arr) > 1e-9))
 
-    def __init__(self, img_w: int, img_h: int) -> None:
+
+class _FrameCache:
+    """LRU cache for decoded frames and masks with memory-aware capacity.
+
+    When ``K`` and ``dist_coeffs`` are provided and the distortion is
+    non-trivial, frames and masks are undistorted on load using a precomputed
+    remap. The bundle-adjusted geometry is consistent with the COLMAP camera
+    model (e.g., SIMPLE_RADIAL); after remap, the rest of the texture pipeline
+    can keep using a pure-pinhole projection without color leakage from
+    sub-pixel mis-projection. Without this, k1≈0.03 produces >2 px error at
+    moderate radial offsets, which destroys fine detail on cylindrical
+    objects.
+    """
+
+    def __init__(
+        self,
+        img_w: int,
+        img_h: int,
+        K: np.ndarray | None = None,
+        dist_coeffs: np.ndarray | list | None = None,
+    ) -> None:
         avail_mb = _get_available_memory_mb()
         budget_mb = max(0.0, avail_mb - _TEXTURE_CACHE_SAFETY_MB)
 
@@ -135,13 +161,62 @@ class _FrameCache:
         self._frame_lock = threading.Lock()
         self._mask_lock = threading.Lock()
 
+        self._undistort_map_x: np.ndarray | None = None
+        self._undistort_map_y: np.ndarray | None = None
+        if K is not None and _has_distortion(dist_coeffs):
+            K_arr = np.asarray(K, dtype=np.float64)
+            d_arr = np.asarray(dist_coeffs, dtype=np.float64).ravel().astype(np.float32)
+            map_x, map_y = cv2.initUndistortRectifyMap(
+                K_arr.astype(np.float32),
+                d_arr,
+                R=None,
+                newCameraMatrix=K_arr.astype(np.float32),
+                size=(img_w, img_h),
+                m1type=cv2.CV_32FC1,
+            )
+            self._undistort_map_x = map_x
+            self._undistort_map_y = map_y
+
+    @property
+    def undistort_enabled(self) -> bool:
+        return self._undistort_map_x is not None
+
+    def _maybe_undistort_frame(self, arr: np.ndarray) -> np.ndarray:
+        if self._undistort_map_x is None:
+            return arr
+        return cv2.remap(
+            arr,
+            self._undistort_map_x,
+            self._undistort_map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+
+    def _maybe_undistort_mask(self, arr: np.ndarray) -> np.ndarray:
+        if self._undistort_map_x is None:
+            return arr
+        # remap with NEAREST keeps the boolean character of the SAM2 mask;
+        # bilinear would invent half-edge texels along the silhouette and
+        # let background pixels pass the mask-validity test on the bake
+        # path.
+        m = cv2.remap(
+            arr.astype(np.uint8),
+            self._undistort_map_x,
+            self._undistort_map_y,
+            interpolation=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        return m.astype(bool)
+
     def load_frame(self, frames_dir: str, idx: int) -> np.ndarray:
         key = (frames_dir, idx)
         with self._frame_lock:
             if key in self._frames:
                 self._frames.move_to_end(key)
                 return self._frames[key]
-        arr = _load_frame(frames_dir, idx)
+        arr = self._maybe_undistort_frame(_load_frame(frames_dir, idx))
         with self._frame_lock:
             if key not in self._frames:
                 self._frames[key] = arr
@@ -158,7 +233,7 @@ class _FrameCache:
             if key in self._masks:
                 self._masks.move_to_end(key)
                 return self._masks[key]
-        arr = _load_mask(masks_dir, idx)
+        arr = self._maybe_undistort_mask(_load_mask(masks_dir, idx))
         with self._mask_lock:
             if key not in self._masks:
                 self._masks[key] = arr

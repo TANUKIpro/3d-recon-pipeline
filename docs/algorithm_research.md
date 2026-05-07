@@ -59,7 +59,7 @@
 - 実装: `scripts/stage_colmap_sfm.py`
 - 入力: `frames/*.jpg`
 - 出力: `camera_poses.json`, `intrinsics.json`, `colmap_sparse/`, `colmap_sparse_points.ply`
-- アルゴリズム: COLMAP `feature_extractor` でSIFT特徴抽出、`exhaustive_matcher` または `sequential_matcher` で特徴マッチング、`mapper` でインクリメンタルSfMを実行する。
+- アルゴリズム: COLMAP `feature_extractor` でSIFT特徴抽出、`exhaustive_matcher` または `sequential_matcher` で特徴マッチング、`mapper` でインクリメンタルSfMを実行する。`cameras.bin` から fx/fy/cx/cy に加えて歪み係数 (SIMPLE_RADIAL の k1 等) を OpenCV 形式 `[k1, k2, p1, p2, k3]` に変換して `intrinsics.json` に書き出し、Stage 5 がフレームをアンディストーションして使えるようにする。
 
 現行設定は、`scripts/config_defaults.py` では `exhaustive`, `32768 features`, `image_size=2048`, `DSP-SIFT=true`, `GPU=false` が既定である。一方、`docker-compose.yml` では `COLMAP_MAX_FEATURES=8192` が指定されており、設定の意図が少し分散している。
 
@@ -220,14 +220,15 @@ GOF、MASt3R-SLAM、Fast3R系は有望だが、現行Stage 4の差し替えで�
 - 入力: `object_mesh.ply`, `camera_poses.json`, `intrinsics.json`, `frames/`, `masks/`
 - 出力: `textured_mesh.obj`, `textured_mesh.mtl`, `texture.png`
 - アルゴリズム:
-  1. メッシュ、カメラ姿勢、内部パラメータを読み込む。
-  2. `xatlas` でUV展開する。大規模メッシュでは空間分割して並列UV生成する。
-  3. 各テクセルについて、法線角度、距離、可視性、SAM2マスクを使いTop-Kビューをスコアリングする。
-  4. `region_gc` では競合領域をregion化し、single-view固定で境界破綻を抑える。
-  5. non-conflict領域はTop-Kブレンド、未充填領域はfallback scanで埋める。
-  6. seam leveling、必要に応じたquality boost、seam padding、sharpenを適用する。
+  1. メッシュ、カメラ姿勢、内部パラメータ (歪み係数を含む) を読み込む。
+  2. `intrinsics.dist_coeffs` が非ゼロなら `cv2.initUndistortRectifyMap` でアンディストーションマップを構築し、フレーム/マスクを `cv2.remap` で歪み補正する。COLMAP の bundle adjustment は SIMPLE_RADIAL 前提で世界座標を解いているため、ピンホール投影で歪み画像をサンプルすると曲面上で詳細が消える。
+  3. `xatlas` でUV展開する。大規模メッシュでは空間分割して並列UV生成する。
+  4. 各テクセルについて、法線角度、距離、可視性、SAM2マスクを使いTop-Kビューをスコアリングする。
+  5. `region_gc` では競合領域をregion化し、single-view固定で境界破綻を抑える。
+  6. non-conflict領域はTop-Kブレンド、未充填領域はfallback scanで埋める。
+  7. seam leveling、必要に応じたquality boost、seam padding、sharpenを適用する。
 
-現行は、nvdiffrastによるGPU深度ラスタライズ、LRUキャッシュ、並列UV展開、COLMAP intrinsics直接利用など、既に複数の高速化が入っている。
+現行は、nvdiffrastによるGPU深度ラスタライズ、LRUキャッシュ、並列UV展開、COLMAP intrinsics直接利用 (歪み係数も含む) など、既に複数の高速化が入っている。
 
 ### ボトルネック
 

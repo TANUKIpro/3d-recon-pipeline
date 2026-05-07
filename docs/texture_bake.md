@@ -16,9 +16,10 @@
 
 - `<output_dir>/object_mesh.ply` (Stage 4 出力)
 - `<output_dir>/camera_poses.json` (Stage 2 出力)
-- `<output_dir>/intrinsics.json` (Stage 2 出力, 任意 — 存在時はグリッドサーチをスキップ)
+- `<output_dir>/intrinsics.json` (Stage 2 出力, 任意 — 存在時はグリッドサーチをスキップ。`dist_coeffs` を含む場合はフレームをアンディストーションする)
 - `<output_dir>/frames/*.jpg`
 - `<output_dir>/masks/*.png`
+- `<output_dir>/colmap_sparse/0/cameras.bin` (任意 — `intrinsics.json` に歪み情報が無い場合のフォールバック)
 
 主出力:
 
@@ -31,26 +32,27 @@
 
 1. メッシュと pose 読み込み、対応フレーム index を解決。
 2. 内部パラメータ取得 (3 段階の解決順):
-   1. `intrinsics.json` が存在しスキーマ・解像度が一致すれば直接ロード (`_maybe_load_intrinsics`)
+   1. `intrinsics.json` が存在しスキーマ・解像度が一致すれば直接ロード (`_maybe_load_intrinsics`)。`source` が `colmap:*` で `dist_coeffs` が欠落している旧 JSON は、`cameras.bin` から自動で歪み係数を補填して再保存する (旧バージョンとの互換)
    2. 不在なら **COLMAP `cameras.bin` から直接復元** (`_maybe_load_colmap_intrinsics`) → 復元値を `intrinsics.json` に書き戻す
-   3. それも失敗したら FOV **25°-90°** のグリッドサーチ → Nelder-Mead で `(fx, fy, cx, cy)` を最適化、`source: "estimated"` タグ付きで保存
+   3. それも失敗したら FOV **25°-90°** のグリッドサーチ → Nelder-Mead で `(fx, fy, cx, cy)` を最適化、`source: "estimated"` タグ付きで保存 (歪みは推定しない)
    - 解像度ベースの自動 cap は `TEXTURE_MAX_SIZE` (デフォルト 2048) で auto モード時のみ適用
-3. `xatlas.parametrize` で UV 展開 (並列化: `scripts/texture/parallel_uv.py` により空間分割で最大8ワーカー並列実行)。
+3. **フレームアンディストーションのセットアップ**: `intrinsics.dist_coeffs` に非ゼロ係数が含まれる場合、`cv2.initUndistortRectifyMap` で `K` と OpenCV 形式 `[k1, k2, p1, p2, k3]` から remap マップを 1 度だけ生成し、`_FrameCache` に保持する。以降フレームは `cv2.remap(LINEAR)`、SAM2 マスクは `cv2.remap(NEAREST)` でアンディストーションされて返る。これにより以降の段階は純粋ピンホール投影のままで OK。
+4. `xatlas.parametrize` で UV 展開 (並列化: `scripts/texture/parallel_uv.py` により空間分割で最大8ワーカー並列実行)。
    - 入力メッシュが `TEXTURE_UV_MAX_FACES` (デフォルト 300,000) を超える場合は Open3D `simplify_quadric_decimation` で UV proxy を生成。Stage 4 のメッシュ簡略化が無効化されたケースの保険
-4. 全テクセルで Top-K ビューをスコアリング。
+5. 全テクセルで Top-K ビューをスコアリング。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
    - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
    - `TEXTURE_VIEW_ASSIGN_MODE=legacy` では conflict が多い face を face 単位で dominant view に固定
    - `TEXTURE_VIEW_ASSIGN_MODE=region_gc` では conflict face を連続曲面 region にまとめ、region 内の face label を最適化
-5. non-conflict texel は Top-K ビューをスコア加重ブレンド。
+6. non-conflict texel は Top-K ビューをスコア加重ブレンド。
    - conflict face / region は single-view、その他は上位 K 個のビューから色を決定
    - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
-6. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
+7. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
    - `TEXTURE_QUALITY_BOOST` 有効時は boundary component ごとに複数補助ビューを比較し、
      色正規化 + ECC/phase correlation 整列つきで最良候補の detail を注入する。
-7. UV seam 周辺を反復補間して隙間埋め。
-8. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
-9. OBJ/MTL を生成。
+8. UV seam 周辺を反復補間して隙間埋め。
+9. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
+10. OBJ/MTL を生成。
 
 ## アルゴリズム要点
 
@@ -68,6 +70,10 @@
   - 未充填テクセルは relaxed 閾値でフォールバックしてから seam padding
 - マスク考慮:
   - 投影点が SAM2 マスク内にあるサンプルのみ採用
+  - SAM2 マスクもフレームと同じ remap でアンディストーションされる (`cv2.INTER_NEAREST`)。bilinear だとシルエット沿いに半端な縁テクセルが生まれ、背景画素がマスクテストを通ってしまうため
+- カメラモデル整合:
+  - COLMAP の bundle adjustment は SIMPLE_RADIAL 等の歪みモデル前提で世界座標を解いている。Stage 5 内部の投影は純粋ピンホールで動くため、フレームを `cv2.remap` で先にアンディストーションしてから常用する経路に揃えてある
+  - 歪みを無視してピンホール投影を歪み付き画像に当てると、円筒・カップなど曲面上で隣接テクセルがそれぞれ違うサブピクセル量だけ位置ずれし、Top-K ブレンドで詳細が打ち消されて斑点状に見える
 
 ## パラメータ
 
@@ -129,6 +135,21 @@
 - pose と frame/mask の index 不整合
 - `camera_poses.json` に pose が無い
 - 入力メッシュが空
+
+## 既知の落とし穴: 歪み係数を捨てたピンホール投影による曲面ディテール消失
+
+`intrinsics.json` に `dist_coeffs` が無い (旧バージョン由来) か、すべて 0 のとき、Stage 5 はフレームをアンディストーションせず純粋ピンホール投影でサンプルする。COLMAP がモデル `SIMPLE_RADIAL` で解いている場合は、世界座標自体が k1 込みで bundle adjustment された値であるため、ピンホール投影と歪み付き画像の組み合わせは整合しない。
+
+サブピクセル位置ずれは画像中心からの距離 r に応じて増え、k1≈0.03 の iPhone キャプチャでは中心から離れた領域で 2px 以上に達する。フラット箱型 (Cereal 等) では同一面のテクセルが揃って同方向にシフトするため見た目には影響しないが、円筒・カップ型 (Coffee_Can / Jagarico 等) ではテクセルごとにシフト量が変わるため、Top-K ブレンドで細部が打ち消し合って色斑点として現れる。
+
+検出と回避:
+
+- `intrinsics.json` に `dist_coeffs` フィールドがあり全 0 でないことを確認する。
+- 旧 JSON で欠落していても、`source` が `colmap:*` であれば Stage 5 が起動時に `cameras.bin` から自動補填する (`scripts/texture/bake.py`)。
+- `colmap:SIMPLE_RADIAL` 由来であれば `[k1, 0, 0, 0, 0]` の 5 要素配列が、`OPENCV` 由来であれば `[k1, k2, p1, p2, k3]` が入る。
+- `_FrameCache.undistort_enabled = True` のとき Stage 5 ログに `Frame undistortion: ON (model=..., dist=[...])` が出る。
+
+なお `_estimate_intrinsics` 経由の値 (`source: "estimated"`) は歪みを推定しないため `dist_coeffs` を持たない。歪みのある実機キャプチャに対してはあくまで COLMAP 経路を使うのが前提。
 
 ## 既知の落とし穴: 推定 intrinsics による細部消失
 

@@ -282,8 +282,10 @@ def bake_texture(
     first_frame = _load_frame(frames_dir, int(pose_frame_indices[0]))
     img_h, img_w = first_frame.shape[:2]
 
-    # Create frame/mask cache with memory-aware capacity (Optimization A)
-    frame_cache = _FrameCache(img_w, img_h)
+    # The frame cache is constructed (with optional undistortion) once
+    # intrinsics are resolved, since the distortion coefficients live in
+    # the same JSON. Until then, callers should not load frames.
+    frame_cache: _FrameCache | None = None
 
     tex_size, tex_is_auto = _resolve_texture_size(tex_size, img_w, img_h)
     tex_res = tex_size * oversample
@@ -317,6 +319,21 @@ def bake_texture(
             )
             with open(output_path / "intrinsics.json", "w") as f_out:
                 json.dump(intrinsics, f_out, indent=2)
+    elif (
+        "dist_coeffs" not in intrinsics
+        and str(intrinsics.get("source", "")).startswith("colmap:")
+    ):
+        # Older intrinsics.json files predate the distortion fields; refresh
+        # from cameras.bin so undistortion can run on resume.
+        refreshed = _maybe_load_colmap_intrinsics(output_path, img_w, img_h)
+        if refreshed is not None:
+            intrinsics = refreshed
+            print(
+                "  intrinsics.json upgraded with COLMAP distortion params "
+                f"(model={intrinsics.get('distortion_model', '?')})"
+            )
+            with open(output_path / "intrinsics.json", "w") as f_out:
+                json.dump(intrinsics, f_out, indent=2)
 
     if intrinsics is not None:
         source = intrinsics.get("source", "cached")
@@ -341,10 +358,12 @@ def bake_texture(
                 _emit_progress(progress_cb, stage_progress, detail)
                 _intrinsics_progress_last["value"] = stage_progress
 
+        # Estimation uses uncached frame loads (cache is built below once we
+        # know whether to apply COLMAP undistortion).
         intrinsics = _estimate_intrinsics(
             pc_points, pc_colors, poses, pose_frame_indices, frames_dir, mask_dir, img_w, img_h,
             progress_cb=_intrinsics_progress,
-            cache=frame_cache,
+            cache=None,
         )
         _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
 
@@ -352,7 +371,17 @@ def bake_texture(
             json.dump(intrinsics, f_out, indent=2)
 
     K = np.array(intrinsics["K"], dtype=np.float64)
+    dist_coeffs = intrinsics.get("dist_coeffs")
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
+
+    frame_cache = _FrameCache(img_w, img_h, K=K, dist_coeffs=dist_coeffs)
+    if frame_cache.undistort_enabled:
+        dist_label = intrinsics.get("distortion_model", "?")
+        dist_arr = np.asarray(dist_coeffs, dtype=np.float64).ravel()
+        print(
+            "  Frame undistortion: ON (model=%s, dist=[%s])"
+            % (dist_label, ", ".join(f"{c:.5f}" for c in dist_arr))
+        )
 
     # --- UV Atlas ---
     uv_face_budget, uv_budget_source = _resolve_uv_face_budget(len(faces))

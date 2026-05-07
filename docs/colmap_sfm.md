@@ -52,10 +52,12 @@
 5. **内部パラメータ書き出し**:
    - `cameras.bin` から最も多くの画像に使われているカメラモデルを選択。
    - 10種類のカメラモデル (SIMPLE_PINHOLE, PINHOLE, SIMPLE_RADIAL, RADIAL, OPENCV 等) から fx/fy/cx/cy を抽出。
+   - SIMPLE_RADIAL / RADIAL / OPENCV / FULL_OPENCV では **歪み係数も併せて抽出** し、OpenCV 形式 `[k1, k2, p1, p2, k3]` の 5 要素ベクトルを `dist_coeffs`、対応する `distortion_model` フィールドと共に保存する。Stage 5 はこれを使ってフレーム/マスクを `cv2.remap` でアンディストーションし、ピンホール投影と整合させる。
    - `intrinsics.json` に `source: "colmap:<MODEL_NAME>"` フィールド付きで保存。テクスチャベイキングの内部パラメータ推定をスキップ可能にする。
    - **重要**: ここで書かれた COLMAP の bundle adjustment 値は、テクスチャベイクの正確さに直結する。Stage 5 リスタート時にも保持されるよう、`scripts/dashboard/checkpoints.py` の `s5.intrinsics` cleanup と `_STAGE_FALLBACK_RESET[5]` から `intrinsics.json` は除外されている。`intrinsics.json` の `source` フィールドで生成元 (COLMAP / 推定) を判別できる:
-     - `colmap:<MODEL>`: Stage 2 (COLMAP) が直接書いた値 — 精度高
-     - `estimated`: Stage 5 のフォールバック (FOV grid search + Nelder-Mead) — 円筒形・自己類似テクスチャで sub-pixel 局所最適に陥る既知リスクあり
+     - `colmap:<MODEL>`: Stage 2 (COLMAP) が直接書いた値 — 精度高 (`dist_coeffs` 同梱)
+     - `estimated`: Stage 5 のフォールバック (FOV grid search + Nelder-Mead) — 円筒形・自己類似テクスチャで sub-pixel 局所最適に陥る既知リスクあり (歪みは未推定 → `dist_coeffs` 無し)
+   - 旧バージョン (歪み欠落) で書かれた `intrinsics.json` は、Stage 5 の起動時に `cameras.bin` から自動で `dist_coeffs` を補填して再保存する。
 
 6. **スパース点群書き出し** (`colmap model_converter --output_type PLY`):
    - 再構成されたスパース点群を PLY 形式で保存。
