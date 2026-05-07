@@ -8,6 +8,7 @@ import numpy as np
 from scripts.texture.progress import _get_available_memory_mb
 
 from scripts.config_defaults import (
+    TEXTURE_MAX_SIZE,
     TEXTURE_VIEW_ASSIGN_MODE,
     _TEXTURE_UV_BYTES_PER_FACE,
     _TEXTURE_UV_MAX_FACES,
@@ -73,12 +74,25 @@ def _resolve_texture_size(
     if resolved > 0:
         return resolved, False
 
+    # Auto mode: capped by TEXTURE_MAX_SIZE so 4K/8K input doesn't explode
+    # internal buffers. Manual TEXTURE_SIZE>0 above bypasses this cap.
+    raw_cap = os.environ.get("TEXTURE_MAX_SIZE")
+    try:
+        cap = int(raw_cap) if raw_cap is not None else TEXTURE_MAX_SIZE
+    except (TypeError, ValueError):
+        cap = TEXTURE_MAX_SIZE
+
     if img_w > 0 and img_h > 0:
         auto_size = max(1, int(round(math.sqrt(float(img_w) * float(img_h)))))
+        if cap > 0 and auto_size > cap:
+            auto_size = cap
         return auto_size, True
 
     # Last-resort safety fallback when image metadata is unavailable.
-    return 2048, True
+    fallback = 2048
+    if cap > 0 and fallback > cap:
+        fallback = cap
+    return fallback, True
 
 
 def _resolve_texture_view_assign_mode(requested: str | None = None) -> str:

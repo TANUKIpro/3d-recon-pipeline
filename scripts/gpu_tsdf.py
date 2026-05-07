@@ -34,6 +34,9 @@ def gpu_tsdf_reconstruct(
     tsdf_closing_kernel_size: int = 10,
     block_count: int = 100_000,
     tsdf_device: str = "CUDA:0",
+    mesh_target_faces: int = 0,
+    mesh_min_iou: float = 0.985,
+    mesh_iou_views: int = 8,
     progress_cb: Callable[[float, str], None] | None = None,
 ) -> str:
     """Run GPU TSDF fusion and return path to cleaned mesh PLY.
@@ -69,6 +72,9 @@ def gpu_tsdf_reconstruct(
             tsdf_closing_kernel_size=tsdf_closing_kernel_size,
             block_count=block_count,
             tsdf_device=tsdf_device,
+            mesh_target_faces=mesh_target_faces,
+            mesh_min_iou=mesh_min_iou,
+            mesh_iou_views=mesh_iou_views,
             progress_cb=progress_cb,
         )
     finally:
@@ -117,6 +123,9 @@ def _gpu_tsdf_impl(
     tsdf_closing_kernel_size: int,
     block_count: int,
     tsdf_device: str,
+    mesh_target_faces: int,
+    mesh_min_iou: float,
+    mesh_iou_views: int,
     progress_cb: Callable[[float, str], None] | None,
 ) -> str:
     """Core implementation — called from `gpu_tsdf_reconstruct` inside its
@@ -358,6 +367,46 @@ def _gpu_tsdf_impl(
     )
 
     # ------------------------------------------------------------------
+    # Decimate (post-MC, color-preserving QEM) with silhouette safety net
+    # ------------------------------------------------------------------
+    if mesh_target_faces > 0 and n_tris_clean > mesh_target_faces:
+        if progress_cb:
+            progress_cb(0.95, "Decimating mesh (quadric edge collapse)")
+        simplified, did_simplify = _decimate_tsdf_mesh(
+            mesh, mesh_target_faces
+        )
+        if did_simplify:
+            n_tris_simp = len(simplified.triangles)
+            n_verts_simp = len(simplified.vertices)
+            print(
+                f"GPU TSDF: decimated mesh — {n_verts_simp} vertices, "
+                f"{n_tris_simp} triangles "
+                f"(target={mesh_target_faces}, "
+                f"reduction={1.0 - n_tris_simp / max(1, n_tris_clean):.1%})"
+            )
+            iou_ok, mean_iou = _silhouette_iou_check(
+                original=mesh,
+                simplified=simplified,
+                left_cameras=left_cameras,
+                tsdf_scale=tsdf_scale,
+                min_iou=mesh_min_iou,
+                n_views=mesh_iou_views,
+            )
+            if iou_ok:
+                print(
+                    f"GPU TSDF: silhouette IoU={mean_iou:.4f} "
+                    f">= {mesh_min_iou:.4f} — keeping decimated mesh"
+                )
+                mesh = simplified
+            else:
+                print(
+                    f"GPU TSDF: silhouette IoU={mean_iou:.4f} "
+                    f"< {mesh_min_iou:.4f} — rolling back to pre-decimation mesh"
+                )
+        else:
+            print("GPU TSDF: decimation produced no reduction, skipping")
+
+    # ------------------------------------------------------------------
     # Save
     # ------------------------------------------------------------------
     cleaned_path = root / "gpu_tsdf_cleaned_mesh.ply"
@@ -368,3 +417,136 @@ def _gpu_tsdf_impl(
         progress_cb(1.0, "GPU TSDF fusion complete")
 
     return str(cleaned_path)
+
+
+def _decimate_tsdf_mesh(mesh, target_faces: int):
+    """Quadric-decimate a TSDF mesh to ``target_faces`` triangles.
+
+    Returns ``(mesh, did_simplify)``. The original mesh is returned
+    unchanged when simplification would not reduce face count, when the
+    output is empty, or when ``target_faces <= 0``.
+
+    Open3D's ``simplify_quadric_decimation`` preserves per-vertex colours
+    (RGB attribute carried through from VoxelBlockGrid), so the cap-face
+    detection in ``scripts/texture/cap_region.py`` keeps working
+    downstream. The cleanup trio mirrors
+    ``scripts/texture/bake.py::_simplify_mesh_for_uv``.
+    """
+    import open3d as o3d  # noqa: F401  (kept for clarity / matching impl style)
+
+    n_tri = len(mesh.triangles)
+    if target_faces <= 0 or n_tri <= target_faces:
+        return mesh, False
+
+    simplified = mesh.simplify_quadric_decimation(
+        target_number_of_triangles=int(target_faces)
+    )
+    simplified.remove_degenerate_triangles()
+    simplified.remove_duplicated_triangles()
+    simplified.remove_unreferenced_vertices()
+
+    if (
+        len(simplified.triangles) == 0
+        or len(simplified.vertices) == 0
+        or len(simplified.triangles) >= n_tri
+    ):
+        return mesh, False
+
+    simplified.compute_vertex_normals()
+    return simplified, True
+
+
+def _silhouette_iou_check(
+    *,
+    original,
+    simplified,
+    left_cameras: list[dict],
+    tsdf_scale: float,
+    min_iou: float,
+    n_views: int,
+) -> tuple[bool, float]:
+    """Validate that ``simplified`` preserves the silhouette of ``original``.
+
+    Rasterises both meshes from ``n_views`` evenly-sampled poses (drawn
+    from ``left_cameras``, the same data used during TSDF integration)
+    and computes the mean per-view foreground IoU. Returns
+    ``(passed, mean_iou)`` where ``passed`` is true iff
+    ``mean_iou >= min_iou``. Any rasterisation failure is treated as a
+    pass with IoU 1.0 (we should not roll back on a tooling glitch).
+    """
+
+    if n_views <= 0 or not left_cameras:
+        return True, 1.0
+
+    import open3d as o3d
+    import open3d.core as o3c
+
+    n_cam = len(left_cameras)
+    step = max(1, n_cam // max(1, n_views))
+    sample_idx = list(range(0, n_cam, step))[:n_views]
+    if not sample_idx:
+        return True, 1.0
+
+    # Modest fixed render resolution — silhouette comparison doesn't need
+    # full image_h × image_w; this keeps the gate at ~100 ms on CUDA.
+    render_w = 512
+    render_h = 512
+
+    def _build_scene(mesh) -> o3d.t.geometry.RaycastingScene:
+        scene = o3d.t.geometry.RaycastingScene()
+        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+        scene.add_triangles(mesh_t)
+        return scene
+
+    try:
+        scene_o = _build_scene(original)
+        scene_s = _build_scene(simplified)
+    except Exception as exc:  # pragma: no cover — Open3D edge cases
+        print(f"GPU TSDF: silhouette IoU check skipped (scene build failed: {exc})")
+        return True, 1.0
+
+    ious: list[float] = []
+    for cam_idx in sample_idx:
+        cam = left_cameras[cam_idx]
+        try:
+            extrinsic = np.array(cam["extrinsic"], dtype=np.float64)
+            extrinsic[:3, 3] /= tsdf_scale
+            w2c = np.linalg.inv(extrinsic)
+
+            # Rebuild a compact intrinsic for the down-rendered resolution.
+            full_w = float(cam.get("width", render_w))
+            full_h = float(cam.get("height", render_h))
+            sx = render_w / max(1.0, full_w)
+            sy = render_h / max(1.0, full_h)
+            intr = np.array(
+                [
+                    [cam["fx"] * sx, 0.0, cam["cx"] * sx],
+                    [0.0, cam["fy"] * sy, cam["cy"] * sy],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+
+            rays = scene_o.create_rays_pinhole(
+                intrinsic_matrix=o3c.Tensor(intr),
+                extrinsic_matrix=o3c.Tensor(w2c),
+                width_px=render_w,
+                height_px=render_h,
+            )
+            sil_o = np.isfinite(scene_o.cast_rays(rays)["t_hit"].numpy())
+            sil_s = np.isfinite(scene_s.cast_rays(rays)["t_hit"].numpy())
+        except Exception as exc:  # pragma: no cover
+            print(f"GPU TSDF: silhouette IoU view {cam_idx} skipped: {exc}")
+            continue
+
+        union = np.logical_or(sil_o, sil_s).sum()
+        if union == 0:
+            continue
+        inter = np.logical_and(sil_o, sil_s).sum()
+        ious.append(float(inter) / float(union))
+
+    if not ious:
+        return True, 1.0
+
+    mean_iou = float(sum(ious) / len(ious))
+    return (mean_iou >= min_iou), mean_iou

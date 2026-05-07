@@ -120,8 +120,26 @@ GS2MESH_PRESET_CHOICES: set[str] = set(GS2MESH_PRESETS) | {
     GS2MESH_PRESET_CUSTOM
 }
 
+# Mesh decimation (post-MC, pre-PLY-write in scripts/gpu_tsdf.py).
+# Targets are resolved per VRAM tier × preset in scripts/vram_tier.py.
+# Set MESH_DECIMATION=0 (env) to fully disable and reproduce legacy output.
+MESH_DECIMATION_ENABLED = True
+MESH_TARGET_FACES_DEFAULT = 200_000
+MESH_TARGET_FACES_HIGH = 500_000
+# CPU-TSDF tiers run on lower-spec hardware; cap mesh complexity tighter.
+MESH_TARGET_FACES_DEFAULT_CPU = 80_000
+MESH_TARGET_FACES_HIGH_CPU = 200_000
+# Silhouette IoU rollback gate. Compares pre/post-decimation rasterised
+# silhouettes from 8 evenly-sampled poses. If mean IoU < threshold the
+# decimation is rolled back to the original mesh.
+MESH_DECIMATION_MIN_IOU = 0.985
+MESH_DECIMATION_IOU_VIEWS = 8
+
 # --- Stage 5: TextureBake --------------------------------
 TEXTURE_SIZE = 0
+# Cap auto-resolved texture size (sqrt(W·H)). Manual TEXTURE_SIZE>0
+# bypasses this cap. Set TEXTURE_MAX_SIZE=0 to disable the cap entirely.
+TEXTURE_MAX_SIZE = 2048
 TEXTURE_VIEW_ASSIGN_MODE = "region_gc"
 TEXTURE_VIEW_ASSIGN_MODES: set[str] = {"legacy", "region_gc"}
 TEXTURE_QUALITY_BOOST = False
@@ -177,9 +195,11 @@ _TEXTURE_MASK_BUDGET_RATIO = 0.3
 _TEXTURE_MEM_FALLBACK_MB = 4096.0
 _TEXTURE_SEAM_PAD_ITERS = 8  # dilation iterations for the final UV-seam pad
 
-# xatlas UV atlas face budget — auto-scaling parameters
+# xatlas UV atlas face budget — auto-scaling parameters.
+# _TEXTURE_UV_MAX_FACES acts as a safety net when MESH_DECIMATION is disabled
+# (decimation already happens upstream in scripts/gpu_tsdf.py).
 _TEXTURE_UV_MIN_FACES = 50_000       # 下限: これ以下には簡略化しない
-_TEXTURE_UV_MAX_FACES = 0            # 0=無制限 (並列UV生成により時間制約を撤廃)
+_TEXTURE_UV_MAX_FACES = 300_000      # 0=無制限。Stage 4減面が無効化された場合の保険
 _TEXTURE_UV_BYTES_PER_FACE = 10_000  # xatlasの1面あたり推定メモリ (~10 KB)
 _TEXTURE_UV_RAM_RESERVE_MB = 2048.0  # xatlas以外のパイプライン用に確保するRAM (MB)
 

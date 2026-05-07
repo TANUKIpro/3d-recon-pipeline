@@ -102,6 +102,45 @@ def _build_gpu_tsdf_attempts(
     return attempts
 
 
+def _resolve_mesh_decimation_params(
+    settings: Gs2meshSettings,
+) -> tuple[int, float, int]:
+    """Pick decimation target, IoU gate threshold, and view count.
+
+    Target is derived from VRAM tier × inferred preset; env vars
+    ``MESH_DECIMATION``, ``MESH_TARGET_FACES``, ``MESH_DECIMATION_MIN_IOU``,
+    ``MESH_DECIMATION_IOU_VIEWS`` override.
+    """
+
+    from scripts.config_defaults import (
+        MESH_DECIMATION_IOU_VIEWS,
+        MESH_DECIMATION_MIN_IOU,
+    )
+    from scripts.gs2mesh_config import fields_match_preset
+    from scripts.vram_tier import mesh_decimation_target
+
+    config_fields = settings.to_config_fields()
+    if fields_match_preset(config_fields, "high"):
+        preset = "high"
+    else:
+        preset = "default"
+    target = mesh_decimation_target(preset=preset)
+
+    raw_iou = os.environ.get("MESH_DECIMATION_MIN_IOU", "").strip()
+    try:
+        min_iou = float(raw_iou) if raw_iou else MESH_DECIMATION_MIN_IOU
+    except ValueError:
+        min_iou = MESH_DECIMATION_MIN_IOU
+
+    raw_views = os.environ.get("MESH_DECIMATION_IOU_VIEWS", "").strip()
+    try:
+        n_views = int(raw_views) if raw_views else MESH_DECIMATION_IOU_VIEWS
+    except ValueError:
+        n_views = MESH_DECIMATION_IOU_VIEWS
+
+    return target, min_iou, max(0, n_views)
+
+
 def _run_gpu_tsdf_with_fallbacks(
     *,
     settings: Gs2meshSettings,
@@ -111,6 +150,17 @@ def _run_gpu_tsdf_with_fallbacks(
 ) -> str:
     from scripts.gpu_tsdf import gpu_tsdf_reconstruct
     from scripts.vram_utils import cleanup_pytorch_vram
+
+    mesh_target_faces, mesh_min_iou, mesh_iou_views = (
+        _resolve_mesh_decimation_params(settings)
+    )
+    if mesh_target_faces > 0:
+        print(
+            f"GPU TSDF: mesh decimation target={mesh_target_faces:,} faces "
+            f"(min_iou={mesh_min_iou:.3f}, n_views={mesh_iou_views})"
+        )
+    else:
+        print("GPU TSDF: mesh decimation disabled")
 
     tsdf_device = settings.tsdf_device
     # CPU TSDF has no VRAM OOM to recover from — skip the
@@ -151,6 +201,9 @@ def _run_gpu_tsdf_with_fallbacks(
                 tsdf_closing_kernel_size=attempt_settings.tsdf_closing_kernel_size,
                 block_count=attempt_settings.block_count,
                 tsdf_device=tsdf_device,
+                mesh_target_faces=mesh_target_faces,
+                mesh_min_iou=mesh_min_iou,
+                mesh_iou_views=mesh_iou_views,
                 progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
             )
         except RuntimeError as exc:

@@ -126,6 +126,49 @@ def uses_cpu_tsdf(tier_or_device: "str | Gs2meshSettings | None" = None) -> bool
     return device.lower().startswith("cpu")
 
 
+def mesh_decimation_target(preset: str | None = None) -> int:
+    """Return the target triangle count for Stage 4 mesh decimation.
+
+    Lower-spec tiers (CPU TSDF on t8/t_other) get tighter targets so the
+    final OBJ size and Stage 5/6 wall-time stay bounded on smaller GPUs.
+
+    Honors ``MESH_TARGET_FACES`` env var as an explicit override, and
+    ``MESH_DECIMATION=0`` to disable (returns 0).
+    """
+
+    raw = os.environ.get("MESH_DECIMATION", "").strip().lower()
+    if raw in {"0", "false", "no", "off", "disable", "disabled"}:
+        return 0
+
+    raw_target = os.environ.get("MESH_TARGET_FACES", "").strip()
+    if raw_target:
+        try:
+            val = int(raw_target)
+            return max(0, val)
+        except ValueError:
+            pass
+
+    from scripts.config_defaults import (
+        GS2MESH_PRESET as _DEFAULT_PRESET,
+        MESH_DECIMATION_ENABLED,
+        MESH_TARGET_FACES_DEFAULT,
+        MESH_TARGET_FACES_DEFAULT_CPU,
+        MESH_TARGET_FACES_HIGH,
+        MESH_TARGET_FACES_HIGH_CPU,
+    )
+
+    if not MESH_DECIMATION_ENABLED:
+        return 0
+
+    name = (preset or _DEFAULT_PRESET or "default").strip().lower()
+    is_cpu = uses_cpu_tsdf()
+
+    if name == "high":
+        return MESH_TARGET_FACES_HIGH_CPU if is_cpu else MESH_TARGET_FACES_HIGH
+    # default + custom + anything unknown → conservative default tier value
+    return MESH_TARGET_FACES_DEFAULT_CPU if is_cpu else MESH_TARGET_FACES_DEFAULT
+
+
 def tier_info() -> dict[str, object]:
     """Return a JSON-serialisable snapshot for the dashboard header."""
 

@@ -135,10 +135,16 @@ docker compose run --rm --service-ports \
 | `GS2MESH_TSDF_VOXEL_SIZE` | `0.005` | TSDF ボクセルサイズ (m) |
 | `GS2MESH_TSDF_DEPTH_TRUNC` | `0.04` | TSDF 深度切断距離 (m) |
 | `GS2MESH_USE_MASKS` | `true` | SAM2 マスクを TSDF 統合に使用 |
+| `MESH_DECIMATION` | `1` (有効) | `0` で Stage 4 のメッシュ簡略化を無効化 (旧挙動) |
+| `MESH_TARGET_FACES` | (自動) | 簡略化後の目標三角形数。未指定時は VRAM ティア × プリセットから決定 (default=200K/high=500K、CPU TSDF時は80K/200K) |
+| `MESH_DECIMATION_MIN_IOU` | `0.985` | 簡略化前後の 8 視点シルエット IoU 閾値。下回ると元メッシュへ自動 rollback |
+| `MESH_DECIMATION_IOU_VIEWS` | `8` | IoU 検証に使う視点数。`0` で IoU セーフネットを無効化 |
 | **Stage 5** | | |
 | `TEXTURE_SIZE` | `0` (自動) | テクスチャ解像度。`0` は `round(sqrt(W*H))` を自動適用 |
+| `TEXTURE_MAX_SIZE` | `2048` | 自動モード時の上限。`0` で無制限。`TEXTURE_SIZE>0` (manual) はバイパス |
 | `TEXTURE_VIEW_ASSIGN_MODE` | `region_gc` | view 割当モード (`legacy` / `region_gc`) |
 | `TEXTURE_QUALITY_BOOST` | `false` | 高品質境界 refinement の有効化 |
+| `TEXTURE_UV_MAX_FACES` | `300000` | xatlas 入力の上限 (Stage 4 簡略化が無効化された場合の保険)。`0` で無制限 |
 | **Stage 6** | | |
 | `POST_TEXTURE_CLEANUP_ENABLED` | `true` | Post-texture contact cleanup の有効/無効 |
 | **VRAM** | | |
