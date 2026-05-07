@@ -30,10 +30,13 @@
 ## 詳細フロー
 
 1. メッシュと pose 読み込み、対応フレーム index を解決。
-2. 内部パラメータ取得:
-   - `intrinsics.json` (COLMAP 出力) が存在すれば直接ロード (グリッドサーチをスキップ)
-   - 存在しない場合: FOV グリッドサーチ → Nelder-Mead で `(fx, fy, cx, cy)` 最適化
+2. 内部パラメータ取得 (3 段階の解決順):
+   1. `intrinsics.json` が存在しスキーマ・解像度が一致すれば直接ロード (`_maybe_load_intrinsics`)
+   2. 不在なら **COLMAP `cameras.bin` から直接復元** (`_maybe_load_colmap_intrinsics`) → 復元値を `intrinsics.json` に書き戻す
+   3. それも失敗したら FOV **25°-90°** のグリッドサーチ → Nelder-Mead で `(fx, fy, cx, cy)` を最適化、`source: "estimated"` タグ付きで保存
+   - 解像度ベースの自動 cap は `TEXTURE_MAX_SIZE` (デフォルト 2048) で auto モード時のみ適用
 3. `xatlas.parametrize` で UV 展開 (並列化: `scripts/texture/parallel_uv.py` により空間分割で最大8ワーカー並列実行)。
+   - 入力メッシュが `TEXTURE_UV_MAX_FACES` (デフォルト 300,000) を超える場合は Open3D `simplify_quadric_decimation` で UV proxy を生成。Stage 4 のメッシュ簡略化が無効化されたケースの保険
 4. 全テクセルで Top-K ビューをスコアリング。
    - スコア: 法線角度 + 距離 + 可視性（簡易Zテスト）+ SAM2マスク
    - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
@@ -71,6 +74,8 @@
 | 名前 | 既定値 | 説明 |
 |---|---:|---|
 | `TEXTURE_SIZE` | `0` | 最終テクスチャ解像度。`0` 以下は `round(sqrt(video_width * video_height))` の正方形を自動適用 |
+| `TEXTURE_MAX_SIZE` | `2048` | auto モード時の上限。`0` で無制限。`TEXTURE_SIZE>0` (manual) はバイパス |
+| `TEXTURE_UV_MAX_FACES` | `300000` | xatlas 入力の上限 (Stage 4 簡略化が無効化されたケースの保険)。`0` で無制限 |
 | `TEXTURE_VIEW_ASSIGN_MODE` | `region_gc` | view 割当モード。`legacy` は従来の face lock、`region_gc` は曖昧な連続曲面を region 最適化して single-view 化 |
 | `TEXTURE_OVERSAMPLE` | `2` | 内部解像度倍率 |
 | `TEXTURE_MIN_COS` | `0.2` | 面法線と視線方向の最小余弦 |
@@ -106,7 +111,7 @@
 - **C. 深度バッファ LRU キャッシュ**: 視点ごとの深度バッファを `@lru_cache` でキャッシュし、同一視点の再計算を回避する。
 - **D. 並列 UV アトラス生成** (`scripts/texture/parallel_uv.py`): メッシュを空間分割し、最大8ワーカーで並列に xatlas UV 展開を実行。`_TEXTURE_UV_PARALLEL_MIN_TOTAL_FACES` (10,000) 以下のメッシュでは並列化をスキップ。
 - **E. 内在パラメータ推定の並列化**: `ThreadPoolExecutor` で複数フレームの色スコア評価を並列実行する。
-- **F. COLMAP 内部パラメータ直接利用**: `intrinsics.json` (COLMAP 出力) が存在する場合、FOV グリッドサーチ + Nelder-Mead 最適化をスキップし、推定時間を大幅に短縮する。
+- **F. COLMAP 内部パラメータ直接利用**: `intrinsics.json` (COLMAP 出力) が存在する場合、FOV グリッドサーチ + Nelder-Mead 最適化をスキップし、推定時間を大幅に短縮する。`intrinsics.json` が消失していても `colmap_sparse/0/cameras.bin` を直接読みに行く防御 fallback あり (`_maybe_load_colmap_intrinsics`)。COLMAP のバンドル調整値はテクスチャベイクの正確さに直結するため、特に円筒形・自己類似性のあるオブジェクト (例: カップヌードル) では推定値で代替できない。
 - **G. テクセル UV 座標の事前計算**: 三角形ごとの UV 座標を `np.stack` で事前計算し、`fillConvexPoly` で再利用する。
 - **H. OBJ バッファ書き出し**: OBJ ファイルを文字列リストに蓄積してから一括書き込みする。
 
@@ -124,6 +129,25 @@
 - pose と frame/mask の index 不整合
 - `camera_poses.json` に pose が無い
 - 入力メッシュが空
+
+## 既知の落とし穴: 推定 intrinsics による細部消失
+
+円筒形 (カップ缶など) や自己類似性のあるテクスチャ (繰り返しパターン) では、`_estimate_intrinsics()` の Nelder-Mead 最適化が **sub-pixel スケールで歪んだ局所最適** に収束することがある。フラットな箱型のオブジェクトでは同程度の誤差は問題ないが、Top-K=3 ビューブレンドと組み合わさると細かいテキスト・絵柄が完全消失する。
+
+判別方法: `intrinsics.json` の `source` フィールドを確認する。
+
+| `source` 値 | 経路 | テクスチャ品質への影響 |
+|---|---|---|
+| `colmap:SIMPLE_RADIAL` (など) | Stage 2 が直接書いた COLMAP の bundle adjustment 値 | ✓ 推奨 |
+| `estimated` | テクスチャ stage の grid search + Nelder-Mead | ⚠ 要注意 (細部消失リスク) |
+| (無し) | 古い `_estimate_intrinsics` 出力 (タグなし) | ⚠ 要注意 |
+
+**回避策**:
+
+1. Stage 2 (COLMAP SfM) を完了させ、`<output_dir>/intrinsics.json` が `source: "colmap:..."` 付きで生成されることを確認する。
+2. Stage 5 リスタート時に `intrinsics.json` が削除される問題は `scripts/dashboard/checkpoints.py` で対処済 (cleanup_files から除外)。
+3. `intrinsics.json` 不在でも `colmap_sparse/0/cameras.bin` があれば `_maybe_load_colmap_intrinsics` が自動復元する。
+4. それでも grid search に落ちる場合、FOV 範囲は 25°-90° に拡張済み (狭い FOV close-up shot にも対応)。
 
 ## 参考文献
 

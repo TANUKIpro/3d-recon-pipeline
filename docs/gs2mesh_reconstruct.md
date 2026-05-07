@@ -93,10 +93,25 @@
 | reduced_vram | voxel_size ≥ 0.005, depth_trunc ≥ 0.04, baselines ≤ 20, dilate ≥ 2, block_count ≤ 100K |
 | safe_vram | baselines ≤ 16, dilate ≥ 3, block_count ≤ 75K |
 
-### Step 5: メッシュ抽出
+### Step 5: メッシュ抽出 + デシメーション
 
 - Marching Cubes でメッシュ抽出 → `orient_triangles()` でワインディング修正 → 小クラスタ除去 (`tsdf_cleaning_threshold`)。
+- **メッシュ簡略化** (`MESH_DECIMATION` が有効時): Open3D `simplify_quadric_decimation()` で目標三角形数までデシメートする。Garland-Heckbert QEM がベース。VoxelBlockGrid 由来の頂点色 (RGB) が保持されるため、Stage 5 のキャップ検出 (`cap_region.py`) も従来通り動作する。
+- **シルエット IoU セーフネット**: 簡略化前後のメッシュを 8 視点 (`MESH_DECIMATION_IOU_VIEWS`) で `o3d.t.geometry.RaycastingScene` レンダリング → binary silhouette IoU を計算。閾値 (`MESH_DECIMATION_MIN_IOU`, デフォルト 0.985) を割れば原メッシュへ自動 rollback。缶のリングや皿の縁などの薄物が消えた場合の保険。
 - `object_mesh.ply` としてコピー。
+
+**ターゲット三角形数の解決順序** (`scripts/vram_tier.py::mesh_decimation_target`):
+
+1. `MESH_DECIMATION=0` なら 0 (無効化)
+2. `MESH_TARGET_FACES=<N>` env なら N
+3. それ以外は VRAM ティア × プリセット表から決定:
+
+| ティア | default preset | high preset |
+|---|---:|---:|
+| t18 / t16 / t12 (GPU TSDF) | 200,000 | 500,000 |
+| t8 / t_other (CPU TSDF) | 80,000 | 200,000 |
+
+ターゲットを上回るときのみデシメーションを実行 (`if n_tris <= target: skip`)。
 
 ## プリセット
 
@@ -140,6 +155,10 @@
 | `GS2MESH_TSDF_VOXEL_SIZE` | `0.005` | TSDF ボクセルサイズ (m) |
 | `GS2MESH_TSDF_DEPTH_TRUNC` | `0.04` | TSDF 深度切断距離 (m) |
 | `GS2MESH_USE_MASKS` | `true` | SAM2 マスクを TSDF 統合に使用 |
+| `MESH_DECIMATION` | `1` (有効) | `0` でメッシュ簡略化 + IoU セーフネットを完全に無効化 (旧挙動) |
+| `MESH_TARGET_FACES` | (自動) | 簡略化後の目標三角形数。未指定なら VRAM ティア × プリセット表から解決 |
+| `MESH_DECIMATION_MIN_IOU` | `0.985` | 簡略化前後のシルエット IoU 閾値。下回ると原メッシュへ自動 rollback |
+| `MESH_DECIMATION_IOU_VIEWS` | `8` | IoU 検証に使う視点数。`0` で IoU セーフネットを無効化 (デシメーション結果を常に採用) |
 
 ### 内部パラメータ
 
