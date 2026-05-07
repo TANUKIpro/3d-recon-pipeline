@@ -97,9 +97,14 @@ def _estimate_intrinsics(
         return -(total_err / total_cnt) if total_cnt > 0 else -1.0
 
     # Grid search
+    # Range covers wide-angle (~80°) GoPro-style shots down to telephoto /
+    # close-up cellphone (~25°). Cup_Noodle's true FOV (~33.5°) sat just
+    # below the previous 35° lower bound, forcing Nelder-Mead to start at
+    # a boundary and land in a sub-pixel-skewed local minimum that
+    # destroyed fine texture detail.
     best_score, best_fov = -np.inf, 60
     print("  Grid search over FOV...")
-    fov_values = list(range(35, 85, 2))
+    fov_values = list(range(25, 91, 2))
     for idx, fov in enumerate(fov_values):
         fx = img_w / (2.0 * np.tan(np.radians(fov) / 2.0))
         score = color_score(_make_K(fx, fx, cx_init, cy_init))
@@ -139,4 +144,5 @@ def _estimate_intrinsics(
         "fx": float(fx), "fy": float(fy), "cx": float(cx), "cy": float(cy),
         "image_width": img_w, "image_height": img_h,
         "K": _make_K(fx, fy, cx, cy).tolist(),
+        "source": "estimated",
     }

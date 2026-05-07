@@ -89,6 +89,39 @@ def _maybe_load_intrinsics(
     return data
 
 
+def _maybe_load_colmap_intrinsics(
+    output_path: Path,
+    img_w: int,
+    img_h: int,
+) -> dict | None:
+    """Recover COLMAP intrinsics directly from cameras.bin as a defensive fallback.
+
+    Stage 2 writes ``intrinsics.json`` at the end of SfM, but the file can
+    go missing on resume/restart (e.g., a stale checkpoint cleaning logic
+    wipes it). COLMAP's bundle-adjusted pinhole values are far more
+    accurate than the texture stage's grid-search + Nelder-Mead path,
+    especially on cylindrical or self-similar surfaces where the
+    estimator can fall into a sub-pixel-skewed local minimum and destroy
+    fine texture detail. Read straight from cameras.bin so the bake is
+    independent of intrinsics.json's presence.
+    """
+    cameras_bin = output_path / "colmap_sparse" / "0" / "cameras.bin"
+    if not cameras_bin.exists():
+        return None
+    try:
+        from scripts.stage_colmap_sfm import _read_colmap_intrinsics
+
+        data = _read_colmap_intrinsics(cameras_bin.parent)
+    except Exception as exc:  # pragma: no cover — best-effort fallback
+        print(f"  COLMAP intrinsics fallback failed: {exc}")
+        return None
+    if data is None:
+        return None
+    if int(data.get("image_width", 0)) != img_w or int(data.get("image_height", 0)) != img_h:
+        return None
+    return data
+
+
 def _resolve_intrinsics_point_cloud(
     output_path: Path,
     mesh_vertices: np.ndarray,
@@ -273,6 +306,18 @@ def bake_texture(
     # via the grid-search + Nelder-Mead path in _estimate_intrinsics (which
     # dominates the stage's wall-clock).
     intrinsics = _maybe_load_intrinsics(output_path / "intrinsics.json", img_w, img_h)
+    if intrinsics is None:
+        # Defensive fallback: pull directly from COLMAP cameras.bin if the
+        # JSON copy went missing (e.g., a checkpoint reset wiped it).
+        intrinsics = _maybe_load_colmap_intrinsics(output_path, img_w, img_h)
+        if intrinsics is not None:
+            print(
+                f"  intrinsics.json missing; recovered from COLMAP "
+                f"cameras.bin (source={intrinsics.get('source', 'colmap')})"
+            )
+            with open(output_path / "intrinsics.json", "w") as f_out:
+                json.dump(intrinsics, f_out, indent=2)
+
     if intrinsics is not None:
         source = intrinsics.get("source", "cached")
         print(f"Loaded camera intrinsics from {output_path / 'intrinsics.json'} (source={source})")

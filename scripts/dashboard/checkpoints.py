@@ -131,7 +131,13 @@ _CHECKPOINTS: dict[int, Any] = {
             "s5.intrinsics",
             label="Estimate camera intrinsics",
             patterns=_patterns(r"estimating camera intrinsics|intrinsics optimization complete|camera intrinsics estimated"),
-            cleanup_files=("intrinsics.json",),
+            # Do NOT clean up intrinsics.json: it may have been written by
+            # Stage 2 (COLMAP) with the optimal pinhole values from bundle
+            # adjustment. Wiping it here forces the bake stage onto its
+            # grid-search fallback, which can land on a sub-pixel-skewed
+            # local minimum on cylindrical / self-similar surfaces and
+            # destroy fine texture detail (see Cup_Noodle regression).
+            cleanup_files=(),
         ),
         _checkpoint(
             "s5.uv",
@@ -209,7 +215,9 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
         "files": ("ground_plane.json",),
     },
     4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
-    5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
+    # intrinsics.json is intentionally omitted here too — see s5.intrinsics
+    # checkpoint comment. COLMAP's intrinsics is the authoritative source.
+    5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png")},
     6: {
         "dirs": ("post_texture_contact_cleanup",),
         # The cleaned mesh outputs live under the dynamic ``{object_name}/``
