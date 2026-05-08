@@ -19,7 +19,7 @@ from scripts.config_defaults import (
     TEXTURE_SHARPEN,
     _TEXTURE_SEAM_PAD_ITERS,
 )
-from scripts.mesh_orientation import orient_mesh_outward
+from scripts.mesh_orientation import orient_mesh_for_cameras
 from scripts.output_layout import (
     colmap_sparse_dir,
     intrinsics_path as _intrinsics_path,
@@ -460,14 +460,37 @@ def bake_texture(
     _uv_dt = _time.monotonic() - _uv_t0
     print(f"  UV atlas generated in {_uv_dt:.1f}s")
     new_vertices = uv_vertices[vmapping]
-    new_faces, flipped_winding, ratio_before, ratio_after = orient_mesh_outward(
-        new_vertices, new_faces
+    orientation = orient_mesh_for_cameras(
+        new_vertices, new_faces, poses
     )
+    new_faces = orientation.faces
     print(f"  {len(new_vertices)} verts, {len(new_faces)} faces")
-    if flipped_winding:
+    if orientation.camera_ratio_before is not None and orientation.camera_ratio_after is not None:
+        print(
+            "  Orientation check: source=%s, camera_facing supplied/flipped %.3f/%.3f"
+            % (
+                orientation.source,
+                orientation.camera_ratio_before,
+                orientation.camera_ratio_after,
+            )
+        )
+    if orientation.flipped:
         print(
             "  Orientation fix: flipped UV faces "
-            f"(outward_ratio {ratio_before:.3f} -> {ratio_after:.3f})"
+            "via %s (outward_ratio %s -> %s)"
+            % (
+                orientation.source,
+                (
+                    f"{orientation.outward_ratio_before:.3f}"
+                    if orientation.outward_ratio_before is not None
+                    else "n/a"
+                ),
+                (
+                    f"{orientation.outward_ratio_after:.3f}"
+                    if orientation.outward_ratio_after is not None
+                    else "n/a"
+                ),
+            )
         )
 
     # Face normals

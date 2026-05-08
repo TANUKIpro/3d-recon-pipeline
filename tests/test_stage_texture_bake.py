@@ -1466,9 +1466,21 @@ class BakeTextureRegressionTests(unittest.TestCase):
                             "scripts.texture.bake._estimate_intrinsics",
                             return_value=intrinsics,
                         ):
+                            def fake_orient(vertices, faces, poses):
+                                del vertices, poses
+                                return types.SimpleNamespace(
+                                    faces=faces,
+                                    flipped=False,
+                                    outward_ratio_before=1.0,
+                                    outward_ratio_after=1.0,
+                                    camera_ratio_before=1.0,
+                                    camera_ratio_after=1.0,
+                                    source="camera",
+                                )
+
                             with patch(
-                                "scripts.texture.bake.orient_mesh_outward",
-                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                                "scripts.texture.bake.orient_mesh_for_cameras",
+                                side_effect=fake_orient,
                             ):
                                 result = bake_texture(
                                     str(mesh_path),
@@ -1540,9 +1552,9 @@ class BakeTextureRegressionTests(unittest.TestCase):
 
             def fake_eval_samples(
                 pos3d, normals, c2w, K, img_w, img_h, mask_bool, depth_buffer,
-                min_cos, angle_exp, dist_pow, device="cpu",
+                min_cos, angle_exp, dist_pow, device="cpu", dist_coeffs=None,
             ):
-                del normals, K, img_w, img_h, mask_bool, depth_buffer, device
+                del normals, K, img_w, img_h, mask_bool, depth_buffer, device, dist_coeffs
                 n = len(pos3d)
                 px = np.linspace(1.0, 6.0, n, dtype=np.float64)
                 py = np.linspace(6.0, 1.0, n, dtype=np.float64)
@@ -1577,9 +1589,21 @@ class BakeTextureRegressionTests(unittest.TestCase):
                             "scripts.texture.bake._estimate_intrinsics",
                             return_value=intrinsics,
                         ):
+                            def fake_orient(vertices, faces, poses):
+                                del vertices, poses
+                                return types.SimpleNamespace(
+                                    faces=faces,
+                                    flipped=False,
+                                    outward_ratio_before=1.0,
+                                    outward_ratio_after=1.0,
+                                    camera_ratio_before=1.0,
+                                    camera_ratio_after=1.0,
+                                    source="camera",
+                                )
+
                             with patch(
-                                "scripts.texture.bake.orient_mesh_outward",
-                                side_effect=lambda vertices, faces: (faces, False, 1.0, 1.0),
+                                "scripts.texture.bake.orient_mesh_for_cameras",
+                                side_effect=fake_orient,
                             ):
                                 with patch(
                                     "scripts.texture.bake._evaluate_view_samples",

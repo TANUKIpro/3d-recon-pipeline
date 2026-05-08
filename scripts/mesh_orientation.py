@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
+
+
+@dataclass(frozen=True, slots=True)
+class CameraOrientationResult:
+    """Result of camera-aware mesh winding orientation."""
+
+    faces: np.ndarray
+    flipped: bool
+    outward_ratio_before: float | None
+    outward_ratio_after: float | None
+    camera_ratio_before: float | None
+    camera_ratio_after: float | None
+    source: str
 
 
 def face_outward_ratio(vertices: np.ndarray, faces: np.ndarray) -> float | None:
@@ -46,6 +61,140 @@ def orient_faces_outward(
     flipped = tris[:, [0, 2, 1]].copy()
     ratio_after = face_outward_ratio(vertices, flipped)
     return flipped, True, ratio_before, ratio_after
+
+
+def _camera_centers_from_poses(poses: np.ndarray) -> np.ndarray | None:
+    arr = np.asarray(poses, dtype=np.float64)
+    if arr.ndim == 3 and arr.shape[1:] == (4, 4):
+        centers = arr[:, :3, 3]
+    elif arr.ndim == 2 and arr.shape[1] == 3:
+        centers = arr
+    else:
+        return None
+
+    finite = np.all(np.isfinite(centers), axis=1)
+    centers = centers[finite]
+    if centers.size == 0:
+        return None
+    return centers
+
+
+def camera_facing_ratio(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    poses: np.ndarray,
+    *,
+    chunk_size: int = 10000,
+) -> tuple[float | None, float | None]:
+    """Return face-normal agreement ratios against the nearest camera.
+
+    The first ratio is for the supplied winding. The second ratio is for the
+    globally flipped winding. Texture baking samples only surfaces seen by the
+    reconstruction cameras, so this is a stronger signal than pure shape
+    heuristics for open or non-convex object meshes.
+    """
+    verts = np.asarray(vertices, dtype=np.float64)
+    tris = np.asarray(faces, dtype=np.int64)
+    camera_centers = _camera_centers_from_poses(poses)
+    if camera_centers is None:
+        return None, None
+    if verts.size == 0 or tris.size == 0:
+        return None, None
+    if tris.ndim != 2 or tris.shape[1] != 3:
+        return None, None
+
+    tri_pts = verts[tris]
+    normals = np.cross(tri_pts[:, 1] - tri_pts[:, 0], tri_pts[:, 2] - tri_pts[:, 0])
+    normal_norm = np.linalg.norm(normals, axis=1)
+    valid = normal_norm > 1e-12
+    if not np.any(valid):
+        return None, None
+
+    normals = normals[valid] / normal_norm[valid, None]
+    tri_centers = tri_pts[valid].mean(axis=1)
+
+    dots: list[np.ndarray] = []
+    step = max(1, int(chunk_size))
+    for start in range(0, len(tri_centers), step):
+        centers = tri_centers[start:start + step]
+        delta = camera_centers[None, :, :] - centers[:, None, :]
+        dist2 = np.einsum("ijk,ijk->ij", delta, delta)
+        nearest = camera_centers[np.argmin(dist2, axis=1)]
+        to_camera = nearest - centers
+        to_camera_norm = np.linalg.norm(to_camera, axis=1)
+        usable = to_camera_norm > 1e-12
+        if not np.any(usable):
+            continue
+        dirs = to_camera[usable] / to_camera_norm[usable, None]
+        chunk_normals = normals[start:start + len(centers)][usable]
+        dots.append(np.einsum("ij,ij->i", chunk_normals, dirs))
+
+    if not dots:
+        return None, None
+
+    all_dots = np.concatenate(dots)
+    if all_dots.size == 0:
+        return None, None
+    return float(np.mean(all_dots > 0.0)), float(np.mean(all_dots < 0.0))
+
+
+def orient_mesh_for_cameras(
+    vertices: np.ndarray,
+    faces: np.ndarray,
+    poses: np.ndarray,
+    *,
+    min_camera_ratio: float = 0.6,
+    min_camera_margin: float = 0.15,
+) -> CameraOrientationResult:
+    """Orient mesh winding using camera-facing normals before shape heuristics.
+
+    Returns a dataclass so callers can log both the camera decision and the
+    fallback shape heuristic without changing the legacy orientation helpers.
+    """
+    tris = np.asarray(faces)
+    outward_before = face_outward_ratio(vertices, tris)
+    camera_before, camera_after = camera_facing_ratio(vertices, tris, poses)
+
+    if camera_before is not None and camera_after is not None:
+        margin = float(min_camera_margin)
+        min_ratio = float(min_camera_ratio)
+        if camera_before >= min_ratio and camera_before >= camera_after + margin:
+            return CameraOrientationResult(
+                faces=tris,
+                flipped=False,
+                outward_ratio_before=outward_before,
+                outward_ratio_after=outward_before,
+                camera_ratio_before=camera_before,
+                camera_ratio_after=camera_after,
+                source="camera",
+            )
+        if camera_after >= min_ratio and camera_after >= camera_before + margin:
+            flipped_faces = tris[:, [0, 2, 1]].copy()
+            outward_after = face_outward_ratio(vertices, flipped_faces)
+            return CameraOrientationResult(
+                faces=flipped_faces,
+                flipped=True,
+                outward_ratio_before=outward_before,
+                outward_ratio_after=outward_after,
+                camera_ratio_before=camera_before,
+                camera_ratio_after=camera_after,
+                source="camera",
+            )
+
+    fixed_faces, flipped, _, outward_after = orient_mesh_outward(vertices, tris)
+    if flipped and camera_before is not None:
+        camera_fixed = camera_after
+    else:
+        camera_fixed = camera_before
+    return CameraOrientationResult(
+        faces=fixed_faces,
+        flipped=flipped,
+        outward_ratio_before=outward_before,
+        outward_ratio_after=outward_after,
+        camera_ratio_before=camera_before,
+        camera_ratio_after=camera_fixed,
+        source="boundary_fallback",
+    )
 
 
 def _boundary_face_vote(
@@ -141,4 +290,3 @@ def orient_mesh_outward(
     flipped = tris[:, [0, 2, 1]].copy()
     ratio_after = face_outward_ratio(vertices, flipped)
     return flipped, True, ratio_before, ratio_after
-

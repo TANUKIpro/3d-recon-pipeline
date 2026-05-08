@@ -2,7 +2,13 @@ import unittest
 
 import numpy as np
 
-from scripts.mesh_orientation import face_outward_ratio, orient_faces_outward, orient_mesh_outward
+from scripts.mesh_orientation import (
+    camera_facing_ratio,
+    face_outward_ratio,
+    orient_faces_outward,
+    orient_mesh_for_cameras,
+    orient_mesh_outward,
+)
 
 
 class MeshOrientationTests(unittest.TestCase):
@@ -219,6 +225,74 @@ class OrientMeshOutwardTests(unittest.TestCase):
         np.testing.assert_array_equal(result_faces, faces)
 
 
+class OrientMeshForCamerasTests(unittest.TestCase):
+    @staticmethod
+    def _make_x_plane(normal_sign: int = -1) -> tuple[np.ndarray, np.ndarray]:
+        verts = np.array(
+            [
+                [1.0, -1.0, -1.0],
+                [1.0, 1.0, -1.0],
+                [1.0, 1.0, 1.0],
+                [1.0, -1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        pos_x_faces = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+        if normal_sign > 0:
+            return verts, pos_x_faces
+        return verts, pos_x_faces[:, [0, 2, 1]]
+
+    @staticmethod
+    def _make_poses(*centers: tuple[float, float, float]) -> np.ndarray:
+        poses = []
+        for center in centers:
+            mat = np.eye(4, dtype=np.float64)
+            mat[:3, 3] = np.array(center, dtype=np.float64)
+            poses.append(mat)
+        return np.array(poses, dtype=np.float64)
+
+    def test_camera_facing_ratio_scores_supplied_and_flipped_winding(self) -> None:
+        verts, faces = self._make_x_plane(normal_sign=-1)
+        poses = self._make_poses((-3.0, 0.0, 0.0))
+
+        before, after = camera_facing_ratio(verts, faces, poses)
+
+        self.assertEqual(before, 1.0)
+        self.assertEqual(after, 0.0)
+
+    def test_camera_vote_overrides_boundary_vote_when_open_surface_faces_camera(self) -> None:
+        verts, faces = self._make_x_plane(normal_sign=-1)
+        poses = self._make_poses((-3.0, 0.0, 0.0))
+
+        result = orient_mesh_for_cameras(verts, faces, poses)
+
+        self.assertFalse(result.flipped)
+        self.assertEqual(result.source, "camera")
+        self.assertEqual(result.camera_ratio_before, 1.0)
+        self.assertEqual(result.camera_ratio_after, 0.0)
+        np.testing.assert_array_equal(result.faces, faces)
+
+    def test_camera_vote_flips_reversed_observed_surface(self) -> None:
+        verts, faces = self._make_x_plane(normal_sign=1)
+        poses = self._make_poses((-3.0, 0.0, 0.0))
+
+        result = orient_mesh_for_cameras(verts, faces, poses)
+
+        self.assertTrue(result.flipped)
+        self.assertEqual(result.source, "camera")
+        self.assertEqual(result.camera_ratio_before, 0.0)
+        self.assertEqual(result.camera_ratio_after, 1.0)
+        np.testing.assert_array_equal(result.faces, faces[:, [0, 2, 1]])
+
+    def test_falls_back_to_boundary_vote_without_usable_cameras(self) -> None:
+        verts, faces = OrientMeshOutwardTests._make_box(inward=True)
+        result = orient_mesh_for_cameras(verts, faces, np.empty((0, 4, 4)))
+
+        self.assertTrue(result.flipped)
+        self.assertEqual(result.source, "boundary_fallback")
+        self.assertIsNone(result.camera_ratio_before)
+        self.assertIsNone(result.camera_ratio_after)
+
+
 if __name__ == "__main__":
     unittest.main()
-
