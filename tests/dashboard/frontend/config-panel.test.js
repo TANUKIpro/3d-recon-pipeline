@@ -183,6 +183,7 @@ describe('ConfigPanel', () => {
         'gs2mesh_preset', 'gs2mesh_gs_iterations', 'gs2mesh_runtime_profile',
         'gs2mesh_stereo_model', 'gs2mesh_tsdf_voxel_size',
         'gs2mesh_tsdf_depth_trunc', 'gs2mesh_use_masks',
+        'gs2mesh_mask_depth_mode',
         'texture_size', 'texture_view_assign_mode', 'texture_quality_boost',
       ];
       for (const key of expectedKeys) {
@@ -203,6 +204,7 @@ describe('ConfigPanel', () => {
       expect(config.max_frames).toBeGreaterThanOrEqual(2);
       expect(config.gs2mesh_preset).toBe('default');
       expect(config.gs2mesh_runtime_profile).toBe('auto');
+      expect(config.gs2mesh_mask_depth_mode).toBe('crop');
       expect(config.texture_view_assign_mode).toBe('legacy');
       expect(config.texture_quality_boost).toBe(false);
     });
@@ -230,6 +232,12 @@ describe('ConfigPanel', () => {
       const config = panel.getConfig();
       expect(config.gs2mesh_preset).toBe('high');
     });
+
+    it('reads the selected gs2mesh mask depth mode', () => {
+      document.getElementById('cfg-gs2mesh-mask-depth-mode').value = 'replace';
+      const config = panel.getConfig();
+      expect(config.gs2mesh_mask_depth_mode).toBe('replace');
+    });
   });
 
   describe('gs2mesh presets', () => {
@@ -254,6 +262,19 @@ describe('ConfigPanel', () => {
 
       expect(presetSelect.value).toBe('custom');
       expect(panel.getConfig().gs2mesh_preset_base).toBe('high');
+    });
+
+    it('keeps quality preset when only SAM2 geometry mode changes', () => {
+      const presetSelect = document.getElementById('cfg-gs2mesh-preset');
+      presetSelect.value = 'high';
+      presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+
+      const mode = document.getElementById('cfg-gs2mesh-mask-depth-mode');
+      mode.value = 'replace';
+      mode.dispatchEvent(new Event('change', { bubbles: true }));
+
+      expect(presetSelect.value).toBe('high');
+      expect(panel.getConfig().gs2mesh_mask_depth_mode).toBe('replace');
     });
   });
 

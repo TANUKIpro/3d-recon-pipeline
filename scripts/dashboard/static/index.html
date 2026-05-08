@@ -376,6 +376,14 @@
                   Apply SAM2 masks to depth maps
                 </label>
               </div>
+              <div class="form-group">
+                <label for="cfg-gs2mesh-mask-depth-mode">SAM2 Geometry Mode</label>
+                <select id="cfg-gs2mesh-mask-depth-mode">
+                  <option value="crop" selected>Stereo masked</option>
+                  <option value="fill">Hybrid fill</option>
+                  <option value="replace">SAM2 primary</option>
+                </select>
+              </div>
             </div>
           </details>
         </div>

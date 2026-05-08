@@ -15,6 +15,7 @@ from scripts.config_defaults import (
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
+    GS2MESH_MASK_DEPTH_MODES,
     GS2MESH_PRESET,
     GS2MESH_PRESETS,
     GS2MESH_GS_ITERATIONS,
@@ -49,6 +50,7 @@ from scripts.dashboard.state import PipelineConfig
 from scripts.gs2mesh_config import (
     GS2MESH_CONFIG_FIELDS,
     GS2MESH_INTERNAL_CONFIG_FIELDS,
+    GS2MESH_PRESET_CONFIG_FIELDS,
     GS2MESH_PUBLIC_CONFIG_FIELDS,
     config_fields_from_preset,
     fields_match_preset,
@@ -111,6 +113,7 @@ _GS2MESH_ENV_FIELD_MAP: dict[str, str] = {
     "gs2mesh_tsdf_voxel_size": "GS2MESH_TSDF_VOXEL_SIZE",
     "gs2mesh_tsdf_depth_trunc": "GS2MESH_TSDF_DEPTH_TRUNC",
     "gs2mesh_use_masks": "GS2MESH_USE_MASKS",
+    "gs2mesh_mask_depth_mode": "GS2MESH_MASK_DEPTH_MODE",
 }
 _GS2MESH_PRESET_CHOICES = set(GS2MESH_PRESETS) | {"custom"}
 
@@ -135,6 +138,8 @@ def _parse_gs2mesh_field_value(
         return max(0.005, parse_float(value, float(fallback)))
     if field_name == "gs2mesh_use_masks":
         return parse_bool(value, bool(fallback))
+    if field_name == "gs2mesh_mask_depth_mode":
+        return parse_choice(value, GS2MESH_MASK_DEPTH_MODES, str(fallback))
     if field_name == "gs2mesh_tsdf_scale":
         return max(1e-6, parse_float(value, float(fallback)))
     if field_name in {
@@ -185,6 +190,16 @@ def _apply_gs2mesh_env_fallbacks(
             env_map.get(env_name),
             values[field_name],
         )
+    if "GS2MESH_MASK_DEPTH_MODE" not in env_map:
+        legacy_mode = env_map.get("GS2MESH_SILHOUETTE_DEPTH_MODE")
+        if legacy_mode:
+            values["gs2mesh_mask_depth_mode"] = _parse_gs2mesh_field_value(
+                "gs2mesh_mask_depth_mode",
+                legacy_mode,
+                values["gs2mesh_mask_depth_mode"],
+            )
+        elif parse_bool(env_map.get("GS2MESH_SILHOUETTE_FILL"), False):
+            values["gs2mesh_mask_depth_mode"] = "fill"
     return values
 
 
@@ -262,6 +277,9 @@ def _resolve_gs2mesh_config(
         key for key in explicit if key in GS2MESH_CONFIG_FIELDS
     }
     values = _apply_gs2mesh_overrides(values, raw, explicit_stage4_fields)
+    explicit_preset_fields = {
+        key for key in explicit if key in GS2MESH_PRESET_CONFIG_FIELDS
+    }
 
     if "gs2mesh_preset" in explicit and selected_preset in GS2MESH_PRESETS:
         final_preset = (
@@ -269,7 +287,7 @@ def _resolve_gs2mesh_config(
             if fields_match_preset(values, selected_preset)
             else "custom"
         )
-    elif explicit_stage4_fields:
+    elif explicit_preset_fields:
         final_preset = "custom"
     elif selected_preset in GS2MESH_PRESETS and fields_match_preset(values, selected_preset):
         final_preset = selected_preset
@@ -343,6 +361,7 @@ def build_pipeline_config(
         gs2mesh_tsdf_voxel_size=float(gs2mesh_cfg["gs2mesh_tsdf_voxel_size"]),
         gs2mesh_tsdf_depth_trunc=float(gs2mesh_cfg["gs2mesh_tsdf_depth_trunc"]),
         gs2mesh_use_masks=bool(gs2mesh_cfg["gs2mesh_use_masks"]),
+        gs2mesh_mask_depth_mode=str(gs2mesh_cfg["gs2mesh_mask_depth_mode"]),
         gs2mesh_tsdf_scale=float(gs2mesh_cfg["gs2mesh_tsdf_scale"]),
         gs2mesh_tsdf_min_depth_baselines=int(gs2mesh_cfg["gs2mesh_tsdf_min_depth_baselines"]),
         gs2mesh_tsdf_max_depth_baselines=int(gs2mesh_cfg["gs2mesh_tsdf_max_depth_baselines"]),

@@ -17,6 +17,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from scripts.config_defaults import (
+    GS2MESH_MASK_DEPTH_MODE,
+    GS2MESH_MASK_DEPTH_MODES,
     GS2MESH_RUNTIME_PROFILE,
     GS2MESH_RUNTIME_PROFILES,
 )
@@ -77,6 +79,30 @@ def _is_gpu_tsdf_oom_error(exc: BaseException) -> bool:
         "out of memory" in text
         and ("cuda" in text or "open3d" in text)
     )
+
+
+def _normalize_mask_depth_mode(value: object, fallback: str = GS2MESH_MASK_DEPTH_MODE) -> str:
+    candidate = str(value or "").strip().lower()
+    if candidate in GS2MESH_MASK_DEPTH_MODES:
+        return candidate
+    if candidate in {"visual_hull", "visual-hull", "override"}:
+        return "replace"
+    if candidate in {"holes", "hole_fill", "hole-fill"}:
+        return "fill"
+    return fallback
+
+
+def _resolve_mask_depth_mode_env(fallback: str = GS2MESH_MASK_DEPTH_MODE) -> str:
+    raw = os.environ.get("GS2MESH_MASK_DEPTH_MODE", "").strip()
+    if raw:
+        return _normalize_mask_depth_mode(raw, fallback)
+    legacy_raw = os.environ.get("GS2MESH_SILHOUETTE_DEPTH_MODE", "").strip()
+    if legacy_raw:
+        return _normalize_mask_depth_mode(legacy_raw, fallback)
+    legacy_fill = os.environ.get("GS2MESH_SILHOUETTE_FILL", "").strip().lower()
+    if legacy_fill in {"1", "true", "yes", "on"}:
+        return "fill"
+    return fallback
 
 
 def _build_gpu_tsdf_attempts(
@@ -229,6 +255,22 @@ def _run_gpu_tsdf_with_fallbacks(
     else:
         print("GPU TSDF: mesh smoothing disabled")
 
+    from scripts.config_defaults import (
+        GS2MESH_SILHOUETTE_VOXELS,
+        GS2MESH_SILHOUETTE_VOXELS_HIGH,
+    )
+    from scripts.gs2mesh_config import fields_match_preset
+
+    silhouette_voxels = (
+        GS2MESH_SILHOUETTE_VOXELS_HIGH
+        if fields_match_preset(
+            settings.to_config_fields(),
+            "high",
+            public_only=True,
+        )
+        else GS2MESH_SILHOUETTE_VOXELS
+    )
+
     tsdf_device = settings.tsdf_device
     # CPU TSDF has no VRAM OOM to recover from — skip the
     # VRAM-reduction fallback ladder entirely so errors surface cleanly.
@@ -275,6 +317,8 @@ def _run_gpu_tsdf_with_fallbacks(
                 mesh_smooth_lambda=mesh_smooth_lambda,
                 mesh_smooth_mu=mesh_smooth_mu,
                 mesh_smooth_min_iou=mesh_smooth_min_iou,
+                mask_depth_mode=attempt_settings.mask_depth_mode,
+                silhouette_voxel_resolution=silhouette_voxels,
                 progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
             )
         except RuntimeError as exc:
@@ -303,6 +347,7 @@ def run_gs2mesh(
     tsdf_voxel_size: float = 0.005,
     tsdf_depth_trunc: float = 0.04,
     use_masks: bool = True,
+    mask_depth_mode: str | None = None,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
@@ -330,6 +375,11 @@ def run_gs2mesh(
                 "tsdf_voxel_size": tsdf_voxel_size,
                 "tsdf_depth_trunc": tsdf_depth_trunc,
                 "use_masks": use_masks,
+                "mask_depth_mode": (
+                    _normalize_mask_depth_mode(mask_depth_mode)
+                    if mask_depth_mode is not None
+                    else _resolve_mask_depth_mode_env()
+                ),
             }
         )
 
@@ -503,6 +553,10 @@ def run_gs2mesh(
 
     log_vram("after stereo depth subprocess exit")
     cleanup_pytorch_vram()
+
+    if use_masks and mask_dir:
+        _report(79.0, "Preparing SAM2 masks for TSDF fusion")
+        _materialize_tsdf_masks(gs2mesh_output, mask_dir)
 
     # Step 3: GPU TSDF fusion (replaces gs2mesh CPU TSDF).
     _report(80.0, "GPU TSDF fusion")
@@ -1357,7 +1411,93 @@ def _iter_camera_string_fields(value: object) -> list[str]:
     return results
 
 
-def _resolve_camera_frame_index(camera_entry: dict[str, object]) -> int:
+def _extract_frame_index_from_text(text: str) -> int | None:
+    path = Path(text)
+    search_space = [path.stem, path.name, text]
+    for candidate_text in search_space:
+        matches = re.findall(r"(?<!\d)(\d{5})(?!\d)", candidate_text)
+        if len(matches) == 1:
+            return int(matches[0])
+    return None
+
+
+def _load_pose_frame_index_lookup(
+    mask_root: Path,
+) -> list[tuple[int, "np.ndarray"]]:
+    """Load frame-indexed COLMAP poses adjacent to the SAM2 mask directory."""
+    import numpy as np
+
+    for parent in (mask_root, *mask_root.parents):
+        pose_path = parent / "p2_colmap" / "camera_poses.json"
+        if not pose_path.is_file():
+            continue
+        with pose_path.open("r", encoding="utf-8") as f:
+            pose_data = json.load(f)
+        if not isinstance(pose_data, list):
+            continue
+
+        lookup: list[tuple[int, np.ndarray]] = []
+        for record in pose_data:
+            if not isinstance(record, dict):
+                continue
+            frame_name = record.get("frame_name")
+            if not isinstance(frame_name, str):
+                continue
+            frame_idx = _extract_frame_index_from_text(frame_name)
+            matrix = record.get("transform_matrix")
+            if frame_idx is None or not isinstance(matrix, list):
+                continue
+            pose = np.asarray(matrix, dtype=np.float64)
+            if pose.shape == (4, 4):
+                lookup.append((frame_idx, pose))
+        if lookup:
+            return lookup
+    return []
+
+
+def _resolve_camera_frame_index_by_pose(
+    camera_entry: dict[str, object],
+    pose_lookup: list[tuple[int, "np.ndarray"]],
+) -> int | None:
+    """Resolve a frame index by matching gs2mesh camera pose to COLMAP poses."""
+    if not pose_lookup:
+        return None
+
+    import numpy as np
+
+    extrinsic = camera_entry.get("extrinsic")
+    if not isinstance(extrinsic, list):
+        return None
+    camera_pose = np.asarray(extrinsic, dtype=np.float64)
+    if camera_pose.shape != (4, 4):
+        return None
+
+    camera_pos = camera_pose[:3, 3]
+    best_idx: int | None = None
+    best_dist = float("inf")
+    second_dist = float("inf")
+    for frame_idx, pose in pose_lookup:
+        dist = float(np.linalg.norm(camera_pos - pose[:3, 3]))
+        if dist < best_dist:
+            second_dist = best_dist
+            best_dist = dist
+            best_idx = frame_idx
+        elif dist < second_dist:
+            second_dist = dist
+
+    if best_idx is None:
+        return None
+    if best_dist <= 1e-3:
+        return best_idx
+    if best_dist <= 5e-2 and best_dist * 10.0 < second_dist:
+        return best_idx
+    return None
+
+
+def _resolve_camera_frame_index(
+    camera_entry: dict[str, object],
+    pose_lookup: list[tuple[int, "np.ndarray"]] | None = None,
+) -> int:
     """Resolve the original 5-digit frame index from gs2mesh camera metadata."""
     priority_keys = (
         "image_name",
@@ -1378,20 +1518,22 @@ def _resolve_camera_frame_index(camera_entry: dict[str, object]) -> int:
     candidates: list[int] = []
     seen: set[int] = set()
     for text in candidate_strings:
-        path = Path(text)
-        search_space = [path.stem, path.name, text]
-        for candidate_text in search_space:
-            matches = re.findall(r"(?<!\d)(\d{5})(?!\d)", candidate_text)
-            for match in matches:
-                value = int(match)
-                if value not in seen:
-                    candidates.append(value)
-                    seen.add(value)
+        value = _extract_frame_index_from_text(text)
+        if value is not None and value not in seen:
+            candidates.append(value)
+            seen.add(value)
         if candidates:
             break
 
     if len(candidates) == 1:
         return candidates[0]
+    if not candidates and pose_lookup:
+        pose_match = _resolve_camera_frame_index_by_pose(
+            camera_entry,
+            pose_lookup,
+        )
+        if pose_match is not None:
+            return pose_match
     if not candidates:
         raise RuntimeError(
             "Could not resolve frame index from gs2mesh camera_data entry"
@@ -1419,6 +1561,7 @@ def _materialize_tsdf_masks(gs2mesh_output: Path, mask_dir: str | Path) -> None:
     if not isinstance(camera_data, list):
         raise RuntimeError("camera_data.json must contain a list of camera entries")
 
+    pose_lookup = _load_pose_frame_index_lookup(mask_root)
     for cam_idx, camera_record in enumerate(camera_data):
         if not isinstance(camera_record, dict):
             raise RuntimeError(
@@ -1429,7 +1572,7 @@ def _materialize_tsdf_masks(gs2mesh_output: Path, mask_dir: str | Path) -> None:
             raise RuntimeError(
                 f"camera_data.json entry {cam_idx} is missing a 'left' object"
             )
-        frame_idx = _resolve_camera_frame_index(left_entry)
+        frame_idx = _resolve_camera_frame_index(left_entry, pose_lookup)
         mask_path = mask_root / f"{frame_idx:05d}.png"
         if not mask_path.is_file():
             raise RuntimeError(

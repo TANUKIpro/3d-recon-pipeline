@@ -238,6 +238,11 @@ export function buildConfigPanelDOM() {
       <input type="number" id="cfg-gs2mesh-tsdf-voxel-size" value="0.005">
       <input type="number" id="cfg-gs2mesh-tsdf-depth-trunc" value="0.04">
       <input type="checkbox" id="cfg-gs2mesh-use-masks" checked>
+      <select id="cfg-gs2mesh-mask-depth-mode">
+        <option value="crop" selected>Stereo masked</option>
+        <option value="fill">Hybrid fill</option>
+        <option value="replace">SAM2 primary</option>
+      </select>
 
       <select id="cfg-texture-size">
         <option value="0">Auto</option>

@@ -62,6 +62,7 @@ export class ConfigPanel {
       gs2mesh_tsdf_voxel_size: document.getElementById('cfg-gs2mesh-tsdf-voxel-size'),
       gs2mesh_tsdf_depth_trunc: document.getElementById('cfg-gs2mesh-tsdf-depth-trunc'),
       gs2mesh_use_masks: document.getElementById('cfg-gs2mesh-use-masks'),
+      gs2mesh_mask_depth_mode: document.getElementById('cfg-gs2mesh-mask-depth-mode'),
 
       // Stage 5: Texture Bake
       texture_size: document.getElementById('cfg-texture-size'),
@@ -206,6 +207,7 @@ export class ConfigPanel {
         0.04,
       ),
       gs2mesh_use_masks: this._inputs.gs2mesh_use_masks?.checked ?? true,
+      gs2mesh_mask_depth_mode: this._inputs.gs2mesh_mask_depth_mode?.value || 'crop',
 
       // Stage 5: Texture Bake
       texture_size: this._parseTextureSize(this._inputs.texture_size.value, 0),
@@ -660,6 +662,9 @@ export class ConfigPanel {
     }
     if (cfg.gs2mesh_use_masks != null && this._inputs.gs2mesh_use_masks) {
       this._inputs.gs2mesh_use_masks.checked = cfg.gs2mesh_use_masks !== false;
+    }
+    if (cfg.gs2mesh_mask_depth_mode != null && this._inputs.gs2mesh_mask_depth_mode) {
+      this._setSelectValue(this._inputs.gs2mesh_mask_depth_mode, String(cfg.gs2mesh_mask_depth_mode));
     }
     this._suppressGs2meshPresetSync = false;
 

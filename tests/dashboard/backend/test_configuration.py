@@ -127,6 +127,7 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.gs2mesh_tsdf_voxel_size, 0.005)
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.04)
         self.assertTrue(cfg.gs2mesh_use_masks)
+        self.assertEqual(cfg.gs2mesh_mask_depth_mode, "crop")
         self.assertEqual(cfg.gs2mesh_tsdf_cleaning_threshold, 100000)
 
     def test_gs2mesh_fields_parsed_and_clamped(self) -> None:
@@ -150,6 +151,34 @@ class BuildPipelineConfigTests(unittest.TestCase):
         self.assertEqual(cfg.gs2mesh_tsdf_depth_trunc, 0.005)
         self.assertFalse(cfg.gs2mesh_use_masks)
         self.assertEqual(cfg.gs2mesh_preset, "custom")
+
+    def test_gs2mesh_mask_depth_mode_is_independent_of_quality_preset(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "gs2mesh_preset": "default",
+                "gs2mesh_mask_depth_mode": "replace",
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.gs2mesh_preset, "default")
+        self.assertEqual(cfg.gs2mesh_mask_depth_mode, "replace")
+
+    def test_gs2mesh_mask_depth_mode_rejects_invalid_values(self) -> None:
+        cfg = build_pipeline_config(
+            {
+                "gs2mesh_mask_depth_mode": "invalid",
+            },
+            video_path="input.mp4",
+            object_name="sample",
+            output_dir=Path("/tmp/sample"),
+            env={},
+        )
+
+        self.assertEqual(cfg.gs2mesh_mask_depth_mode, "crop")
 
 
 class DetectStageOutputsTests(unittest.TestCase):

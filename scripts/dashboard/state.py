@@ -21,6 +21,7 @@ from scripts.config_defaults import (
     COLMAP_USE_GPU,
     EXTRACT_FRAME_INTERVAL,
     EXTRACT_MAX_FRAMES,
+    GS2MESH_MASK_DEPTH_MODE,
     GS2MESH_PRESET,
     GS2MESH_GS_ITERATIONS,
     GS2MESH_RUNTIME_PROFILE,
@@ -165,6 +166,7 @@ class PipelineConfig:
     gs2mesh_tsdf_voxel_size: float = GS2MESH_TSDF_VOXEL_SIZE
     gs2mesh_tsdf_depth_trunc: float = GS2MESH_TSDF_DEPTH_TRUNC
     gs2mesh_use_masks: bool = GS2MESH_USE_MASKS
+    gs2mesh_mask_depth_mode: str = GS2MESH_MASK_DEPTH_MODE
     gs2mesh_tsdf_scale: float = GS2MESH_TSDF_SCALE
     gs2mesh_tsdf_min_depth_baselines: int = GS2MESH_TSDF_MIN_DEPTH_BASELINES
     gs2mesh_tsdf_max_depth_baselines: int = GS2MESH_TSDF_MAX_DEPTH_BASELINES

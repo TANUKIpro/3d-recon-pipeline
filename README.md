@@ -135,10 +135,15 @@ docker compose run --rm --service-ports \
 | `GS2MESH_TSDF_VOXEL_SIZE` | `0.005` | TSDF ボクセルサイズ (m) |
 | `GS2MESH_TSDF_DEPTH_TRUNC` | `0.04` | TSDF 深度切断距離 (m) |
 | `GS2MESH_USE_MASKS` | `true` | SAM2 マスクを TSDF 統合に使用 |
+| `GS2MESH_MASK_DEPTH_MODE` | `crop` | `crop`: mask で stereo depth を切り抜き / `fill`: 無効 depth を visual hull で補完 / `replace`: SAM2 visual hull を mask 内 depth の主ソースにする |
 | `MESH_DECIMATION` | `1` (有効) | `0` で Stage 4 のメッシュ簡略化を無効化 (旧挙動) |
 | `MESH_TARGET_FACES` | (自動) | 簡略化後の目標三角形数。未指定時は VRAM ティア × プリセットから決定 (default=200K/high=500K、CPU TSDF時は80K/200K) |
 | `MESH_DECIMATION_MIN_IOU` | `0.985` | 簡略化前後の 8 視点シルエット IoU 閾値。下回ると元メッシュへ自動 rollback |
 | `MESH_DECIMATION_IOU_VIEWS` | `8` | IoU 検証に使う視点数。`0` で IoU セーフネットを無効化 |
+| `GS2MESH_SILHOUETTE_VOXELS` | `160` (`high` は `224`) | visual hull carving の最大軸 voxel 数 |
+| `GS2MESH_SILHOUETTE_MIN_VIEWS` | `3` | visual hull 内判定に必要な最小 view 数 |
+| `GS2MESH_SILHOUETTE_CONSENSUS` | `0.85` | 有効 view のうち mask 内である必要がある割合 |
+| `GS2MESH_SILHOUETTE_MASK_DILATE_PX` | `2` | carving 用 mask の dilation 半径 |
 | **Stage 5** | | |
 | `TEXTURE_SIZE` | `0` (自動) | テクスチャ解像度。`0` は `round(sqrt(W*H))` を自動適用 |
 | `TEXTURE_MAX_SIZE` | `2048` | 自動モード時の上限。`0` で無制限。`TEXTURE_SIZE>0` (manual) はバイパス |

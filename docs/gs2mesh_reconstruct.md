@@ -72,6 +72,7 @@
 
 - canonical SAM2 マスク (`masks/*.png`) を gs2mesh のビューディレクトリに `left_mask.npy` として配置。
 - カメラデータ JSON からフレームインデックスを解決し、対応するマスクをリサイズ・変換。
+- `GS2MESH_USE_MASKS=true` かつ `mask_dir` が渡された場合、Stage 4 は TSDF 実行前に必ずこの変換を行う。
 
 ### Step 4: GPU TSDF Fusion
 
@@ -81,9 +82,17 @@
   1. 深度マップ読み込み + オブジェクトマスク適用 (erosion + morphological closing)
   2. オクルージョンマスク適用
   3. 深度しきい値処理 (min/max baselines)
-  4. カメラ行列構築 (extrinsic, intrinsic)
-  5. `VoxelBlockGrid.integrate()` で TSDF 更新
+  4. SAM2 mask depth mode 適用 (`crop` / `fill` / `replace`)
+  5. カメラ行列構築 (extrinsic, intrinsic)
+  6. `VoxelBlockGrid.integrate()` で TSDF 更新
 - 有効な深度ピクセルがないフレームはスキップ。
+
+**SAM2 mask depth mode**:
+
+- `crop` (default): SAM2 mask で stereo depth を切り抜く。visual hull は構築しない。
+- `fill`: `left_mask.npy` 群から visual hull を構築し、SAM2 mask 内かつ stereo depth が無効または min/max 範囲外の画素だけ補完する。
+- `replace`: visual hull depth を SAM2 mask 内の主ソースにする。transparent/specular surface の誤った stereo depth と occlusion mask は mask 内では信用しない。
+- `replace` で visual hull を構築できない場合は旧TSDFへ黙って戻らず、明示的にエラーにする。
 
 **OOM フォールバック梯子** (GPU TSDF):
 
@@ -155,10 +164,15 @@
 | `GS2MESH_TSDF_VOXEL_SIZE` | `0.005` | TSDF ボクセルサイズ (m) |
 | `GS2MESH_TSDF_DEPTH_TRUNC` | `0.04` | TSDF 深度切断距離 (m) |
 | `GS2MESH_USE_MASKS` | `true` | SAM2 マスクを TSDF 統合に使用 |
+| `GS2MESH_MASK_DEPTH_MODE` | `crop` | `crop`: mask で stereo depth を切り抜き / `fill`: 無効 depth を visual hull で補完 / `replace`: SAM2 visual hull を mask 内 depth の主ソースにする |
 | `MESH_DECIMATION` | `1` (有効) | `0` でメッシュ簡略化 + IoU セーフネットを完全に無効化 (旧挙動) |
 | `MESH_TARGET_FACES` | (自動) | 簡略化後の目標三角形数。未指定なら VRAM ティア × プリセット表から解決 |
 | `MESH_DECIMATION_MIN_IOU` | `0.985` | 簡略化前後のシルエット IoU 閾値。下回ると原メッシュへ自動 rollback |
 | `MESH_DECIMATION_IOU_VIEWS` | `8` | IoU 検証に使う視点数。`0` で IoU セーフネットを無効化 (デシメーション結果を常に採用) |
+| `GS2MESH_SILHOUETTE_VOXELS` | `160` (`high` は `224`) | visual hull carving の最大軸 voxel 数 |
+| `GS2MESH_SILHOUETTE_MIN_VIEWS` | `3` | visual hull 内判定に必要な最小 view 数 |
+| `GS2MESH_SILHOUETTE_CONSENSUS` | `0.85` | 投影された有効 view のうち mask 内である必要がある割合 |
+| `GS2MESH_SILHOUETTE_MASK_DILATE_PX` | `2` | carving 用 mask の dilation 半径 |
 
 ### 内部パラメータ
 

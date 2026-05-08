@@ -70,6 +70,8 @@ GS2MESH_TSDF_ERODE_MASK = True
 GS2MESH_TSDF_EROSION_KERNEL_SIZE = 10
 GS2MESH_TSDF_CLOSING_KERNEL_SIZE = 10
 GS2MESH_TSDF_BLOCK_COUNT = 100_000
+GS2MESH_MASK_DEPTH_MODE = "crop"
+GS2MESH_MASK_DEPTH_MODES: set[str] = {"crop", "fill", "replace"}
 # TSDF device — overridden per VRAM tier at runtime via
 # scripts/vram_tier.py (CPU:0 on low-VRAM tiers so the same parameters
 # run reliably without VRAM-reduction fallbacks).
@@ -93,6 +95,7 @@ GS2MESH_PRESETS: dict[str, dict[str, object]] = {
         "tsdf_erosion_kernel_size": GS2MESH_TSDF_EROSION_KERNEL_SIZE,
         "tsdf_closing_kernel_size": GS2MESH_TSDF_CLOSING_KERNEL_SIZE,
         "block_count": GS2MESH_TSDF_BLOCK_COUNT,
+        "mask_depth_mode": GS2MESH_MASK_DEPTH_MODE,
         "tsdf_device": GS2MESH_TSDF_DEVICE,
     },
     "high": {
@@ -113,6 +116,7 @@ GS2MESH_PRESETS: dict[str, dict[str, object]] = {
         "tsdf_erosion_kernel_size": 8,
         "tsdf_closing_kernel_size": 8,
         "block_count": 100_000,
+        "mask_depth_mode": GS2MESH_MASK_DEPTH_MODE,
         "tsdf_device": GS2MESH_TSDF_DEVICE,
     },
 }
@@ -149,6 +153,17 @@ MESH_SMOOTH_ITERS = 5
 MESH_SMOOTH_LAMBDA = 0.5
 MESH_SMOOTH_MU = -0.53
 MESH_SMOOTH_MIN_IOU = 0.985
+
+# SAM2 visual-hull depth parameters. `GS2MESH_MASK_DEPTH_MODE` controls
+# whether these are used: "crop" keeps the legacy mask-cropped stereo depth,
+# "fill" fills invalid masked depth, and "replace" makes SAM2 visual hull the
+# primary depth source inside the mask for transparent/specular objects.
+GS2MESH_SILHOUETTE_FILL = False  # legacy env alias; prefer GS2MESH_MASK_DEPTH_MODE
+GS2MESH_SILHOUETTE_VOXELS = 160
+GS2MESH_SILHOUETTE_VOXELS_HIGH = 224
+GS2MESH_SILHOUETTE_MIN_VIEWS = 3
+GS2MESH_SILHOUETTE_CONSENSUS = 0.85
+GS2MESH_SILHOUETTE_MASK_DILATE_PX = 2
 
 # --- Stage 5: TextureBake --------------------------------
 TEXTURE_SIZE = 0

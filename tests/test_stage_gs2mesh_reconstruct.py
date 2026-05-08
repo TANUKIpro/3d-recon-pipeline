@@ -515,6 +515,49 @@ class TestTsdfMaskMaterialization(unittest.TestCase):
             self.assertTrue(saved.dtype == np.bool_)
             self.assertTrue(saved.any())
 
+    def test_materialize_tsdf_masks_resolves_frame_from_pose(self) -> None:
+        from PIL import Image
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            masks_dir = root / "p3_masks" / "masks"
+            masks_dir.mkdir(parents=True)
+            colmap_dir = root / "p2_colmap"
+            colmap_dir.mkdir(parents=True)
+            gs2mesh_output = root / "gs2mesh"
+            view_dir = gs2mesh_output / "000"
+            view_dir.mkdir(parents=True)
+
+            pose = np.eye(4, dtype=float)
+            pose[:3, 3] = [1.0, 2.0, 3.0]
+            (colmap_dir / "camera_poses.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "frame_name": "00012.jpg",
+                            "transform_matrix": pose.tolist(),
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            Image.fromarray(
+                np.array([[255, 0], [0, 0]], dtype=np.uint8)
+            ).save(masks_dir / "00012.png")
+            Image.fromarray(
+                np.zeros((2, 2, 3), dtype=np.uint8)
+            ).save(view_dir / "left.png")
+            (gs2mesh_output / "camera_data.json").write_text(
+                json.dumps([{"left": {"extrinsic": pose.tolist()}}]),
+                encoding="utf-8",
+            )
+
+            _materialize_tsdf_masks(gs2mesh_output, masks_dir)
+
+            saved = np.load(view_dir / "left_mask.npy")
+            self.assertTrue(saved[0, 0])
+            self.assertFalse(saved[0, 1])
+
     def test_materialize_tsdf_masks_requires_matching_mask_file(self) -> None:
         from PIL import Image
 
@@ -552,7 +595,7 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
     @patch("scripts.stage_gs2mesh_reconstruct._run_colmap_cmd")
     @patch("scripts.stage_gs2mesh_reconstruct._find_recon_dir")
     @patch("scripts.stage_gs2mesh_reconstruct._resolve_training_runtime_stack")
-    def test_run_gs2mesh_does_not_force_mask_materialization(
+    def test_run_gs2mesh_materializes_masks_only_when_enabled(
         self,
         mock_resolve_stack,
         mock_find_recon_dir,
@@ -593,7 +636,10 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
                 None,
             )
 
-            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+            with (
+                patch.dict("os.environ", {"GS2MESH_MASK_DEPTH_MODE": "replace"}),
+                patch("scripts.vram_utils.cleanup_pytorch_vram"),
+            ):
                 run_gs2mesh(
                     str(frames_dir),
                     str(colmap_sparse),
@@ -603,6 +649,24 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
                 )
 
             mock_run_stereo.assert_called_once()
+            self.assertEqual(
+                mock_gpu_tsdf.call_args.kwargs["mask_depth_mode"],
+                "replace",
+            )
+            mock_materialize_masks.assert_called_once()
+            args = mock_materialize_masks.call_args.args
+            self.assertEqual(Path(args[1]), Path(tmp) / "masks")
+
+            mock_materialize_masks.reset_mock()
+            mock_gpu_tsdf.reset_mock()
+            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+                run_gs2mesh(
+                    str(frames_dir),
+                    str(colmap_sparse),
+                    str(Path(tmp) / "masks"),
+                    str(Path(tmp) / "out_no_masks"),
+                    use_masks=False,
+                )
             mock_materialize_masks.assert_not_called()
 
     @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
@@ -662,7 +726,13 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
             )
             settings = Gs2meshSettings.from_preset("high")
 
-            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+            with (
+                patch(
+                    "scripts.vram_tier.apply_tier_override",
+                    side_effect=lambda s: s,
+                ),
+                patch("scripts.vram_utils.cleanup_pytorch_vram"),
+            ):
                 run_gs2mesh(
                     str(frames_dir),
                     str(colmap_sparse),
@@ -679,6 +749,8 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
             self.assertEqual(kwargs["tsdf_erosion_kernel_size"], 8)
             self.assertEqual(kwargs["tsdf_closing_kernel_size"], 8)
             self.assertEqual(kwargs["block_count"], 100000)
+            self.assertEqual(kwargs["mask_depth_mode"], "crop")
+            self.assertEqual(kwargs["silhouette_voxel_resolution"], 224)
 
     @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
     @patch(
@@ -690,6 +762,7 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
             "/tmp/gpu_mesh.ply",
         ],
     )
+    @patch("scripts.stage_gs2mesh_reconstruct._materialize_tsdf_masks")
     @patch("scripts.stage_gs2mesh_reconstruct._run_gs2mesh_stereo_with_retries")
     @patch("scripts.stage_gs2mesh_reconstruct._ensure_gaussian_renderer_compat")
     @patch("scripts.stage_gs2mesh_reconstruct._ensure_gs2mesh_renderer_compat")
@@ -714,12 +787,14 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
         mock_renderer_compat,
         mock_gaussian_compat,
         mock_run_stereo,
+        mock_materialize_masks,
         mock_gpu_tsdf,
         mock_copy2,
     ) -> None:
         del mock_run_colmap_cmd, mock_ensure_sparse_0, mock_setup_dirs
         del mock_output_link, mock_run_subprocess, mock_copy2
         del mock_renderer_compat, mock_gaussian_compat, mock_run_stereo
+        del mock_materialize_masks
 
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
@@ -741,7 +816,13 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
                 None,
             )
 
-            with patch("scripts.vram_utils.cleanup_pytorch_vram"):
+            with (
+                patch(
+                    "scripts.vram_tier.apply_tier_override",
+                    side_effect=lambda s: s,
+                ),
+                patch("scripts.vram_utils.cleanup_pytorch_vram"),
+            ):
                 run_gs2mesh(
                     str(frames_dir),
                     str(colmap_sparse),

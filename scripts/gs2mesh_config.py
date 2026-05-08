@@ -36,9 +36,18 @@ GS2MESH_INTERNAL_CONFIG_FIELDS: tuple[str, ...] = (
     "gs2mesh_tsdf_device",
 )
 
-GS2MESH_CONFIG_FIELDS: tuple[str, ...] = (
+GS2MESH_INDEPENDENT_CONFIG_FIELDS: tuple[str, ...] = (
+    "gs2mesh_mask_depth_mode",
+)
+
+GS2MESH_PRESET_CONFIG_FIELDS: tuple[str, ...] = (
     *GS2MESH_PUBLIC_CONFIG_FIELDS,
     *GS2MESH_INTERNAL_CONFIG_FIELDS,
+)
+
+GS2MESH_CONFIG_FIELDS: tuple[str, ...] = (
+    *GS2MESH_PRESET_CONFIG_FIELDS,
+    *GS2MESH_INDEPENDENT_CONFIG_FIELDS,
 )
 
 _SETTING_TO_CONFIG_FIELD = {
@@ -60,6 +69,7 @@ _SETTING_TO_CONFIG_FIELD = {
     "tsdf_closing_kernel_size": "gs2mesh_tsdf_closing_kernel_size",
     "block_count": "gs2mesh_tsdf_block_count",
     "tsdf_device": "gs2mesh_tsdf_device",
+    "mask_depth_mode": "gs2mesh_mask_depth_mode",
 }
 _CONFIG_TO_SETTING_FIELD = {
     config_name: setting_name
@@ -87,6 +97,7 @@ class Gs2meshSettings:
     tsdf_closing_kernel_size: int
     block_count: int
     tsdf_device: str = "CUDA:0"
+    mask_depth_mode: str = "crop"
 
     @classmethod
     def from_preset(cls, preset: str = GS2MESH_PRESET) -> Gs2meshSettings:
@@ -156,7 +167,6 @@ def fields_match_preset(
     field_names = (
         GS2MESH_PUBLIC_CONFIG_FIELDS
         if public_only
-        else GS2MESH_CONFIG_FIELDS
+        else GS2MESH_PRESET_CONFIG_FIELDS
     )
     return all(values.get(field_name) == preset_values[field_name] for field_name in field_names)
-
