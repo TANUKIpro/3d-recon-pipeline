@@ -13,6 +13,8 @@ from scripts.config_defaults import (
     TEXTURE_ANGLE_EXP,
     TEXTURE_BLEND_HARD_RATIO,
     TEXTURE_BLEND_TOPK,
+    TEXTURE_COLOR_HARDENING,
+    TEXTURE_COLOR_HARDENING_THRESHOLD,
     TEXTURE_DIST_POW,
     TEXTURE_MIN_COS,
     TEXTURE_OVERSAMPLE,
@@ -60,6 +62,215 @@ from scripts.texture.view_scoring import (
     _rasterize_view_depth,
     _update_topk_scores,
 )
+
+
+def _resolve_texture_color_hardening() -> bool:
+    raw = os.environ.get("TEXTURE_COLOR_HARDENING")
+    if raw is None:
+        return bool(TEXTURE_COLOR_HARDENING)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_texture_color_hardening_threshold() -> float:
+    raw = os.environ.get("TEXTURE_COLOR_HARDENING_THRESHOLD")
+    if raw is None:
+        return float(TEXTURE_COLOR_HARDENING_THRESHOLD)
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return float(TEXTURE_COLOR_HARDENING_THRESHOLD)
+
+
+def _array_summary(values: np.ndarray) -> dict:
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return {
+            "count": 0,
+            "mean": None,
+            "p50": None,
+            "p90": None,
+            "p95": None,
+            "p99": None,
+            "max": None,
+        }
+    return {
+        "count": int(values.size),
+        "mean": float(np.mean(values)),
+        "p50": float(np.percentile(values, 50)),
+        "p90": float(np.percentile(values, 90)),
+        "p95": float(np.percentile(values, 95)),
+        "p99": float(np.percentile(values, 99)),
+        "max": float(np.max(values)),
+    }
+
+
+def _compute_color_instability(
+    candidate_colors: np.ndarray,
+    candidate_valid: np.ndarray,
+    candidate_weights: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return weighted RGB spread and valid candidate count per texel.
+
+    The spread is the weighted RMS Euclidean distance from each texel's
+    top-K candidate colors to their weighted mean. It is near zero when
+    candidate views agree and rises when top-K views see incompatible colors,
+    which is typical for transparent/specular surfaces that expose background
+    content or view-dependent reflections.
+    """
+    valid = candidate_valid & (candidate_weights > 0)
+    counts = valid.sum(axis=1).astype(np.int32)
+    spread = np.zeros(candidate_colors.shape[0], dtype=np.float32)
+    usable = counts >= 2
+    if not np.any(usable):
+        return spread, counts
+
+    weights = np.where(valid, candidate_weights, 0.0).astype(np.float64)
+    weight_sum = weights.sum(axis=1)
+    usable &= weight_sum > 0
+    if not np.any(usable):
+        return spread, counts
+
+    colors = candidate_colors.astype(np.float64, copy=False)
+    norm_w = np.zeros_like(weights, dtype=np.float64)
+    norm_w[usable] = weights[usable] / weight_sum[usable, None]
+    mean = np.sum(colors * norm_w[:, :, None], axis=1)
+    diff = colors - mean[:, None, :]
+    sq_dist = np.sum(diff * diff, axis=2)
+    spread[usable] = np.sqrt(np.sum(norm_w[usable] * sq_dist[usable], axis=1)).astype(
+        np.float32
+    )
+    return spread, counts
+
+
+def _apply_color_instability_hardening(
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    color_instability: np.ndarray,
+    candidate_counts: np.ndarray,
+    threshold: float,
+    eligible_mask: np.ndarray | None = None,
+) -> int:
+    """Single-view texels whose top-K colors disagree too much."""
+    if best_scores.shape[1] <= 1 or threshold <= 0:
+        return 0
+    unstable = (
+        (best_views[:, 0] >= 0)
+        & (best_scores[:, 0] > 0)
+        & (candidate_counts >= 2)
+        & (color_instability > threshold)
+    )
+    if eligible_mask is not None:
+        unstable &= eligible_mask
+    n_hard = int(np.count_nonzero(unstable))
+    if n_hard > 0:
+        best_scores[unstable, 1:] = -1.0
+        best_views[unstable, 1:] = -1
+    return n_hard
+
+
+def _cache_depth_buffer(
+    depth_cache: OrderedDict[int, np.ndarray],
+    max_depth_cache: int,
+    vidx: int,
+    depth_buffer: np.ndarray,
+) -> None:
+    if max_depth_cache <= 0 or vidx in depth_cache:
+        return
+    depth_cache[vidx] = depth_buffer
+    while len(depth_cache) > max_depth_cache:
+        depth_cache.popitem(last=False)
+
+
+def _collect_topk_candidate_colors(
+    *,
+    best_scores: np.ndarray,
+    best_views: np.ndarray,
+    pos3d: np.ndarray,
+    normals: np.ndarray,
+    poses: np.ndarray,
+    pose_frame_indices: list[int],
+    frames_dir: str,
+    mask_dir: str,
+    frame_cache: _FrameCache,
+    depth_cache: OrderedDict[int, np.ndarray],
+    max_depth_cache: int,
+    new_vertices: np.ndarray,
+    new_faces: np.ndarray,
+    K: np.ndarray,
+    img_w: int,
+    img_h: int,
+    min_cos: float,
+    angle_exp: float,
+    dist_pow: float,
+    texture_device: str,
+    dist_coeffs: np.ndarray | list | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_texels, topk = best_views.shape
+    candidate_colors = np.zeros((n_texels, topk, 3), dtype=np.float32)
+    candidate_valid = np.zeros((n_texels, topk), dtype=bool)
+
+    for k in range(topk):
+        col_views = best_views[:, k]
+        col_scores = best_scores[:, k]
+        for vidx_val in np.unique(col_views):
+            vidx = int(vidx_val)
+            if vidx < 0:
+                continue
+            tidx = np.where((col_views == vidx) & (col_scores > 0))[0]
+            if tidx.size == 0:
+                continue
+
+            src_idx = int(pose_frame_indices[vidx])
+            c2w = poses[vidx]
+            try:
+                frame = frame_cache.load_frame(frames_dir, src_idx)
+                mask_bool = frame_cache.load_mask(mask_dir, src_idx)
+            except FileNotFoundError:
+                continue
+
+            if vidx in depth_cache:
+                depth_buffer = depth_cache[vidx]
+            else:
+                depth_buffer = _rasterize_view_depth(
+                    new_vertices,
+                    new_faces,
+                    c2w,
+                    K,
+                    img_w,
+                    img_h,
+                    device=texture_device,
+                    dist_coeffs=dist_coeffs,
+                )
+                _cache_depth_buffer(depth_cache, max_depth_cache, vidx, depth_buffer)
+
+            valid, _score, px_proj, py_proj = _evaluate_view_samples(
+                pos3d=pos3d[tidx],
+                normals=normals[tidx],
+                c2w=c2w,
+                K=K,
+                img_w=img_w,
+                img_h=img_h,
+                mask_bool=mask_bool,
+                depth_buffer=depth_buffer,
+                min_cos=min_cos,
+                angle_exp=angle_exp,
+                dist_pow=dist_pow,
+                device=texture_device,
+                dist_coeffs=dist_coeffs,
+            )
+            if not np.any(valid):
+                continue
+
+            global_tidx = tidx[valid]
+            candidate_colors[global_tidx, k] = _bilinear_sample(
+                frame,
+                px_proj[valid],
+                py_proj[valid],
+            ).astype(np.float32)
+            candidate_valid[global_tidx, k] = True
+
+    return candidate_colors, candidate_valid
 
 def _maybe_load_intrinsics(
     path: Path,
@@ -251,6 +462,8 @@ def bake_texture(
     sharpen_amt = float(os.environ.get("TEXTURE_SHARPEN", str(TEXTURE_SHARPEN)))
     blend_topk = max(1, int(os.environ.get("TEXTURE_BLEND_TOPK", str(TEXTURE_BLEND_TOPK))))
     hard_ratio = float(os.environ.get("TEXTURE_BLEND_HARD_RATIO", str(TEXTURE_BLEND_HARD_RATIO)))
+    color_hardening = _resolve_texture_color_hardening()
+    color_hardening_threshold = _resolve_texture_color_hardening_threshold()
     texture_device = _resolve_texture_device()
     texture_view_assign_mode = _resolve_texture_view_assign_mode(view_assign_mode)
     texture_quality_boost = _resolve_texture_quality_boost(quality_boost)
@@ -507,8 +720,17 @@ def bake_texture(
         f"({tex_size}x{tex_size}, internal {tex_res}x{tex_res}, oversample x{oversample})"
     )
     print(
-        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f, mode=%s, quality_boost=%s"
-        % (blend_topk, min_cos, angle_exp, dist_pow, sharpen_amt, texture_view_assign_mode, texture_quality_boost)
+        "  View scoring: per-texel blend (topK=%d), min_cos=%.2f, angle_exp=%.2f, dist_pow=%.2f, sharpen=%.2f, mode=%s, quality_boost=%s, color_hardening=%s"
+        % (
+            blend_topk,
+            min_cos,
+            angle_exp,
+            dist_pow,
+            sharpen_amt,
+            texture_view_assign_mode,
+            texture_quality_boost,
+            color_hardening,
+        )
     )
     if texture_device == "cuda":
         print("  Projection backend: CUDA (GPU rasterization + scoring)")
@@ -579,6 +801,37 @@ def bake_texture(
     if n_valid == 0:
         raise RuntimeError("No valid texels were generated from UV atlas.")
 
+    diagnostics: dict[str, object] = {
+        "image": {"width": int(img_w), "height": int(img_h), "poses": int(len(poses))},
+        "texture": {
+            "size": int(tex_size),
+            "internal_size": int(tex_res),
+            "oversample": int(oversample),
+            "valid_texels": int(n_valid),
+        },
+        "settings": {
+            "blend_topk": int(blend_topk),
+            "hard_ratio": float(hard_ratio),
+            "color_hardening": bool(color_hardening),
+            "color_hardening_threshold": float(color_hardening_threshold),
+            "min_cos": float(min_cos),
+            "angle_exp": float(angle_exp),
+            "dist_pow": float(dist_pow),
+            "sharpen": float(sharpen_amt),
+            "view_assign_mode": texture_view_assign_mode,
+            "quality_boost": bool(texture_quality_boost),
+            "device": texture_device,
+        },
+        "intrinsics": {
+            "source": intrinsics.get("source", "cached"),
+            "distortion_model": intrinsics.get("distortion_model"),
+            "has_distortion": bool(
+                dist_coeffs is not None
+                and np.any(np.abs(np.asarray(dist_coeffs, dtype=np.float64).ravel()) > 1e-12)
+            ),
+        },
+    }
+
     # --- Per-texel top-K blend setup ---
     best_scores = np.full((n_valid, blend_topk), -1.0, dtype=np.float32)
     best_views = np.full((n_valid, blend_topk), -1, dtype=np.int32)
@@ -605,10 +858,7 @@ def bake_texture(
             continue
 
         depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device, dist_coeffs=dist_coeffs)
-        if max_depth_cache > 0:
-            depth_cache[vidx] = depth_buffer
-            while len(depth_cache) > max_depth_cache:
-                depth_cache.popitem(last=False)
+        _cache_depth_buffer(depth_cache, max_depth_cache, vidx, depth_buffer)
         valid, score, _px_proj, _py_proj = _evaluate_view_samples(
             pos3d=pos3d,
             normals=normals,
@@ -643,9 +893,22 @@ def bake_texture(
     covered = int(np.count_nonzero(best_views[:, 0] >= 0))
     print(f"  Per-texel scoring done: {covered}/{n_valid} texels have ≥1 valid view")
 
-    n_hard = _apply_view_hardening(best_scores, best_views, hard_ratio)
-    if n_hard > 0:
-        print(f"  View hardening: {n_hard}/{n_valid} texels use single dominant view (ratio>{hard_ratio:.1f})")
+    ratio_valid = (best_scores[:, 0] > 0) & (best_scores[:, 1] > 0) if blend_topk > 1 else np.zeros(n_valid, dtype=bool)
+    score_ratio = np.zeros(n_valid, dtype=np.float32)
+    if np.any(ratio_valid):
+        score_ratio[ratio_valid] = (
+            best_scores[ratio_valid, 0]
+            / np.maximum(best_scores[ratio_valid, 1], 1e-12)
+        )
+    diagnostics["view_scoring"] = {
+        "covered_texels": covered,
+        "coverage_ratio": float(covered / max(n_valid, 1)),
+        "score_ratio_top1_top2": _array_summary(score_ratio[ratio_valid]),
+    }
+
+    n_hard_score = _apply_view_hardening(best_scores, best_views, hard_ratio)
+    if n_hard_score > 0:
+        print(f"  View hardening: {n_hard_score}/{n_valid} texels use single dominant view (ratio>{hard_ratio:.1f})")
 
     conflict_texels = _compute_conflict_texels(
         pos3d=pos3d,
@@ -654,6 +917,8 @@ def bake_texture(
         best_views=best_views,
     )
     n_conflict = int(conflict_texels.sum())
+    n_region_faces = 0
+    n_regions = 0
     if n_conflict > 0:
         face_locked_view, _face_lock_support = _compute_face_locked_views(
             fids=fids,
@@ -706,6 +971,83 @@ def bake_texture(
         region_id_per_face = np.full(len(new_faces), -1, dtype=np.int32)
         region_id_per_texel = np.full(n_valid, -1, dtype=np.int32)
         print("  Conflict locking: no ambiguous texels detected")
+
+    locked_faces = face_locked_view >= 0
+    n_locked_faces = int(np.count_nonzero(locked_faces))
+    n_locked_texels = int(np.count_nonzero(locked_view_per_texel >= 0))
+    diagnostics["view_selection"] = {
+        "score_hardened_texels": int(n_hard_score),
+        "conflict_texels": int(n_conflict),
+        "locked_faces": int(n_locked_faces),
+        "locked_texels": int(n_locked_texels),
+        "region_faces": int(n_region_faces),
+        "regions": int(n_regions),
+    }
+
+    n_color_hard = 0
+    if blend_topk > 1:
+        _emit_progress(progress_cb, 83.0, "Checking top-K color consistency")
+        candidate_colors, candidate_valid = _collect_topk_candidate_colors(
+            best_scores=best_scores,
+            best_views=best_views,
+            pos3d=pos3d,
+            normals=normals,
+            poses=poses,
+            pose_frame_indices=pose_frame_indices,
+            frames_dir=frames_dir,
+            mask_dir=mask_dir,
+            frame_cache=frame_cache,
+            depth_cache=depth_cache,
+            max_depth_cache=max_depth_cache,
+            new_vertices=new_vertices,
+            new_faces=new_faces,
+            K=K,
+            img_w=img_w,
+            img_h=img_h,
+            min_cos=min_cos,
+            angle_exp=angle_exp,
+            dist_pow=dist_pow,
+            texture_device=texture_device,
+            dist_coeffs=dist_coeffs,
+        )
+        color_instability, candidate_counts = _compute_color_instability(
+            candidate_colors,
+            candidate_valid,
+            np.maximum(best_scores, 0.0),
+        )
+        unstable_mask = candidate_counts >= 2
+        diagnostics["color_consistency"] = {
+            "candidate_texels": int(np.count_nonzero(unstable_mask)),
+            "instability": _array_summary(color_instability[unstable_mask]),
+            "threshold": float(color_hardening_threshold),
+            "enabled": bool(color_hardening),
+        }
+        if color_hardening:
+            n_color_hard = _apply_color_instability_hardening(
+                best_scores,
+                best_views,
+                color_instability,
+                candidate_counts,
+                color_hardening_threshold,
+                eligible_mask=locked_view_per_texel < 0,
+            )
+            if n_color_hard > 0:
+                print(
+                    "  Color hardening: %d/%d texels use top-1 view "
+                    "(top-K color spread > %.3f)"
+                    % (n_color_hard, n_valid, color_hardening_threshold)
+                )
+        diagnostics["color_consistency"]["hardened_texels"] = int(n_color_hard)
+        del candidate_colors, candidate_valid
+    else:
+        diagnostics["color_consistency"] = {
+            "candidate_texels": 0,
+            "instability": _array_summary(np.array([], dtype=np.float32)),
+            "threshold": float(color_hardening_threshold),
+            "enabled": bool(color_hardening),
+            "hardened_texels": 0,
+        }
+    diagnostics["view_selection"]["color_hardened_texels"] = int(n_color_hard)
 
     texture = np.zeros((tex_res, tex_res, 3), dtype=np.float64)
     weight_sum = np.zeros(n_valid, dtype=np.float64)
@@ -810,9 +1152,14 @@ def bake_texture(
     if colored.size > 0:
         texture[ys[colored], xs[colored]] /= weight_sum[colored, None]
     has_color[colored] = True
+    diagnostics["coverage"] = {
+        "after_blend_texels": int(has_color.sum()),
+        "after_blend_ratio": float(has_color.sum() / max(n_valid, 1)),
+    }
 
     # --- Pass 3: simple fallback for uncovered texels ---
     missing = np.where(~has_color)[0]
+    fallback_filled = 0
     if missing.size > 0 and missing.size > n_valid * 0.001:
         _emit_progress(progress_cb, 90.0, "Fallback for uncovered texels")
         fallback_min_cos = min(min_cos * 0.25, 0.0)
@@ -902,6 +1249,7 @@ def bake_texture(
                     has_color[fill_global] = True
                     fb_filled += int(fill_global.size)
 
+        fallback_filled = fb_filled
         remaining = int((~has_color).sum())
         print(
             f"  Fallback pass: min_cos={fallback_min_cos:.3f}, "
@@ -910,6 +1258,12 @@ def bake_texture(
         _emit_progress(progress_cb, 92.0, "Fallback complete")
     elif missing.size > 0:
         print(f"  Skipping fallback: only {missing.size} uncovered texels (<0.1%)")
+    diagnostics["coverage"].update({
+        "missing_before_fallback": int(missing.size),
+        "fallback_filled_texels": int(fallback_filled),
+        "after_fallback_texels": int(has_color.sum()),
+        "after_fallback_ratio": float(has_color.sum() / max(n_valid, 1)),
+    })
 
     # --- Pass 3.5: Cap region infill ---
     if vert_colors is not None:
@@ -940,6 +1294,10 @@ def bake_texture(
             )
         else:
             print("  Cap region: all cap texels already covered (or no cap faces)")
+    diagnostics["coverage"].update({
+        "after_cap_texels": int(has_color.sum()),
+        "after_cap_ratio": float(has_color.sum() / max(n_valid, 1)),
+    })
 
     texture = texture.astype(np.float32)
 
@@ -1008,6 +1366,10 @@ def bake_texture(
 
     cov = int(has_color.sum())
     print(f"Texture coverage before seam padding: {cov}/{n_valid} ({100*cov/max(n_valid,1):.1f}%)")
+    diagnostics["coverage"].update({
+        "before_seam_padding_texels": int(cov),
+        "before_seam_padding_ratio": float(cov / max(n_valid, 1)),
+    })
 
     # --- Seam padding ---
     print("Padding seams...")
@@ -1097,6 +1459,10 @@ def bake_texture(
             lines.append(f"f {a}/{a} {b}/{b} {c}/{c}\n")
         f_out.write("".join(lines))
     print(f"Saved: {obj_path}")
+    diagnostics_path = texture_phase_dir(output_path) / "diagnostics.json"
+    with open(diagnostics_path, "w", encoding="utf-8") as f_out:
+        json.dump(diagnostics, f_out, indent=2)
+    print(f"Saved: {diagnostics_path}")
     _emit_progress(progress_cb, 100.0, "Texture stage complete")
 
     return obj_path

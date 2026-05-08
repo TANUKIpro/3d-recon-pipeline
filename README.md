@@ -144,6 +144,8 @@ docker compose run --rm --service-ports \
 | `TEXTURE_MAX_SIZE` | `2048` | 自動モード時の上限。`0` で無制限。`TEXTURE_SIZE>0` (manual) はバイパス |
 | `TEXTURE_VIEW_ASSIGN_MODE` | `region_gc` | view 割当モード (`legacy` / `region_gc`) |
 | `TEXTURE_QUALITY_BOOST` | `false` | 高品質境界 refinement の有効化 |
+| `TEXTURE_COLOR_HARDENING` | `true` | Top-K 候補色の不一致が大きいテクセルを single-view 化 |
+| `TEXTURE_COLOR_HARDENING_THRESHOLD` | `0.18` | single-view 化する RGB spread しきい値 |
 | `TEXTURE_UV_MAX_FACES` | `300000` | xatlas 入力の上限 (Stage 4 簡略化が無効化された場合の保険)。`0` で無制限 |
 | **Stage 6** | | |
 | `POST_TEXTURE_CLEANUP_ENABLED` | `true` | Post-texture contact cleanup の有効/無効 |

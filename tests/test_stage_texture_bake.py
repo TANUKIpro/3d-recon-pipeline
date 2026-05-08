@@ -15,8 +15,10 @@ from plyfile import PlyData, PlyElement
 import scripts.texture.gpu_raster as gpu_raster
 from scripts.stage_texture_bake import (
     _apply_narrow_seam_leveling,
+    _apply_color_instability_hardening,
     _apply_view_hardening,
     _compute_conflict_texels,
+    _compute_color_instability,
     _evaluate_view_packet,
     _evaluate_view_samples,
     _compute_face_locked_views,
@@ -847,6 +849,81 @@ class ViewHardeningTests(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
+class ColorInstabilityHardeningTests(unittest.TestCase):
+    def test_color_instability_is_zero_when_candidate_views_agree(self) -> None:
+        candidate_colors = np.array([
+            [[0.20, 0.30, 0.40], [0.20, 0.30, 0.40], [0.0, 0.0, 0.0]],
+            [[0.90, 0.10, 0.10], [0.10, 0.10, 0.90], [0.0, 0.0, 0.0]],
+            [[0.50, 0.50, 0.50], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ], dtype=np.float32)
+        candidate_valid = np.array([
+            [True, True, False],
+            [True, True, False],
+            [True, False, False],
+        ])
+        weights = np.array([
+            [0.5, 0.5, 0.0],
+            [0.5, 0.5, 0.0],
+            [1.0, 0.0, 0.0],
+        ], dtype=np.float32)
+
+        spread, counts = _compute_color_instability(
+            candidate_colors,
+            candidate_valid,
+            weights,
+        )
+
+        self.assertEqual(int(counts[0]), 2)
+        self.assertAlmostEqual(float(spread[0]), 0.0, places=6)
+        self.assertGreater(float(spread[1]), 0.5)
+        self.assertEqual(int(counts[2]), 1)
+        self.assertAlmostEqual(float(spread[2]), 0.0, places=6)
+
+    def test_high_color_instability_zeros_non_dominant_views(self) -> None:
+        best_scores = np.array([
+            [0.50, 0.45, 0.10],
+            [0.50, 0.45, 0.10],
+            [0.50, 0.45, 0.10],
+        ], dtype=np.float32)
+        best_views = np.array([
+            [0, 1, 2],
+            [0, 1, 2],
+            [0, 1, 2],
+        ], dtype=np.int32)
+        color_instability = np.array([0.05, 0.25, 0.30], dtype=np.float32)
+        candidate_counts = np.array([2, 2, 1], dtype=np.int32)
+
+        n = _apply_color_instability_hardening(
+            best_scores,
+            best_views,
+            color_instability,
+            candidate_counts,
+            threshold=0.18,
+        )
+
+        self.assertEqual(n, 1)
+        np.testing.assert_array_equal(best_views[0], np.array([0, 1, 2], dtype=np.int32))
+        np.testing.assert_array_equal(best_views[1], np.array([0, -1, -1], dtype=np.int32))
+        np.testing.assert_array_equal(best_views[2], np.array([0, 1, 2], dtype=np.int32))
+        np.testing.assert_allclose(best_scores[1], np.array([0.50, -1.0, -1.0], dtype=np.float32))
+
+    def test_locked_texels_are_not_color_hardened(self) -> None:
+        best_scores = np.array([[0.50, 0.45]], dtype=np.float32)
+        best_views = np.array([[0, 1]], dtype=np.int32)
+
+        n = _apply_color_instability_hardening(
+            best_scores,
+            best_views,
+            color_instability=np.array([0.30], dtype=np.float32),
+            candidate_counts=np.array([2], dtype=np.int32),
+            threshold=0.18,
+            eligible_mask=np.array([False]),
+        )
+
+        self.assertEqual(n, 0)
+        np.testing.assert_array_equal(best_views, np.array([[0, 1]], dtype=np.int32))
+
+
 class ConflictDetectionTests(unittest.TestCase):
     def test_marks_close_scores_with_large_view_separation(self) -> None:
         pos3d = np.array([
@@ -1503,6 +1580,13 @@ class BakeTextureRegressionTests(unittest.TestCase):
             # Hash updated when _load_frame moved from float64 to float32 (Tier 1.2).
             # Verified max per-channel diff vs. prior golden = 1/255, p99 = 0.
             self.assertEqual(_hash_file(texture_png_path(output_dir)), "e48a3ccebae7ee7c5a618e14d2369f7badc0b10d4848c3e67a95575425afe66c")
+            diagnostics = json.loads(
+                (output_dir / "p5_texture" / "diagnostics.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertGreater(diagnostics["texture"]["valid_texels"], 0)
+            self.assertIn("color_consistency", diagnostics)
 
     def test_fallback_subset_reuse_does_not_boolean_mismatch(self) -> None:
         with TemporaryDirectory() as tmp:

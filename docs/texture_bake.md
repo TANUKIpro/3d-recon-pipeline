@@ -44,15 +44,17 @@
    - `top-1` と `top-2` が拮抗し、かつ視点差が大きい texel を conflict 候補として検出
    - `TEXTURE_VIEW_ASSIGN_MODE=legacy` では conflict が多い face を face 単位で dominant view に固定
    - `TEXTURE_VIEW_ASSIGN_MODE=region_gc` では conflict face を連続曲面 region にまとめ、region 内の face label を最適化
-6. non-conflict texel は Top-K ビューをスコア加重ブレンド。
+6. Top-K 候補ビューの色整合性を評価する。
+   - 候補色の分散が大きい texel は、透明物体・光沢物体・反射でビュー間の見えが一致していないとみなし、Top-1 ビューへ harden する。
+7. non-conflict texel は Top-K ビューをスコア加重ブレンド。
    - conflict face / region は single-view、その他は上位 K 個のビューから色を決定
    - 未充填テクセルは relaxed 閾値で全ビュー再スキャンしフォールバック
-7. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
+8. `region_gc` では narrow seam leveling で view 境界を局所的に平滑化。
    - `TEXTURE_QUALITY_BOOST` 有効時は boundary component ごとに複数補助ビューを比較し、
      色正規化 + ECC/phase correlation 整列つきで最良候補の detail を注入する。
-8. UV seam 周辺を反復補間して隙間埋め。
-9. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
-10. OBJ/MTL を生成。
+9. UV seam 周辺を反復補間して隙間埋め。
+10. 必要なら supersample -> downsample、sharpen を適用して PNG 書き出し。
+11. OBJ/MTL と診断情報 `p5_texture/diagnostics.json` を生成。
 
 ## アルゴリズム要点
 
@@ -62,6 +64,7 @@
   - 可視性はビューごとの深度ラスタライズで判定
 - 貼り付け:
   - 競合が弱い領域はテクセル単位 Top-K ブレンド
+  - Top-K 候補色が大きく食い違う texel は透明・光沢・反射による view-dependent な見えと判断し、Top-1 single-view に寄せる
   - `legacy`: 円筒面のような競合が強い領域は face 単位の single-view 貼り付けに切り替え
   - `region_gc`: 円筒面のような競合が強い領域は face graph を region 化し、region 内の label を揃えて single-view 貼り付けに切り替え
   - `region_gc` の境界は narrow seam leveling を挟み、hard seam を少し抑えてから seam padding に入る
@@ -90,6 +93,8 @@
 | `TEXTURE_SHARPEN` | `0.15` | 最終アンシャープ量 |
 | `TEXTURE_BLEND_TOPK` | `3` | テクセルあたりブレンドするビュー数 (1=ブレンドなし) |
 | `TEXTURE_BLEND_HARD_RATIO` | `2.0` | top-1 / top-2 スコア比がこの値を超えるテクセルはシングルビュー化 (0=無効) |
+| `TEXTURE_COLOR_HARDENING` | `true` | Top-K 候補色の不一致が大きいテクセルを single-view 化する |
+| `TEXTURE_COLOR_HARDENING_THRESHOLD` | `0.18` | single-view 化する RGB spread しきい値 ([0,1] 正規化 RGB の加重 RMS 距離) |
 | `TEXTURE_QUALITY_BOOST` | `false` | `region_gc` 向けの高品質境界 refinement。複数補助ビュー比較、局所色正規化、ECC 整列、detail 注入を有効化 |
 
 内部固定しきい値:

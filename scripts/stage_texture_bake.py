@@ -116,7 +116,14 @@ from scripts.texture.cap_region import (  # noqa: F401
     _identify_cap_texels,
     _seed_cap_border,
 )
-from scripts.texture.bake import bake_texture  # noqa: F401
+from scripts.texture.bake import (  # noqa: F401
+    _apply_color_instability_hardening,
+    _collect_topk_candidate_colors,
+    _compute_color_instability,
+    _resolve_texture_color_hardening,
+    _resolve_texture_color_hardening_threshold,
+    bake_texture,
+)
 
 if __name__ == "__main__":
     import argparse
