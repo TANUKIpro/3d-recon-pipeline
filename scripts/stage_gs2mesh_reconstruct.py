@@ -146,6 +146,53 @@ def _resolve_mesh_decimation_params(
     return target, min_iou, max(0, n_views)
 
 
+def _resolve_mesh_smoothing_params() -> tuple[int, float, float, float]:
+    """Resolve Taubin smoothing iters / λ / μ / IoU gate from config + env.
+
+    ``MESH_SMOOTH_ITERS=0`` (env) disables the smoothing pass; the rollback
+    gate threshold can be loosened with ``MESH_SMOOTH_MIN_IOU`` for objects
+    where the noise reduction is worth a slight silhouette change.
+    """
+    from scripts.config_defaults import (
+        MESH_SMOOTH_ENABLED,
+        MESH_SMOOTH_ITERS,
+        MESH_SMOOTH_LAMBDA,
+        MESH_SMOOTH_MIN_IOU,
+        MESH_SMOOTH_MU,
+    )
+
+    if not MESH_SMOOTH_ENABLED:
+        default_iters = 0
+    else:
+        default_iters = MESH_SMOOTH_ITERS
+
+    raw_iters = os.environ.get("MESH_SMOOTH_ITERS", "").strip()
+    try:
+        iters = int(raw_iters) if raw_iters else default_iters
+    except ValueError:
+        iters = default_iters
+
+    raw_lambda = os.environ.get("MESH_SMOOTH_LAMBDA", "").strip()
+    try:
+        lambda_val = float(raw_lambda) if raw_lambda else MESH_SMOOTH_LAMBDA
+    except ValueError:
+        lambda_val = MESH_SMOOTH_LAMBDA
+
+    raw_mu = os.environ.get("MESH_SMOOTH_MU", "").strip()
+    try:
+        mu_val = float(raw_mu) if raw_mu else MESH_SMOOTH_MU
+    except ValueError:
+        mu_val = MESH_SMOOTH_MU
+
+    raw_iou = os.environ.get("MESH_SMOOTH_MIN_IOU", "").strip()
+    try:
+        min_iou = float(raw_iou) if raw_iou else MESH_SMOOTH_MIN_IOU
+    except ValueError:
+        min_iou = MESH_SMOOTH_MIN_IOU
+
+    return max(0, iters), lambda_val, mu_val, min_iou
+
+
 def _run_gpu_tsdf_with_fallbacks(
     *,
     settings: Gs2meshSettings,
@@ -166,6 +213,21 @@ def _run_gpu_tsdf_with_fallbacks(
         )
     else:
         print("GPU TSDF: mesh decimation disabled")
+
+    (
+        mesh_smooth_iters,
+        mesh_smooth_lambda,
+        mesh_smooth_mu,
+        mesh_smooth_min_iou,
+    ) = _resolve_mesh_smoothing_params()
+    if mesh_smooth_iters > 0:
+        print(
+            f"GPU TSDF: mesh smoothing iters={mesh_smooth_iters} "
+            f"(λ={mesh_smooth_lambda:.2f}, μ={mesh_smooth_mu:.2f}, "
+            f"min_iou={mesh_smooth_min_iou:.3f})"
+        )
+    else:
+        print("GPU TSDF: mesh smoothing disabled")
 
     tsdf_device = settings.tsdf_device
     # CPU TSDF has no VRAM OOM to recover from — skip the
@@ -209,6 +271,10 @@ def _run_gpu_tsdf_with_fallbacks(
                 mesh_target_faces=mesh_target_faces,
                 mesh_min_iou=mesh_min_iou,
                 mesh_iou_views=mesh_iou_views,
+                mesh_smooth_iters=mesh_smooth_iters,
+                mesh_smooth_lambda=mesh_smooth_lambda,
+                mesh_smooth_mu=mesh_smooth_mu,
+                mesh_smooth_min_iou=mesh_smooth_min_iou,
                 progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
             )
         except RuntimeError as exc:

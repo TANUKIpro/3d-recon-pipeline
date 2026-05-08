@@ -135,6 +135,21 @@ MESH_TARGET_FACES_HIGH_CPU = 200_000
 MESH_DECIMATION_MIN_IOU = 0.985
 MESH_DECIMATION_IOU_VIEWS = 8
 
+# Taubin smoothing applied to the cleaned TSDF mesh before decimation. The
+# raw TSDF surface carries ~0.5 mm vertex displacement noise; on cylindrical
+# objects this maps to 1.5–3 px shifts in projected pixel space at typical
+# capture distances, which the texture bake amplifies into per-region speckle
+# (each region_gc-locked patch sees fine details from a slightly different
+# image location). A few iterations of curvature-flow smoothing remove the
+# sub-mm noise while preserving silhouettes (Taubin's two-pass λ/μ filter
+# does not shrink the mesh, unlike pure Laplacian). Set MESH_SMOOTH_ITERS=0
+# (env) to disable. Same silhouette-IoU rollback as decimation.
+MESH_SMOOTH_ENABLED = True
+MESH_SMOOTH_ITERS = 5
+MESH_SMOOTH_LAMBDA = 0.5
+MESH_SMOOTH_MU = -0.53
+MESH_SMOOTH_MIN_IOU = 0.985
+
 # --- Stage 5: TextureBake --------------------------------
 TEXTURE_SIZE = 0
 # Cap auto-resolved texture size (sqrt(W·H)). Manual TEXTURE_SIZE>0

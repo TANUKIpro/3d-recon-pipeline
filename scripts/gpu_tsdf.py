@@ -37,6 +37,10 @@ def gpu_tsdf_reconstruct(
     mesh_target_faces: int = 0,
     mesh_min_iou: float = 0.985,
     mesh_iou_views: int = 8,
+    mesh_smooth_iters: int = 0,
+    mesh_smooth_lambda: float = 0.5,
+    mesh_smooth_mu: float = -0.53,
+    mesh_smooth_min_iou: float = 0.985,
     progress_cb: Callable[[float, str], None] | None = None,
 ) -> str:
     """Run GPU TSDF fusion and return path to cleaned mesh PLY.
@@ -75,6 +79,10 @@ def gpu_tsdf_reconstruct(
             mesh_target_faces=mesh_target_faces,
             mesh_min_iou=mesh_min_iou,
             mesh_iou_views=mesh_iou_views,
+            mesh_smooth_iters=mesh_smooth_iters,
+            mesh_smooth_lambda=mesh_smooth_lambda,
+            mesh_smooth_mu=mesh_smooth_mu,
+            mesh_smooth_min_iou=mesh_smooth_min_iou,
             progress_cb=progress_cb,
         )
     finally:
@@ -126,6 +134,10 @@ def _gpu_tsdf_impl(
     mesh_target_faces: int,
     mesh_min_iou: float,
     mesh_iou_views: int,
+    mesh_smooth_iters: int,
+    mesh_smooth_lambda: float,
+    mesh_smooth_mu: float,
+    mesh_smooth_min_iou: float,
     progress_cb: Callable[[float, str], None] | None,
 ) -> str:
     """Core implementation — called from `gpu_tsdf_reconstruct` inside its
@@ -367,6 +379,51 @@ def _gpu_tsdf_impl(
     )
 
     # ------------------------------------------------------------------
+    # Taubin smoothing (curvature-flow) with silhouette safety net.
+    # The raw TSDF surface carries ~0.5 mm vertex displacement noise; on
+    # cylindrical objects this maps to 1.5–3 px shifts in projected pixel
+    # space, which the texture bake amplifies into per-region speckle in
+    # `region_gc` mode (each locked region samples the same package detail
+    # from a slightly different image location). Taubin's two-pass λ/μ
+    # filter removes high-frequency vertex noise without the volumetric
+    # shrinkage of pure Laplacian smoothing — the IoU gate catches any
+    # lingering shrinkage anyway. Runs before decimation so the simplifier
+    # collapses edges on a coherent surface, not on TSDF stipple.
+    # ------------------------------------------------------------------
+    if mesh_smooth_iters > 0 and n_tris_clean > 0:
+        if progress_cb:
+            progress_cb(0.93, "Smoothing mesh (Taubin)")
+        smoothed, did_smooth = _taubin_smooth_tsdf_mesh(
+            mesh,
+            iters=mesh_smooth_iters,
+            lambda_val=mesh_smooth_lambda,
+            mu_val=mesh_smooth_mu,
+        )
+        if did_smooth:
+            iou_ok, mean_iou = _silhouette_iou_check(
+                original=mesh,
+                simplified=smoothed,
+                left_cameras=left_cameras,
+                tsdf_scale=tsdf_scale,
+                min_iou=mesh_smooth_min_iou,
+                n_views=mesh_iou_views,
+            )
+            if iou_ok:
+                print(
+                    f"GPU TSDF: Taubin smoothing iters={mesh_smooth_iters} "
+                    f"λ={mesh_smooth_lambda:.2f} μ={mesh_smooth_mu:.2f} "
+                    f"silhouette IoU={mean_iou:.4f} ≥ {mesh_smooth_min_iou:.4f} — keeping smoothed mesh"
+                )
+                mesh = smoothed
+            else:
+                print(
+                    f"GPU TSDF: Taubin smoothing IoU={mean_iou:.4f} "
+                    f"< {mesh_smooth_min_iou:.4f} — rolling back to noisy mesh"
+                )
+        else:
+            print("GPU TSDF: Taubin smoothing skipped (empty mesh)")
+
+    # ------------------------------------------------------------------
     # Decimate (post-MC, color-preserving QEM) with silhouette safety net
     # ------------------------------------------------------------------
     if mesh_target_faces > 0 and n_tris_clean > mesh_target_faces:
@@ -417,6 +474,43 @@ def _gpu_tsdf_impl(
         progress_cb(1.0, "GPU TSDF fusion complete")
 
     return str(cleaned_path)
+
+
+def _taubin_smooth_tsdf_mesh(
+    mesh,
+    *,
+    iters: int,
+    lambda_val: float,
+    mu_val: float,
+):
+    """Apply Taubin λ/μ smoothing to ``mesh``.
+
+    Returns ``(smoothed_mesh, did_smooth)``. The smoothing alternates a
+    Laplacian step with weight ``lambda_val`` (shrinks) and a step with
+    weight ``mu_val`` (typically negative, expands), removing high-frequency
+    vertex noise while keeping the global shape stable. Per-vertex colours
+    are preserved by Open3D so the cap-marker detection in cap_region.py
+    keeps working.
+    """
+    import open3d as o3d  # noqa: F401
+
+    if iters <= 0 or len(mesh.triangles) == 0 or len(mesh.vertices) == 0:
+        return mesh, False
+
+    smoothed = mesh.filter_smooth_taubin(
+        number_of_iterations=int(iters),
+        lambda_filter=float(lambda_val),
+        mu=float(mu_val),
+    )
+    smoothed.remove_degenerate_triangles()
+    smoothed.remove_duplicated_triangles()
+    smoothed.remove_unreferenced_vertices()
+
+    if len(smoothed.triangles) == 0 or len(smoothed.vertices) == 0:
+        return mesh, False
+
+    smoothed.compute_vertex_normals()
+    return smoothed, True
 
 
 def _decimate_tsdf_mesh(mesh, target_faces: int):
