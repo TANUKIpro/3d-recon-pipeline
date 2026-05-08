@@ -13,16 +13,75 @@ def _make_K(fx, fy, cx, cy):
     return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
 
 
-def _project_points(pts, c2w, K, img_w, img_h):
-    """Project 3D→2D. Returns (uv (M,2), valid (N,), depths (N,))."""
+def _normalize_dist_coeffs(dist_coeffs) -> np.ndarray | None:
+    """Return a length-5 OpenCV layout [k1, k2, p1, p2, k3] or None.
+
+    None / zero coefficients short-circuit to None so callers can skip the
+    distortion path entirely when SIMPLE_RADIAL k1 is exactly 0 (synthetic
+    data) or when intrinsics.json is from a pre-distortion pipeline.
+    """
+    if dist_coeffs is None:
+        return None
+    arr = np.asarray(dist_coeffs, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return None
+    if arr.size < 5:
+        padded = np.zeros(5, dtype=np.float64)
+        padded[: arr.size] = arr
+        arr = padded
+    if not np.any(np.abs(arr[:5]) > 1e-12):
+        return None
+    return arr[:5]
+
+
+def _apply_brown_distortion(
+    x: np.ndarray, y: np.ndarray, dist_coeffs: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply Brown-Conrady distortion to normalized image coordinates.
+
+    Matches OpenCV / COLMAP convention with [k1, k2, p1, p2, k3]. SIMPLE_RADIAL
+    fills (k1, 0, 0, 0, 0); RADIAL fills (k1, k2, 0, 0, 0); OPENCV fills
+    (k1, k2, p1, p2, 0); FULL_OPENCV fills all five. Bundle adjustment in
+    Stage 2 solved world geometry under this exact model, so projecting
+    through the same model — and sampling the original frame directly —
+    avoids the bilinear remap that ``cv2.undistort`` would otherwise do.
+    The remap is what creates the cylindrical-surface speckle (per-texel
+    sub-pixel error in the high-radius regions of every view).
+    """
+    k1, k2, p1, p2, k3 = (
+        float(dist_coeffs[0]),
+        float(dist_coeffs[1]),
+        float(dist_coeffs[2]),
+        float(dist_coeffs[3]),
+        float(dist_coeffs[4]),
+    )
+    r2 = x * x + y * y
+    radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+    x_d = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    y_d = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    return x_d, y_d
+
+
+def _project_points(pts, c2w, K, img_w, img_h, dist_coeffs=None):
+    """Project 3D→2D. Returns (uv (M,2), valid (N,), depths (N,)).
+
+    When ``dist_coeffs`` is provided the projection applies the full COLMAP
+    camera model (pinhole + Brown-Conrady) so callers can sample the original
+    distorted frame instead of pre-undistorting it.
+    """
     w2c = np.linalg.inv(c2w)
     cam = (w2c[:3, :3] @ pts.T).T + w2c[:3, 3]
     depths = cam[:, 2]
     valid = depths > 0.01
     pts_v = cam[valid]
     sz = np.maximum(pts_v[:, 2], 1e-10)
-    u = K[0, 0] * pts_v[:, 0] / sz + K[0, 2]
-    v = K[1, 1] * pts_v[:, 1] / sz + K[1, 2]
+    x_n = pts_v[:, 0] / sz
+    y_n = pts_v[:, 1] / sz
+    coeffs = _normalize_dist_coeffs(dist_coeffs)
+    if coeffs is not None:
+        x_n, y_n = _apply_brown_distortion(x_n, y_n, coeffs)
+    u = K[0, 0] * x_n + K[0, 2]
+    v = K[1, 1] * y_n + K[1, 2]
     in_bounds = (u >= 0) & (u < img_w - 1) & (v >= 0) & (v < img_h - 1)
     uv = np.column_stack([u[in_bounds], v[in_bounds]])
     valid_idx = np.where(valid)[0]
@@ -31,14 +90,24 @@ def _project_points(pts, c2w, K, img_w, img_h):
     return uv, full_valid, depths
 
 
-def _project_simple(pts, c2w, K):
-    """Simple 3D→2D projection. Returns (uv (N,2), depths (N,))."""
+def _project_simple(pts, c2w, K, dist_coeffs=None):
+    """Simple 3D→2D projection. Returns (uv (N,2), depths (N,)).
+
+    Pass ``dist_coeffs`` (OpenCV layout) to apply the full COLMAP camera
+    model. Without it the projection is pinhole and callers must keep their
+    frames undistorted to remain coherent.
+    """
     w2c = np.linalg.inv(c2w)
     cam = (w2c[:3, :3] @ pts.T).T + w2c[:3, 3]
     d = cam[:, 2].copy()
     sz = np.maximum(d, 1e-10)
-    u = K[0, 0] * cam[:, 0] / sz + K[0, 2]
-    v = K[1, 1] * cam[:, 1] / sz + K[1, 2]
+    x_n = cam[:, 0] / sz
+    y_n = cam[:, 1] / sz
+    coeffs = _normalize_dist_coeffs(dist_coeffs)
+    if coeffs is not None:
+        x_n, y_n = _apply_brown_distortion(x_n, y_n, coeffs)
+    u = K[0, 0] * x_n + K[0, 2]
+    v = K[1, 1] * y_n + K[1, 2]
     return np.column_stack([u, v]), d
 
 

@@ -385,14 +385,15 @@ def bake_texture(
     dist_coeffs = intrinsics.get("dist_coeffs")
     print(f"  K: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
 
-    frame_cache = _FrameCache(img_w, img_h, K=K, dist_coeffs=dist_coeffs)
-    if frame_cache.undistort_enabled:
-        dist_label = intrinsics.get("distortion_model", "?")
+    frame_cache = _FrameCache(img_w, img_h)
+    if dist_coeffs is not None:
         dist_arr = np.asarray(dist_coeffs, dtype=np.float64).ravel()
-        print(
-            "  Frame undistortion: ON (model=%s, dist=[%s])"
-            % (dist_label, ", ".join(f"{c:.5f}" for c in dist_arr))
-        )
+        if np.any(np.abs(dist_arr) > 1e-12):
+            dist_label = intrinsics.get("distortion_model", "?")
+            print(
+                "  Projection model: %s (dist=[%s]) — sampling original frames"
+                % (dist_label, ", ".join(f"{c:.5f}" for c in dist_arr))
+            )
 
     # --- UV Atlas ---
     uv_face_budget, uv_budget_source = _resolve_uv_face_budget(len(faces))
@@ -580,7 +581,7 @@ def bake_texture(
         except FileNotFoundError:
             continue
 
-        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device)
+        depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device, dist_coeffs=dist_coeffs)
         if max_depth_cache > 0:
             depth_cache[vidx] = depth_buffer
             while len(depth_cache) > max_depth_cache:
@@ -598,6 +599,7 @@ def bake_texture(
             angle_exp=angle_exp,
             dist_pow=dist_pow,
             device=texture_device,
+            dist_coeffs=dist_coeffs,
         )
         _update_topk_scores(best_scores, best_views, valid, score, vidx)
 
@@ -738,7 +740,7 @@ def bake_texture(
         if vidx in depth_cache:
             depth_buffer = depth_cache[vidx]
         else:
-            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device)
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device, dist_coeffs=dist_coeffs)
         valid, _score, px_proj, py_proj = _evaluate_view_samples(
             pos3d=pos3d,
             normals=normals,
@@ -752,6 +754,7 @@ def bake_texture(
             angle_exp=angle_exp,
             dist_pow=dist_pow,
             device=texture_device,
+            dist_coeffs=dist_coeffs,
         )
 
         ok = valid[all_tidx]
@@ -806,6 +809,7 @@ def bake_texture(
             else:
                 depth_buffer = _rasterize_view_depth(
                     new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device,
+                    dist_coeffs=dist_coeffs,
                 )
             valid_fb, score_fb, _, _ = _evaluate_view_samples(
                 pos3d=pos3d[missing],
@@ -820,6 +824,7 @@ def bake_texture(
                 angle_exp=angle_exp,
                 dist_pow=dist_pow,
                 device=texture_device,
+                dist_coeffs=dist_coeffs,
             )
             better = valid_fb & (score_fb > fb_best_score)
             better_idx = np.where(better)[0]
@@ -848,6 +853,7 @@ def bake_texture(
                 else:
                     depth_buffer = _rasterize_view_depth(
                         new_vertices, new_faces, c2w, K, img_w, img_h, device=texture_device,
+                        dist_coeffs=dist_coeffs,
                     )
                 valid_p, _, px_p, py_p = _evaluate_view_samples(
                     pos3d=pos3d[fb_global],
@@ -862,6 +868,7 @@ def bake_texture(
                     angle_exp=angle_exp,
                     dist_pow=dist_pow,
                     device=texture_device,
+                    dist_coeffs=dist_coeffs,
                 )
                 if np.any(valid_p):
                     fill_global = fb_global[valid_p]
@@ -957,6 +964,7 @@ def bake_texture(
                     angle_exp=angle_exp,
                     dist_pow=dist_pow,
                     device=texture_device,
+                    dist_coeffs=dist_coeffs,
                 )
                 print(
                     "  Region seam refinement: softened %d boundary texels, refined detail samples=%d"

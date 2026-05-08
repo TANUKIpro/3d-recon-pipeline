@@ -51,6 +51,7 @@ def _rasterize_view_depth(
     img_w: int,
     img_h: int,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> np.ndarray:
     """Rasterize mesh depth into camera image space for a simple z-test.
 
@@ -58,15 +59,22 @@ def _rasterize_view_depth(
     rasterization loop (Optimization B).  When *device* is ``"cuda"`` the
     function attempts GPU rasterization via nvdiffrast and falls back to CPU
     on failure.
+
+    When ``dist_coeffs`` is supplied the projection applies the COLMAP camera
+    model so the depth buffer lives in the same distorted-pixel coordinate
+    frame as the unmodified source frames; callers can then sample those
+    frames without first remapping them through ``cv2.undistort``.
     """
     if device == "cuda":
         try:
             from scripts.texture.gpu_raster import gpu_rasterize_depth
-            return gpu_rasterize_depth(vertices, faces, c2w, K, img_w, img_h)
+            return gpu_rasterize_depth(
+                vertices, faces, c2w, K, img_w, img_h, dist_coeffs=dist_coeffs
+            )
         except Exception:
             pass  # fall through to CPU path
 
-    uv_all, depth_all = _project_simple(vertices, c2w, K)
+    uv_all, depth_all = _project_simple(vertices, c2w, K, dist_coeffs=dist_coeffs)
     depth_buffer = np.full((img_h, img_w), np.inf, dtype=np.float32)
     inside_eps = 1e-5
 
@@ -177,6 +185,7 @@ def _evaluate_view_samples(
     angle_exp: float,
     dist_pow: float,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     packet, valid, score = _evaluate_view_packet(
         pos3d=pos3d,
@@ -191,6 +200,7 @@ def _evaluate_view_samples(
         angle_exp=angle_exp,
         dist_pow=dist_pow,
         device=device,
+        dist_coeffs=dist_coeffs,
     )
 
     return valid, score, packet.px_proj, packet.py_proj
@@ -228,6 +238,7 @@ def _evaluate_view_packet(
     angle_exp: float,
     dist_pow: float,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[ViewEvalPacket, np.ndarray, np.ndarray]:
     """Evaluate which texels can be sampled from a view and return per-texel scores."""
     if device == "cuda":
@@ -237,6 +248,7 @@ def _evaluate_view_packet(
             packet = gpu_evaluate_view_packet(
                 pos3d, normals, c2w, K, img_w, img_h,
                 mask_bool, depth_buffer,
+                dist_coeffs=dist_coeffs,
             )
             _validate_view_packet(packet, int(pos3d.shape[0]))
             valid, score = _score_view_packet(packet, min_cos, angle_exp, dist_pow)
@@ -252,7 +264,7 @@ def _evaluate_view_packet(
     view_dirs_n = view_dirs / np.maximum(dists[:, None], 1e-10)
     cos_angle = np.sum(normals * view_dirs_n, axis=1)
 
-    uv2d, depths = _project_simple(pos3d, c2w, K)
+    uv2d, depths = _project_simple(pos3d, c2w, K, dist_coeffs=dist_coeffs)
     px_proj = uv2d[:, 0]
     py_proj = uv2d[:, 1]
     in_bounds = (

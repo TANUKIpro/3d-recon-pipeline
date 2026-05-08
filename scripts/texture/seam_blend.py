@@ -511,6 +511,7 @@ def _sample_companion_texture(
     angle_exp: float,
     dist_pow: float,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     companion_texture = np.zeros(tex_shape, dtype=np.float32)
     companion_valid = np.zeros(tex_shape[:2], dtype=bool)
@@ -541,7 +542,7 @@ def _sample_companion_texture(
         if int(vidx) in depth_cache:
             depth_buffer = depth_cache[int(vidx)]
         else:
-            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=device)
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=device, dist_coeffs=dist_coeffs)
             depth_cache[int(vidx)] = depth_buffer
         valid, _score, px_proj, py_proj = _evaluate_view_samples(
             pos3d=pos3d[view_tidx],
@@ -556,6 +557,7 @@ def _sample_companion_texture(
             angle_exp=angle_exp,
             dist_pow=dist_pow,
             device=device,
+            dist_coeffs=dist_coeffs,
         )
         if not np.any(valid):
             continue
@@ -591,6 +593,7 @@ def _sample_companion_patch(
     angle_exp: float,
     dist_pow: float,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     companion_patch = np.zeros(patch_shape, dtype=np.float32)
     companion_valid = np.zeros(patch_shape[:2], dtype=bool)
@@ -620,7 +623,7 @@ def _sample_companion_patch(
         if int(vidx) in depth_cache:
             depth_buffer = depth_cache[int(vidx)]
         else:
-            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=device)
+            depth_buffer = _rasterize_view_depth(new_vertices, new_faces, c2w, K, img_w, img_h, device=device, dist_coeffs=dist_coeffs)
             depth_cache[int(vidx)] = depth_buffer
         valid, _score, px_proj, py_proj = _evaluate_view_samples(
             pos3d=pos3d[view_tidx],
@@ -635,6 +638,7 @@ def _sample_companion_patch(
             angle_exp=angle_exp,
             dist_pow=dist_pow,
             device=device,
+            dist_coeffs=dist_coeffs,
         )
         if not np.any(valid):
             continue
@@ -685,6 +689,7 @@ def _apply_quality_boost_detail_refinement(
     dist_pow: float,
     dilate_iters: int = _TEXTURE_SEAM_HQ_DILATE,
     device: str = "cpu",
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[np.ndarray, int, int]:
     valid_labels = label_buffer >= 0
     if texture.size == 0 or not np.any(valid_mask & valid_labels):
@@ -775,6 +780,7 @@ def _apply_quality_boost_detail_refinement(
                 angle_exp=angle_exp,
                 dist_pow=dist_pow,
                 device=device,
+                dist_coeffs=dist_coeffs,
             )
             if not np.any(local_component & cand_valid):
                 continue

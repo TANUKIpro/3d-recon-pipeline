@@ -42,6 +42,34 @@ def _get_cuda_context():
     return _cuda_ctx
 
 
+def _normalize_dist_coeffs_np(dist_coeffs) -> np.ndarray | None:
+    """Mirror of scripts.texture.intrinsics._normalize_dist_coeffs (numpy-side)."""
+    if dist_coeffs is None:
+        return None
+    arr = np.asarray(dist_coeffs, dtype=np.float64).ravel()
+    if arr.size == 0:
+        return None
+    if arr.size < 5:
+        padded = np.zeros(5, dtype=np.float64)
+        padded[: arr.size] = arr
+        arr = padded
+    if not np.any(np.abs(arr[:5]) > 1e-12):
+        return None
+    return arr[:5]
+
+
+def _apply_brown_distortion_torch(x, y, coeffs_t):
+    """Brown-Conrady distortion in torch space; coeffs_t is a 5-vector."""
+    k1, k2, p1, p2, k3 = (
+        coeffs_t[0], coeffs_t[1], coeffs_t[2], coeffs_t[3], coeffs_t[4]
+    )
+    r2 = x * x + y * y
+    radial = 1.0 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+    x_d = x * radial + 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x)
+    y_d = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y
+    return x_d, y_d
+
+
 def _pinhole_to_gl_proj(
     K: np.ndarray,
     img_w: int,
@@ -108,11 +136,20 @@ def gpu_rasterize_depth(
     K: np.ndarray,
     img_w: int,
     img_h: int,
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> np.ndarray:
     """GPU depth rasterization using nvdiffrast.
 
     Returns an (img_h, img_w) float32 depth buffer (camera-space Z) with
     np.inf for background pixels — same contract as the CPU version.
+
+    When ``dist_coeffs`` is provided, vertices are projected through the full
+    COLMAP camera model (pinhole + Brown-Conrady) so the buffer indexes the
+    distorted-frame pixel grid; this lets the bake sample original frames
+    without first remapping them through ``cv2.undistort``. The non-linear
+    bend across triangle interiors is < 1 px for SIMPLE_RADIAL k1 ≤ 0.04 at
+    1080p, so per-vertex distortion + linear rasterization is accurate
+    enough for the depth z-test.
     """
     torch = _torch
     dr = _dr
@@ -126,13 +163,30 @@ def gpu_rasterize_depth(
     w2c_t = torch.as_tensor(w2c, device="cuda")
     cam_pos = (verts_gpu @ w2c_t[:3, :3].T) + w2c_t[:3, 3].unsqueeze(0)
 
+    coeffs_np = _normalize_dist_coeffs_np(dist_coeffs)
+    if coeffs_np is None:
+        cam_h_input = cam_pos
+    else:
+        # Apply Brown-Conrady to (x/z, y/z), then synthesize a virtual cam-space
+        # point (x_d*z, y_d*z, z) that pinhole-projects to the distorted (u, v).
+        # Feeding that through ``_pinhole_to_gl_proj`` reuses the same NDC
+        # convention as the pinhole path, so callers see one consistent depth
+        # buffer whether or not distortion is on.
+        coeffs_t = torch.as_tensor(coeffs_np.astype(np.float32, copy=False), device="cuda")
+        cam_z = cam_pos[:, 2]
+        sz = torch.clamp(cam_z, min=1e-10)
+        x_n = cam_pos[:, 0] / sz
+        y_n = cam_pos[:, 1] / sz
+        x_n, y_n = _apply_brown_distortion_torch(x_n, y_n, coeffs_t)
+        cam_h_input = torch.stack([x_n * cam_z, y_n * cam_z, cam_z], dim=1)
+
     # Clip-space: apply projection matrix
     proj = _pinhole_to_gl_proj(K, img_w, img_h, near=0.005, far=200.0)
     proj_t = torch.as_tensor(proj, device="cuda")
 
     # Build homogeneous clip coords: [x, y, z, 1] in camera space → clip
-    ones = torch.ones(cam_pos.shape[0], 1, device="cuda", dtype=torch.float32)
-    cam_h = torch.cat([cam_pos, ones], dim=1)  # (V, 4)
+    ones = torch.ones(cam_h_input.shape[0], 1, device="cuda", dtype=torch.float32)
+    cam_h = torch.cat([cam_h_input, ones], dim=1)  # (V, 4)
     clip = (cam_h @ proj_t.T)  # (V, 4)
 
     # nvdiffrast expects (B, V, 4) and (F, 3)
@@ -276,8 +330,16 @@ def gpu_evaluate_view_packet(
     img_h: int,
     mask_bool: np.ndarray,
     depth_buffer: np.ndarray,
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> "ViewEvalPacket":
-    """GPU-accelerated view sample evaluation packet builder."""
+    """GPU-accelerated view sample evaluation packet builder.
+
+    When ``dist_coeffs`` is supplied, projection applies COLMAP's Brown-Conrady
+    so the returned (px, py) index the distorted source frame directly. This
+    keeps the bake from going through ``cv2.undistort``, which would
+    bilinearly resample fine details out of the high-radius regions of every
+    view.
+    """
     from scripts.texture.view_scoring import ViewEvalPacket, _validate_view_packet
 
     torch = _torch
@@ -298,8 +360,14 @@ def gpu_evaluate_view_packet(
     cam = (pos_gpu @ w2c[:3, :3].T) + w2c[:3, 3].unsqueeze(0)
     d = cam[:, 2].clone()
     sz = torch.clamp(d, min=1e-10)
-    u = K_t[0, 0] * cam[:, 0] / sz + K_t[0, 2]
-    v = K_t[1, 1] * cam[:, 1] / sz + K_t[1, 2]
+    x_n = cam[:, 0] / sz
+    y_n = cam[:, 1] / sz
+    coeffs_np = _normalize_dist_coeffs_np(dist_coeffs)
+    if coeffs_np is not None:
+        coeffs_t = torch.as_tensor(coeffs_np.astype(np.float32, copy=False), device="cuda")
+        x_n, y_n = _apply_brown_distortion_torch(x_n, y_n, coeffs_t)
+    u = K_t[0, 0] * x_n + K_t[0, 2]
+    v = K_t[1, 1] * y_n + K_t[1, 2]
 
     in_bounds = (d > 0.01) & (u >= 0) & (u < img_w - 1) & (v >= 0) & (v < img_h - 1)
 
@@ -345,6 +413,7 @@ def gpu_evaluate_view_samples(
     min_cos: float,
     angle_exp: float,
     dist_pow: float,
+    dist_coeffs: np.ndarray | list | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """GPU-accelerated view sample evaluation. Same interface as CPU version."""
     from scripts.texture.view_scoring import _score_view_packet
@@ -358,6 +427,7 @@ def gpu_evaluate_view_samples(
         img_h=img_h,
         mask_bool=mask_bool,
         depth_buffer=depth_buffer,
+        dist_coeffs=dist_coeffs,
     )
     valid, score = _score_view_packet(packet, min_cos, angle_exp, dist_pow)
     return valid, score, packet.px_proj, packet.py_proj
