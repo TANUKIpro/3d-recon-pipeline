@@ -26,13 +26,49 @@ from scripts.output_layout import (
     camera_poses_path,
     colmap_sparse_dir,
     frames_dir,
+    intrinsics_path,
     masks_dir,
     object_mesh_path,
+    texture_png_path,
+    textured_mesh_obj_path,
 )
 
 
 class TestResetOutputsFromStage(unittest.TestCase):
     """reset_outputs_from_stage keeps earlier stages intact."""
+
+    def test_reset_from_stage_5_preserves_intrinsics(self) -> None:
+        """Stage 5 reset must NOT wipe intrinsics.json.
+
+        Mirrors the 6d31fba fix to ``checkpoints.py:_STAGE_FALLBACK_RESET[5]``
+        for the second reset code path. COLMAP's bundle-adjusted pinhole
+        values must survive a stage-5 restart so the bake doesn't fall onto
+        its grid-search estimator and destroy fine texture detail on
+        cylindrical surfaces.
+        """
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            # Stage 2: COLMAP intrinsics + sparse + poses
+            intr_file = intrinsics_path(out)
+            intr_file.parent.mkdir(parents=True, exist_ok=True)
+            intr_file.write_text(json.dumps({"source": "colmap:SIMPLE_RADIAL"}))
+            colmap_sparse_dir(out).mkdir(parents=True, exist_ok=True)
+            # Stage 5: textured outputs
+            tex_obj = textured_mesh_obj_path(out)
+            tex_obj.parent.mkdir(parents=True, exist_ok=True)
+            tex_obj.write_text("o\n")
+            tex_png = texture_png_path(out)
+            tex_png.write_bytes(b"\x89PNG")
+
+            reset_outputs_from_stage(out, 5)
+
+            # Stage 5 outputs deleted
+            self.assertFalse(textured_mesh_obj_path(out).is_file())
+            self.assertFalse(texture_png_path(out).is_file())
+            # Stage 2 intrinsics preserved (the regression guard)
+            self.assertTrue(intrinsics_path(out).is_file())
+            # COLMAP sparse model preserved
+            self.assertTrue(colmap_sparse_dir(out).is_dir())
 
     def test_reset_from_stage_3_preserves_1_and_2(self) -> None:
         with TemporaryDirectory() as tmp:

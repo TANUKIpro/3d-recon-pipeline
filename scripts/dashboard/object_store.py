@@ -77,13 +77,19 @@ STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
         "dirs": (f"{P4_MESH}/{GS2MESH_WORKSPACE_DIRNAME}",),
         "files": (f"{P4_MESH}/{OBJECT_MESH_FILENAME}",),
     },
+    # NOTE: ``intrinsics.json`` is intentionally NOT listed here. Stage 2
+    # writes the COLMAP bundle-adjusted pinhole values; on cylindrical /
+    # self-similar surfaces the texture stage's grid-search + Nelder-Mead
+    # estimator can land in a sub-pixel-skewed local minimum that destroys
+    # fine printed text under Top-K view blending (Cup_Noodle regression).
+    # See 6d31fba and ``scripts/dashboard/checkpoints.py:_STAGE_FALLBACK_RESET[5]``,
+    # which omits the same file for the checkpoint-resume code path.
     5: {
         "dirs": (),
         "files": (
             f"{P5_TEXTURE}/{TEXTURED_MESH_OBJ_FILENAME}",
             f"{P5_TEXTURE}/{TEXTURED_MESH_MTL_FILENAME}",
             f"{P5_TEXTURE}/{TEXTURE_PNG_FILENAME}",
-            f"{P2_COLMAP}/{INTRINSICS_FILENAME}",
         ),
     },
     # Stage 6 also clears the final-deliverable subfolder
