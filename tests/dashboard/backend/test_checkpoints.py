@@ -153,24 +153,30 @@ class TestCheckpointCleanupPlan(unittest.TestCase):
     """checkpoint_cleanup_plan returns (dirs, files, used_fallback)."""
 
     def test_known_checkpoint_returns_spec(self) -> None:
+        from scripts.output_layout import P1_FRAMES, P4_MESH
+
         dirs, files, used_fallback = checkpoint_cleanup_plan(1, "s1.extract")
-        self.assertIn("frames", dirs)
+        self.assertIn(P1_FRAMES, dirs)
         self.assertFalse(used_fallback)
 
     def test_unknown_checkpoint_returns_fallback(self) -> None:
+        from scripts.output_layout import P1_FRAMES
+
         dirs, files, used_fallback = checkpoint_cleanup_plan(1, "s1.bogus")
         self.assertTrue(used_fallback)
-        # Fallback for stage 1 includes "frames" dir
-        self.assertIn("frames", dirs)
+        # Fallback for stage 1 includes the frames phase dir
+        self.assertIn(P1_FRAMES, dirs)
 
     def test_none_checkpoint_returns_fallback(self) -> None:
         _, _, used_fallback = checkpoint_cleanup_plan(1, None)
         self.assertTrue(used_fallback)
 
     def test_stage4_known(self) -> None:
+        from scripts.output_layout import OBJECT_MESH_FILENAME, P4_MESH
+
         dirs, files, used_fallback = checkpoint_cleanup_plan(4, "s4.save")
         self.assertFalse(used_fallback)
-        self.assertIn("object_mesh.ply", files)
+        self.assertIn(f"{P4_MESH}/{OBJECT_MESH_FILENAME}", files)
 
 
 # -------------------------------------------- TestCleanupCheckpointOutputs ---
@@ -180,21 +186,30 @@ class TestCleanupCheckpointOutputs(unittest.TestCase):
     """cleanup_checkpoint_outputs physically removes dirs/files."""
 
     def test_removes_directory(self) -> None:
+        from scripts.output_layout import P1_FRAMES, frames_dir
+
         with TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir) / "frames"
-            target.mkdir()
+            target = frames_dir(tmpdir)
+            target.mkdir(parents=True)
             (target / "001.png").touch()
             result = cleanup_checkpoint_outputs(tmpdir, 1, "s1.extract")
             self.assertFalse(target.exists())
-            self.assertIn("frames", result["removed_dirs"])
+            self.assertIn(P1_FRAMES, result["removed_dirs"])
 
     def test_removes_file(self) -> None:
+        from scripts.output_layout import (
+            OBJECT_MESH_FILENAME,
+            P4_MESH,
+            object_mesh_path,
+        )
+
         with TemporaryDirectory() as tmpdir:
-            target = Path(tmpdir) / "object_mesh.ply"
+            target = object_mesh_path(tmpdir)
+            target.parent.mkdir(parents=True, exist_ok=True)
             target.touch()
             result = cleanup_checkpoint_outputs(tmpdir, 4, "s4.save")
             self.assertFalse(target.exists())
-            self.assertIn("object_mesh.ply", result["removed_files"])
+            self.assertIn(f"{P4_MESH}/{OBJECT_MESH_FILENAME}", result["removed_files"])
 
     def test_nonexistent_is_safe(self) -> None:
         with TemporaryDirectory() as tmpdir:

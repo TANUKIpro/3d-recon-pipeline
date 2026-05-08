@@ -12,6 +12,15 @@ import struct
 import subprocess
 from pathlib import Path
 
+from scripts.output_layout import (
+    camera_poses_path,
+    colmap_phase_dir,
+    colmap_sparse_dir as _colmap_sparse_dir,
+    colmap_sparse_points_path,
+    colmap_workspace_dir,
+    intrinsics_path,
+)
+
 
 def run_colmap_sfm(
     frames_dir: str,
@@ -33,10 +42,12 @@ def run_colmap_sfm(
     """
     frames = Path(frames_dir)
     out = Path(output_dir)
-    colmap_workspace = out / "colmap_workspace"
+    colmap_phase = colmap_phase_dir(out)
+    colmap_workspace = colmap_workspace_dir(out)
     colmap_db = colmap_workspace / "database.db"
-    colmap_sparse = out / "colmap_sparse"
+    colmap_sparse = _colmap_sparse_dir(out)
 
+    colmap_phase.mkdir(parents=True, exist_ok=True)
     colmap_workspace.mkdir(parents=True, exist_ok=True)
     colmap_sparse.mkdir(parents=True, exist_ok=True)
 
@@ -129,7 +140,7 @@ def run_colmap_sfm(
         raise RuntimeError("COLMAP mapper produced no valid reconstruction")
 
     poses = _read_colmap_poses(recon_dir)
-    poses_path = str(out / "camera_poses.json")
+    poses_path = str(camera_poses_path(out))
     with open(poses_path, "w", encoding="utf-8") as f:
         json.dump(poses, f, indent=2)
     print(f"Exported {len(poses)} camera poses to {poses_path}")
@@ -141,18 +152,18 @@ def run_colmap_sfm(
         print(f"  Warning: failed to export COLMAP intrinsics ({exc}); texture stage will re-estimate")
     else:
         if intrinsics is not None:
-            intrinsics_path = out / "intrinsics.json"
-            with open(intrinsics_path, "w", encoding="utf-8") as f:
+            intrinsics_file = intrinsics_path(out)
+            with open(intrinsics_file, "w", encoding="utf-8") as f:
                 json.dump(intrinsics, f, indent=2)
             print(
-                f"Exported intrinsics to {intrinsics_path}: "
+                f"Exported intrinsics to {intrinsics_file}: "
                 f"fx={intrinsics['fx']:.1f} fy={intrinsics['fy']:.1f} "
                 f"cx={intrinsics['cx']:.1f} cy={intrinsics['cy']:.1f}"
             )
 
     # Step 5: Export sparse point cloud as PLY
     _report(90.0, "Exporting sparse point cloud")
-    sparse_ply = out / "colmap_sparse_points.ply"
+    sparse_ply = colmap_sparse_points_path(out)
     _run_colmap([
         "colmap", "model_converter",
         "--input_path", str(recon_dir),

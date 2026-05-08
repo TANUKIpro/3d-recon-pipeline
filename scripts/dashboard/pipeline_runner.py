@@ -32,6 +32,17 @@ from scripts.dashboard.state import (
     PipelineStage,
     StageStatus,
 )
+from scripts.output_layout import (
+    camera_poses_path,
+    cleanup_final_dir,
+    cleanup_proposal_dir,
+    colmap_sparse_dir,
+    frames_dir,
+    ground_plane_path,
+    intrinsics_path,
+    object_mesh_path,
+    textured_mesh_obj_path,
+)
 
 if TYPE_CHECKING:
     from scripts.dashboard.sam2_service import SAM2Service
@@ -153,7 +164,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.frame_interval,
                 cfg.max_frames,
             )
-            session.frames_dir = str(Path(output_dir) / "frames")
+            session.frames_dir = str(frames_dir(output_dir))
             frame_count = len(list(Path(session.frames_dir).glob("*.jpg")))
             session.frame_count = frame_count
             await broadcast(session, {
@@ -185,8 +196,8 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.colmap_dsp_sift,
                 cfg.colmap_first_octave,
             )
-            session.poses_path = str(Path(output_dir) / "camera_poses.json")
-            session.colmap_sparse_path = str(Path(output_dir) / "colmap_sparse")
+            session.poses_path = str(camera_poses_path(output_dir))
+            session.colmap_sparse_path = str(colmap_sparse_dir(output_dir))
 
             # Pause for user to review COLMAP results
             await broadcast(session, {"type": "colmap_preview_ready"})
@@ -412,12 +423,12 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 PipelineStage.GS2MESH_RECONSTRUCT,
                 _stage_gs2mesh_reconstruct,
                 session.frames_dir,
-                session.colmap_sparse_path or str(Path(output_dir) / "colmap_sparse"),
+                session.colmap_sparse_path or str(colmap_sparse_dir(output_dir)),
                 session.mask_dir,
                 output_dir,
                 cfg.to_gs2mesh_settings(),
             )
-            session.mesh_ply = str(Path(output_dir) / "object_mesh.ply")
+            session.mesh_ply = str(object_mesh_path(output_dir))
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
                 session,
@@ -446,7 +457,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                 cfg.texture_view_assign_mode,
                 cfg.texture_quality_boost,
             )
-            session.obj_path = str(Path(output_dir) / "textured_mesh.obj")
+            session.obj_path = str(textured_mesh_obj_path(output_dir))
             _check_cancelled(session)
             await _wait_for_next_stage_confirmation(
                 session,
@@ -459,9 +470,9 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             _require_file(session.obj_path, "Textured mesh")
             await _run_post_texture_cleanup_stage(session)
             session.cleaned_obj_path = str(
-                Path(output_dir) / Path(output_dir).name / "textured_mesh_cleaned.obj"
+                cleanup_final_dir(output_dir) / "textured_mesh_cleaned.obj"
             )
-            proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+            proposal_path = cleanup_proposal_dir(output_dir) / "proposal.json"
             session.cleanup_proposal_path = str(proposal_path) if proposal_path.is_file() else None
 
         # ── Complete ──────────────────────────────────────────────
@@ -770,8 +781,8 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
     try:
         # Extract ground plane from mesh + SAM2 ground masks if not yet done
         if session.ground_plane_path is None and session.ground_mask_dir is not None:
-            intrinsics_file = Path(output_dir) / "intrinsics.json"
-            mesh_ply = session.mesh_ply or str(Path(output_dir) / "object_mesh.ply")
+            intrinsics_file = intrinsics_path(output_dir)
+            mesh_ply = session.mesh_ply or str(object_mesh_path(output_dir))
             if Path(mesh_ply).is_file() and intrinsics_file.is_file() and session.poses_path:
                 await _broadcast_stage_progress(
                     session, stage, progress=5.0,
@@ -788,24 +799,24 @@ async def _run_post_texture_cleanup_stage(session: PipelineSession) -> None:
                     session.mask_dir,
                 )
                 if gp_result is not None:
-                    gp_path = Path(output_dir) / "ground_plane.json"
+                    gp_path = ground_plane_path(output_dir)
                     session.ground_plane_path = str(gp_path) if gp_path.is_file() else None
 
-        intrinsics_path = Path(output_dir) / "intrinsics.json"
+        intrinsics_file = intrinsics_path(output_dir)
         proposal = await asyncio.to_thread(
             _run_blocking,
             _stage_post_texture_contact_cleanup_prepare,
             str(session.obj_path),
             output_dir,
             session.poses_path,
-            str(intrinsics_path) if intrinsics_path.is_file() else None,
+            str(intrinsics_file) if intrinsics_file.is_file() else None,
             session.mask_dir,
             session.ground_mask_dir,
             session.ground_plane_path,
             session.config.cleanup_lower_half_threshold,
         )
 
-        proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+        proposal_path = cleanup_proposal_dir(output_dir) / "proposal.json"
         session.cleanup_proposal_path = str(proposal_path) if proposal_path.is_file() else None
 
         decision = "skip"

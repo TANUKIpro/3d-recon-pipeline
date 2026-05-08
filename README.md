@@ -154,23 +154,27 @@ docker compose run --rm --service-ports \
 
 ## 出力ファイル
 
-パイプライン完了後、`data/output/objects/<object_name>/` に生成される主要ファイル:
+パイプライン完了後、`data/output/objects/<object_name>/` 配下にフェーズ別ディレクトリで生成される:
 
-| ファイル | 説明 |
+| パス | 説明 |
 |---------|------|
-| `<object_name>/textured_mesh_cleaned.obj` / `.mtl` / `texture.png` | 最終成果物: クリーンアップ済みテクスチャ付き3Dメッシュ |
-| `<object_name>/texture_cap.png` | 接地キャップテクスチャ (cleanup apply 時) |
-| `textured_mesh.obj` / `.mtl` / `texture.png` | Stage 5 出力: クリーンアップ前のテクスチャ付きメッシュ |
-| `object_mesh.ply` | Stage 4 出力: gs2mesh 再構成メッシュ |
-| `camera_poses.json` | COLMAP カメラ外部パラメータ (c2w 4x4 行列) |
-| `intrinsics.json` | COLMAP カメラ内部パラメータ (fx, fy, cx, cy, K) |
-| `colmap_sparse/` | COLMAP スパース再構成データ |
-| `colmap_sparse_points.ply` | COLMAP スパース点群 |
-| `frames/` | 抽出フレーム |
-| `masks/` | canonical SAM2 final mask (`object_raw AND NOT ground_raw`) |
-| `masks_object_raw/` / `masks_ground/` | raw object mask / raw ground subtraction mask |
-| `gs2mesh_workspace/` | gs2mesh 中間ファイル (3DGS チェックポイント、ステレオ深度マップ等) |
-| `ground_plane.json` | 推定された接地平面パラメータ |
+| `p6_cleanup/<object_name>/textured_mesh_cleaned.obj` / `.mtl` / `texture.png` | 最終成果物: クリーンアップ済みテクスチャ付き3Dメッシュ |
+| `p6_cleanup/<object_name>/texture_cap.png` | 接地キャップテクスチャ (cleanup apply 時) |
+| `p6_cleanup/post_texture_contact_cleanup/proposal.json` | Stage 6 クリーンアップ提案 |
+| `p5_texture/textured_mesh.obj` / `.mtl` / `texture.png` | Stage 5 出力: クリーンアップ前のテクスチャ付きメッシュ |
+| `p4_mesh/object_mesh.ply` | Stage 4 出力: gs2mesh 再構成メッシュ |
+| `p4_mesh/gs2mesh_workspace/` | gs2mesh 中間ファイル (3DGS チェックポイント、ステレオ深度マップ等) |
+| `p3_masks/masks/` | canonical SAM2 final mask (`object_raw AND NOT ground_raw`) |
+| `p3_masks/masks_object_raw/` / `masks_ground/` | raw object mask / raw ground subtraction mask |
+| `p3_masks/ground_plane.json` | 推定された接地平面パラメータ |
+| `p2_colmap/camera_poses.json` | COLMAP カメラ外部パラメータ (c2w 4x4 行列) |
+| `p2_colmap/intrinsics.json` | COLMAP カメラ内部パラメータ (fx, fy, cx, cy, K) |
+| `p2_colmap/colmap_sparse/` | COLMAP スパース再構成データ |
+| `p2_colmap/colmap_sparse_points.ply` | COLMAP スパース点群 |
+| `p1_frames/` | 抽出フレーム |
+| `object_meta.json` | 取り込み時メタデータ (フェーズ非依存・ルート直下) |
+
+すべてのフェーズパス定義は `scripts/output_layout.py` に集約されている。
 
 全中間ファイルの詳細は各ステージのドキュメントを参照。
 

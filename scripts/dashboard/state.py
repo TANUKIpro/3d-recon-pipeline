@@ -48,6 +48,22 @@ from scripts.config_defaults import (
     TEXTURE_VIEW_ASSIGN_MODE,
     OUTPUT_DIR_DEFAULT,
 )
+from scripts.output_layout import (
+    CAMERA_POSES_FILENAME,
+    OBJECT_MESH_FILENAME,
+    P6_CLEANUP,
+    TEXTURED_MESH_OBJ_FILENAME,
+    camera_poses_path,
+    cleanup_final_dir,
+    cleanup_proposal_dir,
+    colmap_sparse_dir,
+    frames_dir,
+    ground_plane_path,
+    masks_dir,
+    masks_ground_dir,
+    object_mesh_path,
+    textured_mesh_obj_path,
+)
 
 
 class StageStatus(str, Enum):
@@ -79,26 +95,26 @@ STAGE_LABELS: dict[int, str] = {
 }
 
 STAGE_OUTPUT_FILES: dict[int, tuple[str, ...]] = {
-    2: ("camera_poses.json",),
+    2: (CAMERA_POSES_FILENAME,),
     3: (),  # masks dir checked separately
-    4: ("object_mesh.ply",),
-    5: ("textured_mesh.obj",),
-    # Stage 6 writes into the {object_name}/ final-deliverable subfolder; the
-    # relative path is resolved at runtime because it depends on output_dir's
-    # basename. See ``final_deliverable_dir()`` / ``cleaned_obj_relative_path()``.
+    4: (OBJECT_MESH_FILENAME,),
+    5: (TEXTURED_MESH_OBJ_FILENAME,),
+    # Stage 6 writes into the p6_cleanup/{object_name}/ final-deliverable
+    # subfolder; the relative path is resolved at runtime because it depends
+    # on output_dir's basename. See ``final_deliverable_dir()`` /
+    # ``cleaned_obj_relative_path()``.
     6: (),
 }
 
 
 def final_deliverable_dir(output_dir: str | Path) -> Path:
     """Subfolder (named after the object) holding the cleaned textured mesh."""
-    root = Path(output_dir)
-    return root / root.name
+    return cleanup_final_dir(output_dir)
 
 
 def cleaned_obj_relative_path(output_dir: str | Path) -> str:
-    """Return ``<object_name>/textured_mesh_cleaned.obj`` for preview/routing."""
-    return f"{Path(output_dir).name}/textured_mesh_cleaned.obj"
+    """Return ``p6_cleanup/<object_name>/textured_mesh_cleaned.obj`` for preview/routing."""
+    return f"{P6_CLEANUP}/{Path(output_dir).name}/textured_mesh_cleaned.obj"
 
 
 def _count_indexed_files(dir_path: Path, suffix: str) -> int:
@@ -109,16 +125,16 @@ def _count_indexed_files(dir_path: Path, suffix: str) -> int:
 
 def detect_stage_outputs(output_dir: str | Path) -> tuple[dict[int, bool], int, int]:
     out = Path(output_dir)
-    frame_count = _count_indexed_files(out / "frames", ".jpg")
-    mask_count = _count_indexed_files(out / "masks", ".png")
-    textured_ready = (out / "textured_mesh.obj").is_file()
+    frame_count = _count_indexed_files(frames_dir(out), ".jpg")
+    mask_count = _count_indexed_files(masks_dir(out), ".png")
+    textured_ready = textured_mesh_obj_path(out).is_file()
     cleaned_ready = (final_deliverable_dir(out) / "textured_mesh_cleaned.obj").is_file()
-    colmap_sparse_dir = out / "colmap_sparse"
+    sparse_dir = colmap_sparse_dir(out)
     stage_complete = {
         1: frame_count > 0,
-        2: (out / "camera_poses.json").is_file() and colmap_sparse_dir.is_dir(),
+        2: camera_poses_path(out).is_file() and sparse_dir.is_dir(),
         3: mask_count > 0,
-        4: (out / "object_mesh.ply").is_file(),
+        4: object_mesh_path(out).is_file(),
         5: textured_ready,
         6: cleaned_ready,
     }
@@ -312,23 +328,29 @@ class PipelineSession:
 
         self.frame_count = frame_count
         self.mask_count = mask_count
-        self.frames_dir = str(out / "frames") if frame_count > 0 else None
-        self.mask_dir = str(out / "masks") if mask_count > 0 else None
-        ground_mask_dir = out / "masks_ground"
-        self.ground_mask_dir = str(ground_mask_dir) if ground_mask_dir.is_dir() and any(ground_mask_dir.glob("*.png")) else None
-        ground_plane_path = out / "ground_plane.json"
-        self.ground_plane_path = str(ground_plane_path) if ground_plane_path.is_file() else None
-        colmap_sparse = out / "colmap_sparse"
-        self.colmap_sparse_path = str(colmap_sparse) if colmap_sparse.is_dir() else None
-        self.poses_path = str(out / "camera_poses.json") if (out / "camera_poses.json").is_file() else None
-        base_mesh = out / "object_mesh.ply"
+        self.frames_dir = str(frames_dir(out)) if frame_count > 0 else None
+        self.mask_dir = str(masks_dir(out)) if mask_count > 0 else None
+        gm_dir = masks_ground_dir(out)
+        self.ground_mask_dir = (
+            str(gm_dir)
+            if gm_dir.is_dir() and any(gm_dir.glob("*.png"))
+            else None
+        )
+        gp_path = ground_plane_path(out)
+        self.ground_plane_path = str(gp_path) if gp_path.is_file() else None
+        sparse_dir = colmap_sparse_dir(out)
+        self.colmap_sparse_path = str(sparse_dir) if sparse_dir.is_dir() else None
+        poses_file = camera_poses_path(out)
+        self.poses_path = str(poses_file) if poses_file.is_file() else None
+        base_mesh = object_mesh_path(out)
         self.mesh_ply = str(base_mesh) if base_mesh.is_file() else None
-        self.obj_path = str(out / "textured_mesh.obj") if (out / "textured_mesh.obj").is_file() else None
+        textured_obj = textured_mesh_obj_path(out)
+        self.obj_path = str(textured_obj) if textured_obj.is_file() else None
         cleaned_obj_candidate = final_deliverable_dir(out) / "textured_mesh_cleaned.obj"
         self.cleaned_obj_path = (
             str(cleaned_obj_candidate) if cleaned_obj_candidate.is_file() else None
         )
-        cleanup_proposal = out / "post_texture_contact_cleanup" / "proposal.json"
+        cleanup_proposal = cleanup_proposal_dir(out) / "proposal.json"
         self.cleanup_proposal_path = str(cleanup_proposal) if cleanup_proposal.is_file() else None
 
         for stage_id in range(1, int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP) + 1):

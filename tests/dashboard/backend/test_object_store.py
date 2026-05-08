@@ -22,6 +22,13 @@ from scripts.dashboard.object_store import (
     validate_resume_prerequisites,
     write_object_meta,
 )
+from scripts.output_layout import (
+    camera_poses_path,
+    colmap_sparse_dir,
+    frames_dir,
+    masks_dir,
+    object_mesh_path,
+)
 
 
 class TestResetOutputsFromStage(unittest.TestCase):
@@ -31,26 +38,30 @@ class TestResetOutputsFromStage(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             # Create stage 1 output
-            (out / "frames").mkdir()
-            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
+            frames_dir(out).mkdir(parents=True)
+            (frames_dir(out) / "00000.jpg").write_bytes(b"\xff\xd8")
             # Create stage 2 outputs
-            (out / "colmap_sparse").mkdir()
-            (out / "camera_poses.json").write_text("{}")
+            colmap_sparse_dir(out).mkdir(parents=True)
+            poses_file = camera_poses_path(out)
+            poses_file.parent.mkdir(parents=True, exist_ok=True)
+            poses_file.write_text("{}")
             # Create stage 3 outputs
-            (out / "masks").mkdir()
-            (out / "masks" / "00000.png").write_bytes(b"png")
+            masks_dir(out).mkdir(parents=True)
+            (masks_dir(out) / "00000.png").write_bytes(b"png")
             # Create stage 4 output
-            (out / "object_mesh.ply").write_text("ply\n")
+            mesh_file = object_mesh_path(out)
+            mesh_file.parent.mkdir(parents=True, exist_ok=True)
+            mesh_file.write_text("ply\n")
 
             reset_outputs_from_stage(out, 3)
 
             # Stages 1-2 intact
-            self.assertTrue((out / "frames" / "00000.jpg").is_file())
-            self.assertTrue((out / "colmap_sparse").is_dir())
-            self.assertTrue((out / "camera_poses.json").is_file())
+            self.assertTrue((frames_dir(out) / "00000.jpg").is_file())
+            self.assertTrue(colmap_sparse_dir(out).is_dir())
+            self.assertTrue(camera_poses_path(out).is_file())
             # Stages 3+ deleted
-            self.assertFalse((out / "masks").is_dir())
-            self.assertFalse((out / "object_mesh.ply").is_file())
+            self.assertFalse(masks_dir(out).is_dir())
+            self.assertFalse(object_mesh_path(out).is_file())
 
 
 class TestInferResumeStage(unittest.TestCase):
@@ -60,8 +71,8 @@ class TestInferResumeStage(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             # Stage 1: frames dir with at least one .jpg
-            (out / "frames").mkdir()
-            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
+            frames_dir(out).mkdir(parents=True)
+            (frames_dir(out) / "00000.jpg").write_bytes(b"\xff\xd8")
 
             result = infer_resume_stage(out)
             self.assertEqual(result, 2)
@@ -86,9 +97,11 @@ class TestValidateResumePrerequisites(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
             # Set up prerequisites for stage 4 (needs frames dir, camera_poses.json)
-            (out / "frames").mkdir()
-            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
-            (out / "camera_poses.json").write_text("{}")
+            frames_dir(out).mkdir(parents=True)
+            (frames_dir(out) / "00000.jpg").write_bytes(b"\xff\xd8")
+            poses_file = camera_poses_path(out)
+            poses_file.parent.mkdir(parents=True, exist_ok=True)
+            poses_file.write_text("{}")
 
             issues = validate_resume_prerequisites(out, 4)
             self.assertEqual(issues, [])

@@ -18,6 +18,32 @@ from typing import Any
 from scripts.dashboard.configuration import build_pipeline_config
 from scripts.dashboard.git_utils import BRANCH_DIR_PREFIX
 from scripts.dashboard.state import PipelineStage, detect_stage_outputs
+from scripts.output_layout import (
+    CAMERA_POSES_FILENAME,
+    CLEANUP_PROPOSAL_DIRNAME,
+    COLMAP_SPARSE_DIRNAME,
+    COLMAP_SPARSE_POINTS_FILENAME,
+    COLMAP_WORKSPACE_DIRNAME,
+    FRAMES_DIR,
+    GROUND_PLANE_FILENAME,
+    GS2MESH_WORKSPACE_DIRNAME,
+    INTRINSICS_FILENAME,
+    MASKS_DIRNAME,
+    MASKS_GROUND_DIRNAME,
+    MASKS_OBJECT_RAW_DIRNAME,
+    OBJECT_MESH_FILENAME,
+    P2_COLMAP,
+    P3_MASKS,
+    P4_MESH,
+    P5_TEXTURE,
+    P6_CLEANUP,
+    TEXTURE_PNG_FILENAME,
+    TEXTURED_MESH_MTL_FILENAME,
+    TEXTURED_MESH_OBJ_FILENAME,
+    cleanup_final_dir,
+    frames_dir,
+    masks_dir,
+)
 
 _log = logging.getLogger("clip2mesh.dashboard")
 
@@ -28,40 +54,84 @@ OBJECT_META_FILE = "object_meta.json"
 PREVIEW_FILE_EXTENSIONS = {".ply", ".obj", ".mtl", ".png", ".jpg", ".json"}
 
 STAGE_RESET_PATHS: dict[int, dict[str, tuple[str, ...]]] = {
-    1: {"dirs": ("frames",), "files": ()},
-    2: {"dirs": ("colmap_sparse", "colmap_workspace"), "files": ("camera_poses.json", "colmap_sparse_points.ply")},
-    3: {
-        "dirs": ("masks", "masks_ground", "masks_object_raw"),
-        "files": ("ground_plane.json",),
+    1: {"dirs": (FRAMES_DIR,), "files": ()},
+    2: {
+        "dirs": (
+            f"{P2_COLMAP}/{COLMAP_SPARSE_DIRNAME}",
+            f"{P2_COLMAP}/{COLMAP_WORKSPACE_DIRNAME}",
+        ),
+        "files": (
+            f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",
+            f"{P2_COLMAP}/{COLMAP_SPARSE_POINTS_FILENAME}",
+        ),
     },
-    4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
-    5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png", "intrinsics.json")},
-    # Stage 6 also clears the final-deliverable subfolder ``{object_name}/``
-    # (created by the cleanup stage). That path is resolved dynamically in
-    # ``reset_outputs_from_stage`` because it depends on the object's name.
+    3: {
+        "dirs": (
+            f"{P3_MASKS}/{MASKS_DIRNAME}",
+            f"{P3_MASKS}/{MASKS_GROUND_DIRNAME}",
+            f"{P3_MASKS}/{MASKS_OBJECT_RAW_DIRNAME}",
+        ),
+        "files": (f"{P3_MASKS}/{GROUND_PLANE_FILENAME}",),
+    },
+    4: {
+        "dirs": (f"{P4_MESH}/{GS2MESH_WORKSPACE_DIRNAME}",),
+        "files": (f"{P4_MESH}/{OBJECT_MESH_FILENAME}",),
+    },
+    5: {
+        "dirs": (),
+        "files": (
+            f"{P5_TEXTURE}/{TEXTURED_MESH_OBJ_FILENAME}",
+            f"{P5_TEXTURE}/{TEXTURED_MESH_MTL_FILENAME}",
+            f"{P5_TEXTURE}/{TEXTURE_PNG_FILENAME}",
+            f"{P2_COLMAP}/{INTRINSICS_FILENAME}",
+        ),
+    },
+    # Stage 6 also clears the final-deliverable subfolder
+    # ``p6_cleanup/{object_name}/`` (created by the cleanup stage). That path
+    # is resolved dynamically in ``reset_outputs_from_stage`` because it
+    # depends on the object's name.
     6: {
-        "dirs": ("post_texture_contact_cleanup",),
+        "dirs": (f"{P6_CLEANUP}/{CLEANUP_PROPOSAL_DIRNAME}",),
         "files": (),
     },
 }
 
 RESUME_PREREQUISITES: dict[int, dict[str, tuple[str, ...]]] = {
-    2: {"dirs": ("frames",), "files": ()},
-    3: {"dirs": ("frames",), "files": ("camera_poses.json",)},
-    4: {"dirs": ("frames",), "files": ("camera_poses.json",)},
-    5: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "object_mesh.ply")},
-    6: {"dirs": ("frames", "masks"), "files": ("camera_poses.json", "textured_mesh.obj", "intrinsics.json")},
+    2: {"dirs": (FRAMES_DIR,), "files": ()},
+    3: {
+        "dirs": (FRAMES_DIR,),
+        "files": (f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",),
+    },
+    4: {
+        "dirs": (FRAMES_DIR,),
+        "files": (f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",),
+    },
+    5: {
+        "dirs": (FRAMES_DIR, f"{P3_MASKS}/{MASKS_DIRNAME}"),
+        "files": (
+            f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",
+            f"{P4_MESH}/{OBJECT_MESH_FILENAME}",
+        ),
+    },
+    6: {
+        "dirs": (FRAMES_DIR, f"{P3_MASKS}/{MASKS_DIRNAME}"),
+        "files": (
+            f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",
+            f"{P5_TEXTURE}/{TEXTURED_MESH_OBJ_FILENAME}",
+            f"{P2_COLMAP}/{INTRINSICS_FILENAME}",
+        ),
+    },
 }
 
 PRIMARY_ARTIFACT_PATHS = (
-    "camera_poses.json",
-    "colmap_sparse_points.ply",
-    "object_mesh.ply",
-    "textured_mesh.obj",
+    CAMERA_POSES_FILENAME,
+    COLMAP_SPARSE_POINTS_FILENAME,
+    OBJECT_MESH_FILENAME,
+    TEXTURED_MESH_OBJ_FILENAME,
     "textured_mesh_cleaned.obj",
-    "texture.png",
+    TEXTURE_PNG_FILENAME,
     "texture_cap.png",
-    "intrinsics.json",
+    INTRINSICS_FILENAME,
 )
 
 # ── Utility functions ─────────────────────────────────────────────
@@ -203,7 +273,7 @@ def reset_outputs_from_stage(out: Path, start_stage: int) -> None:
             if target.is_file():
                 target.unlink()
         if stage == int(PipelineStage.POST_TEXTURE_CONTACT_CLEANUP):
-            final_dir = out / out.name
+            final_dir = cleanup_final_dir(out)
             if final_dir.is_dir():
                 shutil.rmtree(final_dir)
 
@@ -227,7 +297,12 @@ def validate_resume_prerequisites(out: Path, start_stage: int) -> list[str]:
         if not path.is_dir():
             issues.append(f"missing directory: {rel}/")
             continue
-        suffix = ".jpg" if rel == "frames" else ".png" if rel == "masks" else None
+        if path == frames_dir(out):
+            suffix = ".jpg"
+        elif path == masks_dir(out):
+            suffix = ".png"
+        else:
+            suffix = None
         if suffix is not None and not any(path.glob(f"*{suffix}")):
             issues.append(f"empty directory: {rel}/ ({suffix})")
     for rel in req.get("files", ()):

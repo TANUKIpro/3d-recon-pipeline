@@ -21,6 +21,11 @@ from scripts.config_defaults import (
     GS2MESH_RUNTIME_PROFILES,
 )
 from scripts.gs2mesh_config import Gs2meshSettings
+from scripts.output_layout import (
+    gs2mesh_workspace_dir,
+    mesh_phase_dir,
+    object_mesh_path,
+)
 
 _GS2MESH_BASE = Path("/opt/gs2mesh")
 _GAUSSIAN_SPLATTING_ACCEL = Path("/opt/gaussian-splatting")
@@ -242,7 +247,8 @@ def run_gs2mesh(
     Returns path to object_mesh.ply.
     """
     out = Path(output_dir)
-    gs2mesh_workdir = out / "gs2mesh_workspace"
+    mesh_phase_dir(out).mkdir(parents=True, exist_ok=True)
+    gs2mesh_workdir = gs2mesh_workspace_dir(out)
     debug_dir = gs2mesh_workdir / "debug"
     gs2mesh_workdir.mkdir(parents=True, exist_ok=True)
     debug_dir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +450,7 @@ def run_gs2mesh(
 
     # Step 4: Copy output mesh
     _report(95.0, "Collecting output mesh")
-    final_mesh = out / "object_mesh.ply"
+    final_mesh = object_mesh_path(out)
     shutil.copy2(gpu_mesh_path, str(final_mesh))
     print(f"GPU TSDF output mesh: {final_mesh}")
 

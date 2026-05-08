@@ -17,25 +17,25 @@ Stage 5 で生成されたテクスチャ付き OBJ に対して、接地面の�
 
 前段入力:
 
-- `<output_dir>/textured_mesh.obj` (Stage 5 出力)
-- `<output_dir>/camera_poses.json` (Stage 2 出力)
-- `<output_dir>/intrinsics.json` (Stage 2 出力)
-- `<output_dir>/masks/*.png` (Stage 3 出力)
-- `<output_dir>/masks_ground/*.png` (Stage 3 出力, 任意)
-- `<output_dir>/ground_plane.json` (自動生成)
-- `<output_dir>/object_mesh.ply` (Stage 4 出力, 接地平面推定用)
+- `<output_dir>/p5_texture/textured_mesh.obj` (Stage 5 出力)
+- `<output_dir>/p2_colmap/camera_poses.json` (Stage 2 出力)
+- `<output_dir>/p2_colmap/intrinsics.json` (Stage 2 出力)
+- `<output_dir>/p3_masks/masks/*.png` (Stage 3 出力)
+- `<output_dir>/p3_masks/masks_ground/*.png` (Stage 3 出力, 任意)
+- `<output_dir>/p3_masks/ground_plane.json` (自動生成)
+- `<output_dir>/p4_mesh/object_mesh.ply` (Stage 4 出力, 接地平面推定用)
 
 主出力:
 
-- `<output_dir>/<object_name>/textured_mesh_cleaned.obj` — 最終成果物
-- `<output_dir>/<object_name>/textured_mesh_cleaned.mtl`
-- `<output_dir>/<object_name>/texture.png` — Stage 5 のテクスチャコピー
-- `<output_dir>/<object_name>/texture_cap.png` — 接地キャップテクスチャ (apply 時)
+- `<output_dir>/p6_cleanup/<object_name>/textured_mesh_cleaned.obj` — 最終成果物
+- `<output_dir>/p6_cleanup/<object_name>/textured_mesh_cleaned.mtl`
+- `<output_dir>/p6_cleanup/<object_name>/texture.png` — Stage 5 のテクスチャコピー
+- `<output_dir>/p6_cleanup/<object_name>/texture_cap.png` — 接地キャップテクスチャ (apply 時)
 
 中間ファイル:
 
-- `<output_dir>/post_texture_contact_cleanup/proposal.json` — 提案メタデータ
-- `<output_dir>/post_texture_contact_cleanup/proposal_removed_region.ply` — 除去対象領域のプレビュー
+- `<output_dir>/p6_cleanup/post_texture_contact_cleanup/proposal.json` — 提案メタデータ
+- `<output_dir>/p6_cleanup/post_texture_contact_cleanup/proposal_removed_region.ply` — 除去対象領域のプレビュー
 
 ## 詳細フロー
 

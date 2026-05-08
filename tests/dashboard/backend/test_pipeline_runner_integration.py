@@ -22,6 +22,19 @@ from scripts.dashboard.pipeline_runner import (
     run_pipeline,
 )
 from scripts.dashboard.state import PipelineSession, PipelineStage, StageStatus
+from scripts.output_layout import (
+    camera_poses_path,
+    cleanup_final_dir,
+    cleanup_proposal_dir,
+    colmap_phase_dir,
+    colmap_sparse_dir,
+    frames_dir,
+    masks_dir,
+    masks_ground_dir,
+    object_mesh_path,
+    texture_phase_dir,
+    textured_mesh_obj_path,
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -51,17 +64,18 @@ class _FakeSAM2Service:
 
     def propagate_and_save(self, cb=None):
         self.propagate_calls += 1
-        mask_dir = str(Path(self._output_dir) / "masks")
-        Path(mask_dir).mkdir(parents=True, exist_ok=True)
+        mask_path = masks_dir(self._output_dir)
+        mask_path.mkdir(parents=True, exist_ok=True)
         for i in range(3):
-            (Path(mask_dir) / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
-        ground_mask_dir = None
+            (mask_path / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
+        ground_mask_path = None
         if self._with_ground:
-            ground_mask_dir = str(Path(self._output_dir) / "masks_ground")
-            Path(ground_mask_dir).mkdir(parents=True, exist_ok=True)
+            gm = masks_ground_dir(self._output_dir)
+            gm.mkdir(parents=True, exist_ok=True)
             for i in range(3):
-                (Path(ground_mask_dir) / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
-        return mask_dir, ground_mask_dir
+                (gm / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
+            ground_mask_path = str(gm)
+        return str(mask_path), ground_mask_path
 
     def release(self):
         self.release_calls += 1
@@ -74,39 +88,41 @@ class _FakeSAM2Service:
 
 
 def _populate_frames(d: str, count: int = 5) -> None:
-    p = Path(d) / "frames"
+    p = frames_dir(d)
     p.mkdir(parents=True, exist_ok=True)
     for i in range(count):
         (p / f"frame_{i:04d}.jpg").write_bytes(b"\xff\xd8")
 
 
 def _populate_colmap(d: str) -> None:
-    p = Path(d)
-    (p / "camera_poses.json").write_text("{}", encoding="utf-8")
-    colmap_dir = p / "colmap_sparse"
-    colmap_dir.mkdir(parents=True, exist_ok=True)
-    (colmap_dir / "cameras.bin").write_bytes(b"cam")
+    colmap_phase_dir(d).mkdir(parents=True, exist_ok=True)
+    poses_file = camera_poses_path(d)
+    poses_file.write_text("{}", encoding="utf-8")
+    sparse = colmap_sparse_dir(d)
+    sparse.mkdir(parents=True, exist_ok=True)
+    (sparse / "cameras.bin").write_bytes(b"cam")
 
 
 def _populate_masks(d: str) -> None:
-    masks_dir = Path(d) / "masks"
-    masks_dir.mkdir(parents=True, exist_ok=True)
+    p = masks_dir(d)
+    p.mkdir(parents=True, exist_ok=True)
     for i in range(3):
-        (masks_dir / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
+        (p / f"mask_{i:04d}.png").write_bytes(b"\x89PNG")
 
 
 def _populate_mesh(d: str) -> None:
-    (Path(d) / "object_mesh.ply").write_bytes(b"ply")
+    mesh_file = object_mesh_path(d)
+    mesh_file.parent.mkdir(parents=True, exist_ok=True)
+    mesh_file.write_bytes(b"ply")
 
 
 def _populate_cleanup_outputs(d: str) -> None:
-    out = Path(d)
-    (out / "post_texture_contact_cleanup").mkdir(parents=True, exist_ok=True)
-    (out / "post_texture_contact_cleanup" / "proposal.json").write_text(
+    cleanup_proposal_dir(d).mkdir(parents=True, exist_ok=True)
+    (cleanup_proposal_dir(d) / "proposal.json").write_text(
         '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
         encoding="utf-8",
     )
-    final_dir = out / out.name
+    final_dir = cleanup_final_dir(d)
     final_dir.mkdir(parents=True, exist_ok=True)
     (final_dir / "textured_mesh_cleaned.obj").write_bytes(b"obj")
 
@@ -140,28 +156,31 @@ class _PipelineIntegrationBase(unittest.IsolatedAsyncioTestCase):
 
     def _make_stage_side_effects(self) -> dict:
         d = self.tmpdir
+
+        def _bake(*_a, **_kw) -> None:
+            texture_phase_dir(d).mkdir(parents=True, exist_ok=True)
+            textured_mesh_obj_path(d).write_bytes(b"obj")
+
+        def _prepare(*_a, **_kw):
+            cleanup_proposal_dir(d).mkdir(parents=True, exist_ok=True)
+            (cleanup_proposal_dir(d) / "proposal.json").write_text(
+                '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
+                encoding="utf-8",
+            )
+            return {"requires_review": False, "recommended_decision": "skip"}
+
+        def _apply(*_a, **_kw) -> str:
+            _populate_cleanup_outputs(d)
+            return str(cleanup_final_dir(d) / "textured_mesh_cleaned.obj")
+
         return {
             "extract_frames": lambda *a, **kw: _populate_frames(d),
             "colmap_sfm": lambda *a, **kw: _populate_colmap(d),
             "gs2mesh_reconstruct": lambda *a, **kw: _populate_mesh(d),
-            "texture_bake": lambda *a, **kw: (
-                Path(d) / "textured_mesh.obj"
-            ).write_bytes(b"obj"),
-            "post_texture_prepare": lambda *a, **kw: (
-                (Path(d) / "post_texture_contact_cleanup").mkdir(parents=True, exist_ok=True),
-                (Path(d) / "post_texture_contact_cleanup" / "proposal.json").write_text(
-                    '{"status":"proposal_ready","requires_review":false,"recommended_decision":"skip"}',
-                    encoding="utf-8",
-                ),
-            )[1] and {"requires_review": False, "recommended_decision": "skip"},
-            "post_texture_apply": lambda *a, **kw: (
-                _populate_cleanup_outputs(d),
-                str(Path(d) / Path(d).name / "textured_mesh_cleaned.obj"),
-            )[1],
-            "post_texture_skip": lambda *a, **kw: (
-                _populate_cleanup_outputs(d),
-                str(Path(d) / Path(d).name / "textured_mesh_cleaned.obj"),
-            )[1],
+            "texture_bake": _bake,
+            "post_texture_prepare": _prepare,
+            "post_texture_apply": _apply,
+            "post_texture_skip": _apply,
         }
 
     # -- Broadcast helpers --
@@ -393,10 +412,10 @@ class TestRunPipelineResumeFromStage(_PipelineIntegrationBase):
 
         # Set session paths that stages 1-3 would have set
         self.session.resume_from_stage = PipelineStage.GS2MESH_RECONSTRUCT
-        self.session.frames_dir = str(Path(self.tmpdir) / "frames")
-        self.session.colmap_sparse_path = str(Path(self.tmpdir) / "colmap_sparse")
-        self.session.poses_path = str(Path(self.tmpdir) / "camera_poses.json")
-        self.session.mask_dir = str(Path(self.tmpdir) / "masks")
+        self.session.frames_dir = str(frames_dir(self.tmpdir))
+        self.session.colmap_sparse_path = str(colmap_sparse_dir(self.tmpdir))
+        self.session.poses_path = str(camera_poses_path(self.tmpdir))
+        self.session.mask_dir = str(masks_dir(self.tmpdir))
 
         with ExitStack() as stack:
             mocks = self._enter_all_patches(stack)

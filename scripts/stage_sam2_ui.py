@@ -21,6 +21,12 @@ from scripts.config_defaults import (
     _SAM2_MASK_COLOR,
     _SAM2_MASK_OVERLAY_ALPHA,
 )
+from scripts.output_layout import (
+    masks_dir as _masks_dir,
+    masks_ground_dir,
+    masks_object_raw_dir,
+    masks_phase_dir,
+)
 from scripts.vram_utils import log_vram
 
 _NORM_UPPER = float(np.nextafter(np.float32(1.0), np.float32(0.0)))
@@ -44,9 +50,10 @@ class SAM2Session:
         self.frames_dir = Path(frames_dir)
         self.output_dir = Path(output_dir)
         self.model_type = model_type
-        self.object_mask_raw_dir = self.output_dir / "masks_object_raw"
+        masks_phase_dir(self.output_dir).mkdir(parents=True, exist_ok=True)
+        self.object_mask_raw_dir = masks_object_raw_dir(self.output_dir)
         self.object_mask_raw_dir.mkdir(parents=True, exist_ok=True)
-        self.mask_dir = self.output_dir / "masks"
+        self.mask_dir = _masks_dir(self.output_dir)
         self.mask_dir.mkdir(parents=True, exist_ok=True)
 
         # Load first frame
@@ -66,7 +73,7 @@ class SAM2Session:
         # Click state — ground plane (obj_id=2)
         self.ground_click_points: list[tuple[float, float]] = []
         self.ground_click_labels: list[int] = []
-        self.ground_mask_dir = self.output_dir / "masks_ground"
+        self.ground_mask_dir = masks_ground_dir(self.output_dir)
         self.ground_mask_dir.mkdir(parents=True, exist_ok=True)
 
         # Completion signal

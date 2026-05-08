@@ -384,9 +384,9 @@ export class PreviewPanel {
   /**
    * Load COLMAP results: sparse point cloud + camera poses.
    * @param {CameraOverlay} cameraOverlay - camera overlay instance
-   * @param {string} [plyFile='colmap_sparse_points.ply'] - PLY filename to load
+   * @param {string} [plyFile='p2_colmap/colmap_sparse_points.ply'] - PLY filename to load
    */
-  async loadColmapResults(cameraOverlay, plyFile = 'colmap_sparse_points.ply') {
+  async loadColmapResults(cameraOverlay, plyFile = 'p2_colmap/colmap_sparse_points.ply') {
     await this.initSceneForStage(2);
     this.activateStage(2);
 
@@ -420,7 +420,7 @@ export class PreviewPanel {
     // Load camera poses
     let cameraLoaded = false;
     try {
-      const res = await fetch(this._buildPreviewFileUrl('camera_poses.json', cacheToken));
+      const res = await fetch(this._buildPreviewFileUrl('p2_colmap/camera_poses.json', cacheToken));
       if (res.ok) {
         const data = await res.json();
 
@@ -518,13 +518,16 @@ export class PreviewPanel {
    * Auto-load the appropriate result file for a stage.
    */
   async loadStageResult(stageNum, opts = {}) {
-    // Stage 6 writes its cleaned textured mesh into the ``{object_name}/``
-    // subfolder so the deliverable is a self-contained package. Resolve that
-    // prefix at call time because the active object varies per run.
-    const objectPrefix = this._activeObjectName ? `${this._activeObjectName}/` : '';
+    // Stage 6 writes its cleaned textured mesh into the
+    // ``p6_cleanup/{object_name}/`` subfolder so the deliverable is a
+    // self-contained package. Resolve that prefix at call time because the
+    // active object varies per run.
+    const objectPrefix = this._activeObjectName
+      ? `p6_cleanup/${this._activeObjectName}/`
+      : 'p6_cleanup/';
     const fileMap = {
-      4: 'object_mesh.ply',
-      5: 'textured_mesh.obj',
+      4: 'p4_mesh/object_mesh.ply',
+      5: 'p5_texture/textured_mesh.obj',
       6: `${objectPrefix}textured_mesh_cleaned.obj`,
     };
 
@@ -949,7 +952,7 @@ export class PreviewPanel {
       const rev = this._previewAssetRevision;
 
       const images = data.files.filter(
-        f => ['.png', '.jpg'].includes(f.ext) && f.path.startsWith('frames/')
+        f => ['.png', '.jpg'].includes(f.ext) && f.path.startsWith('p1_frames/')
       );
       images.sort((a, b) => a.path.localeCompare(b.path));
 

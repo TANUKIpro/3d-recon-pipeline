@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.output_layout import ground_plane_path, masks_phase_dir
 from scripts.texture.intrinsics import _make_K, _project_simple
 from scripts.texture.io_utils import _load_mask, _load_poses
 
@@ -225,7 +226,8 @@ def extract_ground_plane_from_mesh(
     }
 
     # Save to file
-    output_path = Path(output_dir) / "ground_plane.json"
+    masks_phase_dir(output_dir).mkdir(parents=True, exist_ok=True)
+    output_path = ground_plane_path(output_dir)
     output_path.write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",

@@ -49,10 +49,10 @@ describe('PostTextureCleanupReviewController', () => {
     await ctrl.showReview(proposal);
     await ctrl._syncOverlay();
 
-    expect(preview.loadStageResult).toHaveBeenCalledWith(6, { file: 'textured_mesh.obj' });
+    expect(preview.loadStageResult).toHaveBeenCalledWith(6, { file: 'p5_texture/textured_mesh.obj' });
     expect(preview.loadStageOverlay).toHaveBeenCalledWith(
       6,
-      'post_texture_contact_cleanup/proposal_removed_region.ply',
+      'p6_cleanup/post_texture_contact_cleanup/proposal_removed_region.ply',
       { color: 0xff5533, opacity: 0.68 },
     );
     expect(stageCtrl.activateStage).toHaveBeenCalledWith(6);

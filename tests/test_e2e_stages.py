@@ -49,25 +49,30 @@ class TestExtractFramesE2E:
 
 class TestTextureBakeE2E:
     def test_bakes_texture_onto_fixture_mesh(self, tmp_path: Path) -> None:
+        from scripts.output_layout import object_mesh_path
         from scripts.stage_texture_bake import bake_texture
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
         # Copy fixture files to output_dir as bake_texture expects them there
-        shutil.copy(
-            FIXTURE_DIR / "object_mesh.ply",
-            output_dir / "object_mesh.ply",
+        from scripts.output_layout import (
+            camera_poses_path,
+            frames_dir,
+            masks_dir,
         )
+        mesh_dst = object_mesh_path(output_dir)
+        mesh_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(object_mesh_path(FIXTURE_DIR), mesh_dst)
         result = bake_texture(
-            str(output_dir / "object_mesh.ply"),
-            str(FIXTURE_DIR / "camera_poses.json"),
-            str(FIXTURE_DIR / "frames"),
-            str(FIXTURE_DIR / "masks"),
+            str(mesh_dst),
+            str(camera_poses_path(FIXTURE_DIR)),
+            str(frames_dir(FIXTURE_DIR)),
+            str(masks_dir(FIXTURE_DIR)),
             str(output_dir),
         )
         assert result.exists()
-        # Check that OBJ and texture PNG were created
-        obj_files = list(output_dir.glob("*.obj"))
+        # Check that OBJ and texture PNG were created under the new phase dirs
+        obj_files = list(output_dir.rglob("*.obj"))
         assert len(obj_files) >= 1
-        png_files = list(output_dir.glob("*.png"))
+        png_files = list(output_dir.rglob("*.png"))
         assert len(png_files) >= 1

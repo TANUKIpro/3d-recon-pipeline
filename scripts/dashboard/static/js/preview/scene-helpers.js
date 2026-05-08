@@ -167,7 +167,7 @@ export async function showGroundPlane(stageNum) {
 
   if (!this._groundPlane.data) {
     try {
-      const resp = await fetch(`/api/preview/file/ground_plane.json?_t=${Date.now()}`);
+      const resp = await fetch(`/api/preview/file/p3_masks/ground_plane.json?_t=${Date.now()}`);
       if (!resp.ok) return;
       this._groundPlane.data = await resp.json();
     } catch { return; }

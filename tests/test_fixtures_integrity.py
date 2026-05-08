@@ -28,16 +28,16 @@ class FixtureExistenceTests(unittest.TestCase):
     """Expected fixture files for the 5-stage pipeline exist."""
 
     EXPECTED_FILES = [
-        "frames/00000.jpg",
-        "frames/00004.jpg",
-        "masks/00000.png",
-        "masks/00004.png",
-        "object_mesh.ply",
-        "textured_mesh.obj",
-        "textured_mesh.mtl",
-        "texture.png",
-        "camera_poses.json",
-        "intrinsics.json",
+        "p1_frames/00000.jpg",
+        "p1_frames/00004.jpg",
+        "p3_masks/masks/00000.png",
+        "p3_masks/masks/00004.png",
+        "p4_mesh/object_mesh.ply",
+        "p5_texture/textured_mesh.obj",
+        "p5_texture/textured_mesh.mtl",
+        "p5_texture/texture.png",
+        "p2_colmap/camera_poses.json",
+        "p2_colmap/intrinsics.json",
     ]
 
     def test_all_files_exist(self) -> None:
@@ -77,7 +77,7 @@ class PlyValidityTests(unittest.TestCase):
     """PLY files start with the magic ``ply`` header."""
 
     PLY_FILES = [
-        "object_mesh.ply",
+        "p4_mesh/object_mesh.ply",
     ]
 
     def test_ply_headers_valid(self) -> None:
@@ -88,7 +88,7 @@ class PlyValidityTests(unittest.TestCase):
             self.assertEqual(magic, b"ply", f"{name} doesn't start with 'ply' magic")
 
     def test_ply_meshes_have_faces(self) -> None:
-        for name in ("object_mesh.ply",):
+        for name in ("p4_mesh/object_mesh.ply",):
             path = FIXTURE_DIR / name
             header = path.read_bytes().split(b"end_header")[0].decode("ascii")
             self.assertIn("element vertex", header, f"{name} missing vertex element")
@@ -99,15 +99,15 @@ class ObjMtlReferenceTests(unittest.TestCase):
     """OBJ references MTL and MTL references texture.png."""
 
     def test_obj_references_mtl(self) -> None:
-        obj = (FIXTURE_DIR / "textured_mesh.obj").read_text(encoding="utf-8")
+        obj = (FIXTURE_DIR / "p5_texture/textured_mesh.obj").read_text(encoding="utf-8")
         self.assertIn("mtllib textured_mesh.mtl", obj)
 
     def test_mtl_references_texture(self) -> None:
-        mtl = (FIXTURE_DIR / "textured_mesh.mtl").read_text(encoding="utf-8")
+        mtl = (FIXTURE_DIR / "p5_texture/textured_mesh.mtl").read_text(encoding="utf-8")
         self.assertIn("map_Kd texture.png", mtl)
 
     def test_obj_has_vertices_and_faces(self) -> None:
-        obj = (FIXTURE_DIR / "textured_mesh.obj").read_text(encoding="utf-8")
+        obj = (FIXTURE_DIR / "p5_texture/textured_mesh.obj").read_text(encoding="utf-8")
         self.assertIn("v ", obj)
         self.assertIn("f ", obj)
 
@@ -116,14 +116,14 @@ class TextureImageTests(unittest.TestCase):
     """texture.png is a valid PNG file."""
 
     def test_png_magic(self) -> None:
-        path = FIXTURE_DIR / "texture.png"
+        path = FIXTURE_DIR / "p5_texture/texture.png"
         with open(path, "rb") as f:
             magic = f.read(8)
         # PNG magic: 137 80 78 71 13 10 26 10
         self.assertEqual(magic, b"\x89PNG\r\n\x1a\n")
 
     def test_png_dimensions(self) -> None:
-        path = FIXTURE_DIR / "texture.png"
+        path = FIXTURE_DIR / "p5_texture/texture.png"
         with open(path, "rb") as f:
             f.read(8)  # skip magic
             f.read(4)  # chunk length

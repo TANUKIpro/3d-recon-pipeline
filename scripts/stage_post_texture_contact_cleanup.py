@@ -21,6 +21,19 @@ from typing import Any
 import cv2
 import numpy as np
 
+from scripts.output_layout import (
+    P6_CLEANUP,
+    camera_poses_path,
+    cleanup_phase_dir,
+    cleanup_proposal_dir,
+    ground_plane_path,
+    intrinsics_path,
+    masks_dir,
+    masks_ground_dir,
+    texture_png_path,
+    textured_mesh_mtl_path,
+    textured_mesh_obj_path,
+)
 from scripts.repair.boundary import (
     _apply_local_smoothing,
     _extract_boundary_edges,
@@ -93,7 +106,7 @@ def _check_cancel(cancel_cb) -> None:
 
 
 def _proposal_dir(output_dir: str | Path) -> Path:
-    return Path(output_dir) / _PROPOSAL_DIR_NAME
+    return cleanup_proposal_dir(output_dir)
 
 
 def _proposal_path(output_dir: str | Path) -> Path:
@@ -113,7 +126,7 @@ def _final_dir(output_dir: str | Path) -> Path:
     textured mesh) that remain under ``output_dir``.
     """
     root = Path(output_dir)
-    return root / root.name
+    return cleanup_phase_dir(root) / root.name
 
 
 def _cleaned_obj_path(output_dir: str | Path) -> Path:
@@ -132,13 +145,13 @@ def _prepare_final_dir(output_dir: str | Path) -> Path:
     """Create the final-deliverable subfolder and copy texture.png into it.
 
     The cleaned MTL references ``texture.png`` as a bare filename, so the
-    baked texture (written by stage 5 under ``output_dir/texture.png``) must be
+    baked texture (written by stage 5 under ``p5_texture/texture.png``) must be
     present alongside the cleaned OBJ/MTL for the subfolder to be self-contained.
     """
     root = Path(output_dir)
     final = _final_dir(root)
     final.mkdir(parents=True, exist_ok=True)
-    src_texture = root / "texture.png"
+    src_texture = texture_png_path(root)
     if src_texture.is_file():
         shutil.copy2(src_texture, final / "texture.png")
     return final
@@ -2306,7 +2319,7 @@ def _analyze_cleanup(
     cleanup_lower_half_threshold: float | None = None,
 ) -> dict[str, Any]:
     output_root = Path(output_dir)
-    obj_mesh = _parse_obj_mesh(output_root / "textured_mesh.obj")
+    obj_mesh = _parse_obj_mesh(textured_mesh_obj_path(output_root))
     merged_vertices, merged_faces, merged_face_to_obj_face, merged_to_originals = _merge_vertices(
         obj_mesh.vertices,
         obj_mesh.faces,
@@ -2688,7 +2701,7 @@ def _analyze_cleanup(
         ground_masks_dir=ground_masks_dir,
     )
 
-    texture_path = output_root / "texture.png"
+    texture_path = texture_png_path(output_root)
 
     # Per-group color sampling
     group_colors: dict[int, np.ndarray] = {}
@@ -2841,8 +2854,8 @@ def _proposal_payload(analysis: dict[str, Any]) -> dict[str, Any]:
             "selected_loop_area": round(float(selected_loop.area), 6) if selected_loop is not None else 0.0,
         },
         "artifacts": {
-            "overlay_ply": f"{_PROPOSAL_DIR_NAME}/{_PROPOSAL_OVERLAY_NAME}",
-            "removed_region_ply": f"{_PROPOSAL_DIR_NAME}/{_PROPOSAL_OVERLAY_NAME}",
+            "overlay_ply": f"{P6_CLEANUP}/{_PROPOSAL_DIR_NAME}/{_PROPOSAL_OVERLAY_NAME}",
+            "removed_region_ply": f"{P6_CLEANUP}/{_PROPOSAL_DIR_NAME}/{_PROPOSAL_OVERLAY_NAME}",
             "output_obj": _CLEANED_OBJ_NAME,
             "output_mtl": _CLEANED_MTL_NAME,
             "texture_cap": _CAP_TEXTURE_NAME,
@@ -2919,8 +2932,8 @@ def prepare_cleanup_review(
 def _copy_stage5_outputs(output_dir: str | Path) -> str:
     output_root = Path(output_dir)
     _prepare_final_dir(output_root)
-    src_obj = output_root / "textured_mesh.obj"
-    src_mtl = output_root / "textured_mesh.mtl"
+    src_obj = textured_mesh_obj_path(output_root)
+    src_mtl = textured_mesh_mtl_path(output_root)
     dst_obj = _cleaned_obj_path(output_root)
     dst_mtl = _cleaned_mtl_path(output_root)
 
@@ -2982,11 +2995,19 @@ def apply_cleanup_proposal(
 
     analysis = _analyze_cleanup(
         output_root,
-        poses_path=output_root / "camera_poses.json",
-        intrinsics_path=output_root / "intrinsics.json",
-        masks_dir=output_root / "masks",
-        ground_masks_dir=(output_root / "masks_ground") if (output_root / "masks_ground").is_dir() else None,
-        ground_plane_path=(output_root / "ground_plane.json") if (output_root / "ground_plane.json").is_file() else None,
+        poses_path=camera_poses_path(output_root),
+        intrinsics_path=intrinsics_path(output_root),
+        masks_dir=masks_dir(output_root),
+        ground_masks_dir=(
+            masks_ground_dir(output_root)
+            if masks_ground_dir(output_root).is_dir()
+            else None
+        ),
+        ground_plane_path=(
+            ground_plane_path(output_root)
+            if ground_plane_path(output_root).is_file()
+            else None
+        ),
         sam2_only=sam2_only,
         cleanup_lower_half_threshold=cleanup_lower_half_threshold,
     )
@@ -3119,7 +3140,7 @@ def apply_cleanup_proposal(
             ground_cap_face_array = cleanup_faces[cleanup_face_is_ground_cap]
             source_texture_path = final_texture_path
             if not source_texture_path.is_file():
-                source_texture_path = output_root / "texture.png"
+                source_texture_path = texture_png_path(output_root)
             result = _build_cap_inpainted_atlas(
                 texture_path=source_texture_path,
                 obj_mesh=obj_mesh,

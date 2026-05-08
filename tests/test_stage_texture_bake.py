@@ -1480,12 +1480,17 @@ class BakeTextureRegressionTests(unittest.TestCase):
                                     quality_boost=False,
                                 )
 
-            self.assertEqual(result, output_dir / "textured_mesh.obj")
-            self.assertEqual(_hash_file(output_dir / "textured_mesh.obj"), "ed5e5443d4cab796bc64dfa73d88299135b36fd2ceed6038b14fa8c6bb3b9f40")
-            self.assertEqual(_hash_file(output_dir / "textured_mesh.mtl"), "b2afa1559c9a36be27e591d98f7384c7f1c99e7bf33349e9e78c786c922efced")
+            from scripts.output_layout import (
+                texture_png_path,
+                textured_mesh_mtl_path,
+                textured_mesh_obj_path,
+            )
+            self.assertEqual(result, textured_mesh_obj_path(output_dir))
+            self.assertEqual(_hash_file(textured_mesh_obj_path(output_dir)), "ed5e5443d4cab796bc64dfa73d88299135b36fd2ceed6038b14fa8c6bb3b9f40")
+            self.assertEqual(_hash_file(textured_mesh_mtl_path(output_dir)), "b2afa1559c9a36be27e591d98f7384c7f1c99e7bf33349e9e78c786c922efced")
             # Hash updated when _load_frame moved from float64 to float32 (Tier 1.2).
             # Verified max per-channel diff vs. prior golden = 1/255, p99 = 0.
-            self.assertEqual(_hash_file(output_dir / "texture.png"), "e48a3ccebae7ee7c5a618e14d2369f7badc0b10d4848c3e67a95575425afe66c")
+            self.assertEqual(_hash_file(texture_png_path(output_dir)), "e48a3ccebae7ee7c5a618e14d2369f7badc0b10d4848c3e67a95575425afe66c")
 
     def test_fallback_subset_reuse_does_not_boolean_mismatch(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1594,5 +1599,6 @@ class BakeTextureRegressionTests(unittest.TestCase):
                                             quality_boost=False,
                                         )
 
-            self.assertEqual(result, output_dir / "textured_mesh.obj")
-            self.assertTrue((output_dir / "texture.png").is_file())
+            from scripts.output_layout import texture_png_path, textured_mesh_obj_path
+            self.assertEqual(result, textured_mesh_obj_path(output_dir))
+            self.assertTrue(texture_png_path(output_dir).is_file())

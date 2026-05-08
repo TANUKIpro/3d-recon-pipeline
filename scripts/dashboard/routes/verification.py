@@ -9,6 +9,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse, Response
 
 from scripts.dashboard.dependencies import get_state
+from scripts.output_layout import frames_dir, masks_dir, masks_ground_dir
 
 router = APIRouter()
 
@@ -17,8 +18,8 @@ router = APIRouter()
 async def verification_frame(idx: int):
     """Composite frame + green mask overlay at 40% opacity for verification."""
     out = get_state().active_output_dir()
-    frame_path = out / "frames" / f"{idx:05d}.jpg"
-    mask_path = out / "masks" / f"{idx:05d}.png"
+    frame_path = frames_dir(out) / f"{idx:05d}.jpg"
+    mask_path = masks_dir(out) / f"{idx:05d}.png"
 
     if not frame_path.is_file():
         return JSONResponse({"error": f"Frame {idx} not found"}, status_code=404)
@@ -55,8 +56,8 @@ async def verification_frame(idx: int):
 async def verification_ground_frame(idx: int):
     """Composite frame + orange ground mask overlay for verification."""
     out = get_state().active_output_dir()
-    frame_path = out / "frames" / f"{idx:05d}.jpg"
-    mask_path = out / "masks_ground" / f"{idx:05d}.png"
+    frame_path = frames_dir(out) / f"{idx:05d}.jpg"
+    mask_path = masks_ground_dir(out) / f"{idx:05d}.png"
 
     if not frame_path.is_file():
         return JSONResponse({"error": f"Frame {idx} not found"}, status_code=404)

@@ -156,13 +156,24 @@ def _pick_frame_indices(total: int, count: int) -> list[int]:
 
 def generate(source: Path, dest: Path) -> None:
     """Generate all fixture files from *source* into *dest*."""
+    from scripts.output_layout import (
+        camera_poses_path,
+        frames_dir as _frames_dir,
+        intrinsics_path,
+        masks_dir as _masks_dir,
+        object_mesh_path,
+        texture_png_path,
+        textured_mesh_mtl_path,
+        textured_mesh_obj_path,
+    )
+
     dest.mkdir(parents=True, exist_ok=True)
     print(f"Source: {source}")
     print(f"Dest:   {dest}")
 
     # ---- Frames & Masks (5 of 59, resized to 108x192) --------------------
-    frame_dir = source / "frames"
-    mask_dir = source / "masks"
+    frame_dir = _frames_dir(source)
+    mask_dir = _masks_dir(source)
     frame_files = sorted(frame_dir.glob("*.jpg"))
     mask_files = sorted(mask_dir.glob("*.png"))
     total_frames = len(frame_files)
@@ -170,18 +181,20 @@ def generate(source: Path, dest: Path) -> None:
     indices = _pick_frame_indices(total_frames, target_count)
     print(f"Frames: {total_frames} → {len(indices)} (indices: {indices})")
 
-    (dest / "frames").mkdir(exist_ok=True)
-    (dest / "masks").mkdir(exist_ok=True)
+    dest_frames = _frames_dir(dest)
+    dest_masks = _masks_dir(dest)
+    dest_frames.mkdir(parents=True, exist_ok=True)
+    dest_masks.mkdir(parents=True, exist_ok=True)
     new_size = (108, 192)  # width x height
     for new_idx, src_idx in enumerate(indices):
         fname = f"{new_idx:05d}.jpg"
-        _resize_image(frame_files[src_idx], dest / "frames" / fname, new_size)
+        _resize_image(frame_files[src_idx], dest_frames / fname, new_size)
         mname = f"{new_idx:05d}.png"
         _resize_image(
-            mask_files[src_idx], dest / "masks" / mname, new_size,
+            mask_files[src_idx], dest_masks / mname, new_size,
             resample=Image.NEAREST,
         )
-    print("  frames/ and masks/ done")
+    print("  p1_frames/ and p3_masks/masks/ done")
 
     # ---- Point clouds -----------------------------------------------------
     pc_specs = [
@@ -196,33 +209,47 @@ def generate(source: Path, dest: Path) -> None:
             print(f"  {name} → {n} points")
 
     # ---- Meshes (PLY) -----------------------------------------------------
-    mesh_specs = [
-        ("object_mesh.ply", 150),
+    # object_mesh.ply lives under p4_mesh/. Other historical meshes
+    # (object_mesh_preview/wrapped/repaired) remain at the root for backwards
+    # compatibility with the existing fixture set.
+    mesh_object_src = object_mesh_path(source)
+    if mesh_object_src.exists():
+        mesh_object_dst = object_mesh_path(dest)
+        mesh_object_dst.parent.mkdir(parents=True, exist_ok=True)
+        _simplify_mesh(mesh_object_src, mesh_object_dst, 150)
+        print("  p4_mesh/object_mesh.ply → ~150 faces")
+    legacy_mesh_specs = [
         ("object_mesh_preview.ply", 150),
         ("object_mesh_wrapped.ply", 80),
         ("object_mesh_repaired.ply", 80),
     ]
-    for name, target in mesh_specs:
+    for name, target in legacy_mesh_specs:
         src_path = source / name
         if src_path.exists():
             _simplify_mesh(src_path, dest / name, target)
             print(f"  {name} → ~{target} faces")
 
     # ---- Textured mesh (OBJ + MTL) ----------------------------------------
-    obj_src = source / "textured_mesh.obj"
+    obj_src = textured_mesh_obj_path(source)
     if obj_src.exists():
-        _simplify_obj(obj_src, dest / "textured_mesh.obj", 80)
-        print("  textured_mesh.obj → ~80 faces")
-    mtl_src = source / "textured_mesh.mtl"
+        obj_dst = textured_mesh_obj_path(dest)
+        obj_dst.parent.mkdir(parents=True, exist_ok=True)
+        _simplify_obj(obj_src, obj_dst, 80)
+        print("  p5_texture/textured_mesh.obj → ~80 faces")
+    mtl_src = textured_mesh_mtl_path(source)
     if mtl_src.exists():
-        shutil.copy2(mtl_src, dest / "textured_mesh.mtl")
-        print("  textured_mesh.mtl copied")
+        mtl_dst = textured_mesh_mtl_path(dest)
+        mtl_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(mtl_src, mtl_dst)
+        print("  p5_texture/textured_mesh.mtl copied")
 
     # ---- Texture map -------------------------------------------------------
-    tex_src = source / "texture.png"
+    tex_src = texture_png_path(source)
     if tex_src.exists():
-        _resize_image(tex_src, dest / "texture.png", (64, 64))
-        print("  texture.png → 64x64")
+        tex_dst = texture_png_path(dest)
+        tex_dst.parent.mkdir(parents=True, exist_ok=True)
+        _resize_image(tex_src, tex_dst, (64, 64))
+        print("  p5_texture/texture.png → 64x64")
 
     # ---- pi3x_cache.npz (stub with tiny arrays) --------------------------
     stub_N = target_count
@@ -241,21 +268,28 @@ def generate(source: Path, dest: Path) -> None:
     print("  pi3x_cache.npz stub created")
 
     # ---- camera_poses.json (keep poses matching selected indices) ----------
-    poses_src = source / "camera_poses.json"
+    poses_src = camera_poses_path(source)
     if poses_src.exists():
         with open(poses_src, encoding="utf-8") as f:
             poses_data = json.load(f)
         selected_poses = [poses_data["poses"][i] for i in indices]
-        with open(dest / "camera_poses.json", "w", encoding="utf-8") as f:
+        poses_dst = camera_poses_path(dest)
+        poses_dst.parent.mkdir(parents=True, exist_ok=True)
+        with open(poses_dst, "w", encoding="utf-8") as f:
             json.dump({"poses": selected_poses}, f, indent=2)
-        print(f"  camera_poses.json → {len(selected_poses)} poses")
+        print(f"  p2_colmap/camera_poses.json → {len(selected_poses)} poses")
 
     # ---- JSON files (copy as-is) ------------------------------------------
-    for name in ("intrinsics.json", "object_meta.json"):
-        src_path = source / name
-        if src_path.exists():
-            shutil.copy2(src_path, dest / name)
-            print(f"  {name} copied")
+    intrinsics_src = intrinsics_path(source)
+    if intrinsics_src.exists():
+        intrinsics_dst = intrinsics_path(dest)
+        intrinsics_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(intrinsics_src, intrinsics_dst)
+        print("  p2_colmap/intrinsics.json copied")
+    object_meta_src = source / "object_meta.json"
+    if object_meta_src.exists():
+        shutil.copy2(object_meta_src, dest / "object_meta.json")
+        print("  object_meta.json copied")
 
     # ---- Summary -----------------------------------------------------------
     total_size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())

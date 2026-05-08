@@ -18,6 +18,21 @@ import time
 from pathlib import Path
 
 from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB, _VRAM_GATE_STRICT
+from scripts.output_layout import (
+    camera_poses_path,
+    cleanup_final_dir,
+    cleanup_proposal_dir,
+    colmap_sparse_dir,
+    frames_dir,
+    ground_plane_path,
+    intrinsics_path,
+    masks_dir,
+    masks_ground_dir,
+    object_mesh_path,
+    texture_png_path,
+    textured_mesh_mtl_path,
+    textured_mesh_obj_path,
+)
 from scripts.vram_utils import cleanup_pytorch_vram, ensure_vram_available, log_vram
 
 
@@ -56,8 +71,8 @@ Examples:
     log_vram("startup")
 
     start_time = time.time()
-    frames_dir = str(Path(output_dir) / "frames")
-    mask_dir = str(Path(output_dir) / "masks")
+    frames_path = str(frames_dir(output_dir))
+    mask_path = str(masks_dir(output_dir))
 
     # =====================================================================
     # Stage 1: Frame Extraction
@@ -68,8 +83,8 @@ Examples:
         print("=" * 60)
         from scripts.stage_extract_frames import extract_frames
 
-        frames_dir = str(extract_frames(args.video_path, output_dir))
-        print(f"  → {frames_dir}")
+        frames_path = str(extract_frames(args.video_path, output_dir))
+        print(f"  → {frames_path}")
 
     # =====================================================================
     # Stage 2: COLMAP SfM
@@ -80,12 +95,12 @@ Examples:
         print("=" * 60)
         from scripts.stage_colmap_sfm import run_colmap_sfm
 
-        poses_path, colmap_sparse_dir = run_colmap_sfm(frames_dir, output_dir)
+        poses_path, sparse_path = run_colmap_sfm(frames_path, output_dir)
         print(f"  → Poses: {poses_path}")
-        print(f"  → Sparse: {colmap_sparse_dir}")
+        print(f"  → Sparse: {sparse_path}")
     else:
-        poses_path = str(Path(output_dir) / "camera_poses.json")
-        colmap_sparse_dir = str(Path(output_dir) / "colmap_sparse")
+        poses_path = str(camera_poses_path(output_dir))
+        sparse_path = str(colmap_sparse_dir(output_dir))
 
     # =====================================================================
     # Stage 3: SAM2 Interactive Segmentation
@@ -97,9 +112,9 @@ Examples:
         print(">>> Open http://localhost:7860 to select the object <<<")
         from scripts.stage_sam2_ui import run_sam2_interactive
 
-        mask_dir = str(run_sam2_interactive(frames_dir, output_dir))
+        mask_path = str(run_sam2_interactive(frames_path, output_dir))
         cleanup_pytorch_vram()
-        print(f"  → {mask_dir}")
+        print(f"  → {mask_path}")
 
     # =====================================================================
     # Stage 4: gs2mesh Reconstruction
@@ -124,15 +139,15 @@ Examples:
         from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
 
         mesh_ply = run_gs2mesh(
-            frames_dir,
-            colmap_sparse_dir,
-            mask_dir,
+            frames_path,
+            sparse_path,
+            mask_path,
             output_dir,
         )
         cleanup_pytorch_vram()
         print(f"  → Mesh: {mesh_ply}")
     else:
-        mesh_ply = str(Path(output_dir) / "object_mesh.ply")
+        mesh_ply = str(object_mesh_path(output_dir))
 
     # =====================================================================
     # Stage 5: Texture Baking
@@ -144,11 +159,11 @@ Examples:
         from scripts.stage_texture_bake import bake_texture
 
         obj_path = bake_texture(
-            str(mesh_ply), str(poses_path), frames_dir, mask_dir, output_dir,
+            str(mesh_ply), str(poses_path), frames_path, mask_path, output_dir,
         )
         print(f"  → {obj_path}")
     else:
-        obj_path = str(Path(output_dir) / "textured_mesh.obj")
+        obj_path = str(textured_mesh_obj_path(output_dir))
 
     # =====================================================================
     # Stage 6: Post-texture Cleanup
@@ -163,30 +178,30 @@ Examples:
             prepare_cleanup_review,
         )
 
-        ground_plane_path = Path(output_dir) / "ground_plane.json"
-        if not ground_plane_path.is_file():
-            ground_masks_dir = Path(output_dir) / "masks_ground"
-            if ground_masks_dir.is_dir() and any(ground_masks_dir.glob("*.png")):
+        gp_path = ground_plane_path(output_dir)
+        if not gp_path.is_file():
+            gm_dir = masks_ground_dir(output_dir)
+            if gm_dir.is_dir() and any(gm_dir.glob("*.png")):
                 from scripts.ground_plane_extraction import extract_ground_plane_from_mesh
                 print("  Extracting ground plane from mesh + ground masks...")
                 extract_ground_plane_from_mesh(
-                    str(Path(output_dir) / "object_mesh.ply"),
-                    str(ground_masks_dir),
+                    str(object_mesh_path(output_dir)),
+                    str(gm_dir),
                     output_dir,
                     str(poses_path),
-                    str(Path(output_dir) / "intrinsics.json"),
-                    object_mask_dir=mask_dir,
+                    str(intrinsics_path(output_dir)),
+                    object_mask_dir=mask_path,
                 )
         proposal = prepare_cleanup_review(
             str(obj_path),
             output_dir,
-            ground_plane_path=str(ground_plane_path) if ground_plane_path.is_file() else None,
+            ground_plane_path=str(gp_path) if gp_path.is_file() else None,
             poses_path=str(poses_path),
-            intrinsics_path=str(Path(output_dir) / "intrinsics.json"),
-            masks_dir=mask_dir,
+            intrinsics_path=str(intrinsics_path(output_dir)),
+            masks_dir=mask_path,
             ground_masks_dir=(
-                str(Path(output_dir) / "masks_ground")
-                if (Path(output_dir) / "masks_ground").is_dir()
+                str(masks_ground_dir(output_dir))
+                if masks_ground_dir(output_dir).is_dir()
                 else None
             ),
             sam2_only=True,
@@ -203,7 +218,7 @@ Examples:
                     '{"decision": "apply"|"skip"}'
                 )
         elif proposal.get("requires_review") is True:
-            proposal_path = Path(output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+            proposal_path = cleanup_proposal_dir(output_dir) / "proposal.json"
             print(f"  proposal written: {proposal_path}")
             print("  no selection JSON provided; defaulting to skip")
             decision = "skip"
@@ -221,8 +236,7 @@ Examples:
             else:
                 print("  → Cap texels packed into texture.png (single-material output)")
     else:
-        final_root = Path(output_dir) / Path(output_dir).name
-        cleaned_obj_path = final_root / "textured_mesh_cleaned.obj"
+        cleaned_obj_path = cleanup_final_dir(output_dir) / "textured_mesh_cleaned.obj"
 
     # =====================================================================
     # Summary
@@ -236,22 +250,25 @@ Examples:
     print()
 
     out = Path(output_dir)
-    final_root = out / out.name
-    intermediate_names = [
-        "textured_mesh.obj", "textured_mesh.mtl", "texture.png",
-        "object_mesh.ply", "camera_poses.json", "intrinsics.json",
+    final_root = cleanup_final_dir(out)
+    intermediate_files = [
+        ("textured_mesh.obj", textured_mesh_obj_path(out)),
+        ("textured_mesh.mtl", textured_mesh_mtl_path(out)),
+        ("texture.png", texture_png_path(out)),
+        ("object_mesh.ply", object_mesh_path(out)),
+        ("camera_poses.json", camera_poses_path(out)),
+        ("intrinsics.json", intrinsics_path(out)),
     ]
     final_names = [
         "textured_mesh_cleaned.obj", "textured_mesh_cleaned.mtl",
         "texture.png", "texture_cap.png",
     ]
-    for name in intermediate_names:
-        p = out / name
+    for label, p in intermediate_files:
         if p.exists():
             size_mb = p.stat().st_size / 1024 / 1024
-            print(f"  {name}: {size_mb:.1f} MB")
+            print(f"  {label}: {size_mb:.1f} MB")
     if final_root.is_dir():
-        print(f"  [final deliverables in {out.name}/]")
+        print(f"  [final deliverables in {final_root.relative_to(out)}/]")
         for name in final_names:
             p = final_root / name
             if p.exists():
@@ -260,7 +277,7 @@ Examples:
 
     print()
     print("View the textured mesh:")
-    final_mesh = cleaned_obj_path if cleaned_obj_path.exists() else out / "textured_mesh.obj"
+    final_mesh = cleaned_obj_path if cleaned_obj_path.exists() else textured_mesh_obj_path(out)
     print(f"  {final_mesh}")
 
 

@@ -154,19 +154,32 @@ class BuildPipelineConfigTests(unittest.TestCase):
 
 class DetectStageOutputsTests(unittest.TestCase):
     def test_stage4_reset_includes_mesh(self) -> None:
-        self.assertIn("object_mesh.ply", STAGE_RESET_PATHS[4]["files"])
+        from scripts.output_layout import OBJECT_MESH_FILENAME, P4_MESH
+
+        self.assertIn(
+            f"{P4_MESH}/{OBJECT_MESH_FILENAME}",
+            STAGE_RESET_PATHS[4]["files"],
+        )
 
     def test_stage5_detected_when_obj_exists(self) -> None:
+        from scripts.output_layout import textured_mesh_obj_path
+
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "textured_mesh.obj").write_text("v 0 0 0\n", encoding="utf-8")
+            obj = textured_mesh_obj_path(out)
+            obj.parent.mkdir(parents=True, exist_ok=True)
+            obj.write_text("v 0 0 0\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
             self.assertTrue(stages[5])
 
     def test_stage4_detected_when_mesh_exists(self) -> None:
+        from scripts.output_layout import object_mesh_path
+
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "object_mesh.ply").write_text("ply\n", encoding="utf-8")
+            mesh = object_mesh_path(out)
+            mesh.parent.mkdir(parents=True, exist_ok=True)
+            mesh.write_text("ply\n", encoding="utf-8")
             stages, _, _ = detect_stage_outputs(out)
             self.assertTrue(stages[4])
 

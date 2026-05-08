@@ -118,7 +118,7 @@ export class OverviewPanel {
     thumbWrap.className = 'overview-thumb';
     const img = document.createElement('img');
     const branchParam = obj.branch ? `?branch=${encodeURIComponent(obj.branch)}` : '';
-    img.src = `/api/preview/object-file/${encodeURIComponent(obj.name)}/frames/00000.jpg${branchParam}`;
+    img.src = `/api/preview/object-file/${encodeURIComponent(obj.name)}/p1_frames/00000.jpg${branchParam}`;
     img.alt = obj.name;
     img.loading = 'lazy';
     img.onerror = () => {

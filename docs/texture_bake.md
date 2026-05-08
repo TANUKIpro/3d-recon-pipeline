@@ -14,19 +14,19 @@
 
 前段入力:
 
-- `<output_dir>/object_mesh.ply` (Stage 4 出力)
-- `<output_dir>/camera_poses.json` (Stage 2 出力)
-- `<output_dir>/intrinsics.json` (Stage 2 出力, 任意 — 存在時はグリッドサーチをスキップ。`dist_coeffs` を含む場合はフレームをアンディストーションする)
-- `<output_dir>/frames/*.jpg`
-- `<output_dir>/masks/*.png`
-- `<output_dir>/colmap_sparse/0/cameras.bin` (任意 — `intrinsics.json` に歪み情報が無い場合のフォールバック)
+- `<output_dir>/p4_mesh/object_mesh.ply` (Stage 4 出力)
+- `<output_dir>/p2_colmap/camera_poses.json` (Stage 2 出力)
+- `<output_dir>/p2_colmap/intrinsics.json` (Stage 2 出力, 任意 — 存在時はグリッドサーチをスキップ。`dist_coeffs` を含む場合はフレームをアンディストーションする)
+- `<output_dir>/p1_frames/*.jpg`
+- `<output_dir>/p3_masks/masks/*.png`
+- `<output_dir>/p2_colmap/colmap_sparse/0/cameras.bin` (任意 — `intrinsics.json` に歪み情報が無い場合のフォールバック)
 
 主出力:
 
-- `<output_dir>/intrinsics.json`
-- `<output_dir>/texture.png`
-- `<output_dir>/textured_mesh.mtl`
-- `<output_dir>/textured_mesh.obj`
+- `<output_dir>/p2_colmap/intrinsics.json` (推定モード時のみ書き戻し)
+- `<output_dir>/p5_texture/texture.png`
+- `<output_dir>/p5_texture/textured_mesh.mtl`
+- `<output_dir>/p5_texture/textured_mesh.obj`
 
 ## 詳細フロー
 

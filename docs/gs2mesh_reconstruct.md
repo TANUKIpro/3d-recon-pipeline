@@ -18,24 +18,24 @@
 
 前段入力:
 
-- `<output_dir>/frames/*.jpg` (Stage 1 出力)
-- `<output_dir>/colmap_sparse/` (Stage 2 出力)
-- `<output_dir>/masks/*.png` (Stage 3 出力, optional)
+- `<output_dir>/p1_frames/*.jpg` (Stage 1 出力)
+- `<output_dir>/p2_colmap/colmap_sparse/` (Stage 2 出力)
+- `<output_dir>/p3_masks/masks/*.png` (Stage 3 出力, optional)
 
 主出力:
 
-- `<output_dir>/object_mesh.ply` — 再構成メッシュ
+- `<output_dir>/p4_mesh/object_mesh.ply` — 再構成メッシュ
 
 中間ファイル:
 
-- `<output_dir>/gs2mesh_workspace/` — 3DGS チェックポイント、アンディストーション結果
-- `gs2mesh_workspace/splatting_output/` — 3DGS モデル (point_cloud.ply)
-- `gs2mesh_workspace/debug/` — ステレオ推定のリトライログ・メタデータ
+- `<output_dir>/p4_mesh/gs2mesh_workspace/` — 3DGS チェックポイント、アンディストーション結果
+- `p4_mesh/gs2mesh_workspace/splatting_output/` — 3DGS モデル (point_cloud.ply)
+- `p4_mesh/gs2mesh_workspace/debug/` — ステレオ推定のリトライログ・メタデータ
 
 後段利用:
 
-- Stage 5 (`texture_bake`) が `object_mesh.ply` を入力
-- Stage 6 (`post_texture_contact_cleanup`) が `object_mesh.ply` を接地平面推定に使用
+- Stage 5 (`texture_bake`) が `p4_mesh/object_mesh.ply` を入力
+- Stage 6 (`post_texture_contact_cleanup`) が `p4_mesh/object_mesh.ply` を接地平面推定に使用
 
 ## 詳細フロー
 

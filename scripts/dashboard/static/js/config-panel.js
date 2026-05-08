@@ -491,7 +491,7 @@ export class ConfigPanel {
     let artifacts = [];
     if (object && Array.isArray(object.files)) {
       artifacts = object.files.filter(
-        f => !f.path.startsWith('frames/') && !f.path.startsWith('masks/')
+        f => !f.path.startsWith('p1_frames/') && !f.path.startsWith('p3_masks/masks/')
       );
     } else if (object && Array.isArray(object.artifacts)) {
       artifacts = object.artifacts;
@@ -499,13 +499,13 @@ export class ConfigPanel {
 
     if (object?.frame_count > 0) {
       artifacts.unshift({
-        name: `frames/ (${object.frame_count} jpg)`,
+        name: `p1_frames/ (${object.frame_count} jpg)`,
         size_mb: null,
       });
     }
     if (object?.mask_count > 0) {
       artifacts.unshift({
-        name: `masks/ (${object.mask_count} png)`,
+        name: `p3_masks/masks/ (${object.mask_count} png)`,
         size_mb: null,
       });
     }

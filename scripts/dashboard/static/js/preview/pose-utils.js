@@ -68,7 +68,7 @@ export async function _ensureSceneFlipForStage(stageNum, cacheToken = null) {
 
 export async function _resolveSceneFlipFromCameraPoses(cacheToken = null) {
   try {
-    const res = await fetch(this._buildPreviewFileUrl('camera_poses.json', cacheToken));
+    const res = await fetch(this._buildPreviewFileUrl('p2_colmap/camera_poses.json', cacheToken));
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }

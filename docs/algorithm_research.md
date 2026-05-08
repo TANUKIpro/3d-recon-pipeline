@@ -22,7 +22,7 @@
 
 - 実装: `scripts/stage_extract_frames.py`
 - 入力: RGB動画
-- 出力: `<output_dir>/frames/00000.jpg` 形式の連番JPEG
+- 出力: `<output_dir>/p1_frames/00000.jpg` 形式の連番JPEG
 - アルゴリズム: OpenCV `VideoCapture.read()` で全フレームを逐次デコードし、`frame_idx % frame_interval == 0` のフレームだけ保存する。回転メタデータは OpenCV と `ffprobe` で補正する。
 
 ### ボトルネック
@@ -57,8 +57,8 @@
 ### 現行実装
 
 - 実装: `scripts/stage_colmap_sfm.py`
-- 入力: `frames/*.jpg`
-- 出力: `camera_poses.json`, `intrinsics.json`, `colmap_sparse/`, `colmap_sparse_points.ply`
+- 入力: `p1_frames/*.jpg`
+- 出力: `p2_colmap/camera_poses.json`, `p2_colmap/intrinsics.json`, `p2_colmap/colmap_sparse/`, `p2_colmap/colmap_sparse_points.ply`
 - アルゴリズム: COLMAP `feature_extractor` でSIFT特徴抽出、`exhaustive_matcher` または `sequential_matcher` で特徴マッチング、`mapper` でインクリメンタルSfMを実行する。`cameras.bin` から fx/fy/cx/cy に加えて歪み係数 (SIMPLE_RADIAL の k1 等) を OpenCV 形式 `[k1, k2, p1, p2, k3]` に変換して `intrinsics.json` に書き出し、Stage 5 がフレームをアンディストーションして使えるようにする。
 
 現行設定は、`scripts/config_defaults.py` では `exhaustive`, `32768 features`, `image_size=2048`, `DSP-SIFT=true`, `GPU=false` が既定である。一方、`docker-compose.yml` では `COLMAP_MAX_FEATURES=8192` が指定されており、設定の意図が少し分散している。
@@ -101,8 +101,8 @@ DUSt3R、MASt3R、Fast3Rは、COLMAPが失敗する低テクスチャ・少数�
 ### 現行実装
 
 - 実装: `scripts/stage_sam2_ui.py`, `scripts/dashboard/sam2_service.py`
-- 入力: `frames/*.jpg`
-- 出力: `masks/`, `masks_object_raw/`, `masks_ground/`
+- 入力: `p1_frames/*.jpg`
+- 出力: `p3_masks/masks/`, `p3_masks/masks_object_raw/`, `p3_masks/masks_ground/`
 - アルゴリズム: SAM2 video predictorを使い、ユーザークリックで対象物体とground/contact surfaceを指定し、全フレームへマスクを伝播する。最終マスクは `object_raw AND NOT ground_raw`。
 
 設定上は `SAM2_MODEL=tiny/small/base/large` が存在するが、`SAM2Session._load_model()` は `SAM2_MODEL_CONFIGS["large"]` を固定使用している。そのため、UIや環境変数で軽量モデルを選んでも実体はlargeになる。
@@ -142,8 +142,8 @@ EdgeTAMは高速化候補だが、SAM2と同じ入出力契約で置き換えら
 ### 現行実装
 
 - 実装: `scripts/stage_gs2mesh_reconstruct.py`, `scripts/gpu_tsdf.py`, `scripts/gs2mesh_config.py`
-- 入力: `frames/`, `colmap_sparse/`, `masks/`
-- 出力: `object_mesh.ply`
+- 入力: `p1_frames/`, `p2_colmap/colmap_sparse/`, `p3_masks/masks/`
+- 出力: `p4_mesh/object_mesh.ply`
 - アルゴリズム:
   1. COLMAP `image_undistorter` で画像を無歪みに変換。
   2. graphdeco-inria版 3D Gaussian Splatting を学習。
@@ -217,8 +217,8 @@ GOF、MASt3R-SLAM、Fast3R系は有望だが、現行Stage 4の差し替えで�
 ### 現行実装
 
 - 実装: `scripts/stage_texture_bake.py`, `scripts/texture/`
-- 入力: `object_mesh.ply`, `camera_poses.json`, `intrinsics.json`, `frames/`, `masks/`
-- 出力: `textured_mesh.obj`, `textured_mesh.mtl`, `texture.png`
+- 入力: `p4_mesh/object_mesh.ply`, `p2_colmap/camera_poses.json`, `p2_colmap/intrinsics.json`, `p1_frames/`, `p3_masks/masks/`
+- 出力: `p5_texture/textured_mesh.obj`, `p5_texture/textured_mesh.mtl`, `p5_texture/texture.png`
 - アルゴリズム:
   1. メッシュ、カメラ姿勢、内部パラメータ (歪み係数を含む) を読み込む。
   2. `intrinsics.dist_coeffs` が非ゼロなら `cv2.initUndistortRectifyMap` でアンディストーションマップを構築し、フレーム/マスクを `cv2.remap` で歪み補正する。COLMAP の bundle adjustment は SIMPLE_RADIAL 前提で世界座標を解いているため、ピンホール投影で歪み画像をサンプルすると曲面上で詳細が消える。
@@ -270,8 +270,8 @@ MVS-Texturing、OpenMVS、AliceVisionは高品質な既存テクスチャリン�
 ### 現行実装
 
 - 実装: `scripts/stage_post_texture_contact_cleanup.py`, `scripts/ground_plane_extraction.py`, `scripts/repair/`
-- 入力: `textured_mesh.obj`, `camera_poses.json`, `intrinsics.json`, `masks/`, `masks_ground/`, `ground_plane.json`, `object_mesh.ply`
-- 出力: `<object_name>/textured_mesh_cleaned.obj`, `texture.png`, 必要に応じて `texture_cap.png`
+- 入力: `p5_texture/textured_mesh.obj`, `p2_colmap/camera_poses.json`, `p2_colmap/intrinsics.json`, `p3_masks/masks/`, `p3_masks/masks_ground/`, `p3_masks/ground_plane.json`, `p4_mesh/object_mesh.ply`
+- 出力: `p6_cleanup/<object_name>/textured_mesh_cleaned.obj`, `texture.png`, 必要に応じて `texture_cap.png`
 - アルゴリズム:
   1. ground maskとメッシュから接地平面を推定する。
   2. faceごとにground mask投影一致率、object mask投影一致率、接地平面距離、近傍状態を評価する。

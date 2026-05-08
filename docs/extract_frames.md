@@ -19,12 +19,12 @@
 
 出力:
 
-- `<output_dir>/frames/00000.jpg` から始まる連番JPEG
+- `<output_dir>/p1_frames/00000.jpg` から始まる連番JPEG
 
 後段利用:
 
-- Stage 2 (`colmap_sfm`) が `frames/` を直接参照
-- Stage 3 (`sam2_segment`) も `frames/` を参照
+- Stage 2 (`colmap_sfm`) が `p1_frames/` を直接参照
+- Stage 3 (`sam2_segment`) も `p1_frames/` を参照
 
 ## 詳細フロー
 

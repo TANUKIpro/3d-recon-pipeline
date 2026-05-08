@@ -7,6 +7,30 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from scripts.output_layout import (
+    CAMERA_POSES_FILENAME,
+    CLEANUP_PROPOSAL_DIRNAME,
+    COLMAP_SPARSE_DIRNAME,
+    COLMAP_SPARSE_POINTS_FILENAME,
+    COLMAP_WORKSPACE_DIRNAME,
+    FRAMES_DIR,
+    GROUND_PLANE_FILENAME,
+    GS2MESH_WORKSPACE_DIRNAME,
+    MASKS_DIRNAME,
+    MASKS_GROUND_DIRNAME,
+    MASKS_OBJECT_RAW_DIRNAME,
+    OBJECT_MESH_FILENAME,
+    P2_COLMAP,
+    P3_MASKS,
+    P4_MESH,
+    P5_TEXTURE,
+    P6_CLEANUP,
+    TEXTURE_PNG_FILENAME,
+    TEXTURED_MESH_MTL_FILENAME,
+    TEXTURED_MESH_OBJ_FILENAME,
+    cleanup_final_dir,
+)
+
 _EMPTY_TUPLE: tuple[str, ...] = ()
 
 
@@ -42,7 +66,7 @@ _CHECKPOINTS: dict[int, Any] = {
             "s1.extract",
             label="Extract frames",
             patterns=_patterns(r"extracting frames|extract frames"),
-            cleanup_dirs=("frames",),
+            cleanup_dirs=(FRAMES_DIR,),
         ),
         _checkpoint(
             "s1.finalize",
@@ -70,8 +94,14 @@ _CHECKPOINTS: dict[int, Any] = {
             "s2.export",
             label="Export camera poses",
             patterns=_patterns(r"exporting camera poses|colmap sfm complete"),
-            cleanup_files=("camera_poses.json", "colmap_sparse_points.ply"),
-            cleanup_dirs=("colmap_sparse", "colmap_workspace"),
+            cleanup_files=(
+                f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",
+                f"{P2_COLMAP}/{COLMAP_SPARSE_POINTS_FILENAME}",
+            ),
+            cleanup_dirs=(
+                f"{P2_COLMAP}/{COLMAP_SPARSE_DIRNAME}",
+                f"{P2_COLMAP}/{COLMAP_WORKSPACE_DIRNAME}",
+            ),
         ),
     ),
     3: (
@@ -89,7 +119,7 @@ _CHECKPOINTS: dict[int, Any] = {
             "s3.propagate",
             label="Propagate masks",
             patterns=_patterns(r"propagating masks"),
-            cleanup_dirs=("masks",),
+            cleanup_dirs=(f"{P3_MASKS}/{MASKS_DIRNAME}",),
         ),
         _checkpoint(
             "s3.verify",
@@ -117,8 +147,8 @@ _CHECKPOINTS: dict[int, Any] = {
             "s4.save",
             label="Save output mesh",
             patterns=_patterns(r"gs2mesh reconstruction complete|gs2mesh complete"),
-            cleanup_files=("object_mesh.ply",),
-            cleanup_dirs=("gs2mesh_workspace",),
+            cleanup_files=(f"{P4_MESH}/{OBJECT_MESH_FILENAME}",),
+            cleanup_dirs=(f"{P4_MESH}/{GS2MESH_WORKSPACE_DIRNAME}",),
         ),
     ),
     5: (
@@ -160,7 +190,11 @@ _CHECKPOINTS: dict[int, Any] = {
             "s5.export",
             label="Export textured mesh",
             patterns=_patterns(r"exporting textured mesh|texture stage complete"),
-            cleanup_files=("textured_mesh.obj", "textured_mesh.mtl", "texture.png"),
+            cleanup_files=(
+                f"{P5_TEXTURE}/{TEXTURED_MESH_OBJ_FILENAME}",
+                f"{P5_TEXTURE}/{TEXTURED_MESH_MTL_FILENAME}",
+                f"{P5_TEXTURE}/{TEXTURE_PNG_FILENAME}",
+            ),
         ),
     ),
     6: (
@@ -198,30 +232,55 @@ _CHECKPOINTS: dict[int, Any] = {
             "s6.apply",
             label="Write cleaned mesh",
             patterns=_patterns(r"writing cleaned obj/mtl|post-texture cleanup complete|post-texture cleanup skipped|preparing cleanup geometry"),
-            cleanup_dirs=("post_texture_contact_cleanup",),
-            # The cleaned mesh artifacts live in the dynamic ``{object_name}/``
-            # final subfolder; ``cleanup_checkpoint_outputs`` removes that
-            # directory explicitly for stage 6.
+            cleanup_dirs=(f"{P6_CLEANUP}/{CLEANUP_PROPOSAL_DIRNAME}",),
+            # The cleaned mesh artifacts live in the dynamic
+            # ``p6_cleanup/{object_name}/`` final subfolder;
+            # ``cleanup_checkpoint_outputs`` removes that directory explicitly
+            # for stage 6.
             cleanup_files=(),
         ),
     ),
 }
 
 _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
-    1: {"dirs": ("frames",), "files": ()},
-    2: {"dirs": ("colmap_sparse", "colmap_workspace"), "files": ("camera_poses.json", "colmap_sparse_points.ply")},
-    3: {
-        "dirs": ("masks", "masks_ground", "masks_object_raw"),
-        "files": ("ground_plane.json",),
+    1: {"dirs": (FRAMES_DIR,), "files": ()},
+    2: {
+        "dirs": (
+            f"{P2_COLMAP}/{COLMAP_SPARSE_DIRNAME}",
+            f"{P2_COLMAP}/{COLMAP_WORKSPACE_DIRNAME}",
+        ),
+        "files": (
+            f"{P2_COLMAP}/{CAMERA_POSES_FILENAME}",
+            f"{P2_COLMAP}/{COLMAP_SPARSE_POINTS_FILENAME}",
+        ),
     },
-    4: {"dirs": ("gs2mesh_workspace",), "files": ("object_mesh.ply",)},
+    3: {
+        "dirs": (
+            f"{P3_MASKS}/{MASKS_DIRNAME}",
+            f"{P3_MASKS}/{MASKS_GROUND_DIRNAME}",
+            f"{P3_MASKS}/{MASKS_OBJECT_RAW_DIRNAME}",
+        ),
+        "files": (f"{P3_MASKS}/{GROUND_PLANE_FILENAME}",),
+    },
+    4: {
+        "dirs": (f"{P4_MESH}/{GS2MESH_WORKSPACE_DIRNAME}",),
+        "files": (f"{P4_MESH}/{OBJECT_MESH_FILENAME}",),
+    },
     # intrinsics.json is intentionally omitted here too — see s5.intrinsics
     # checkpoint comment. COLMAP's intrinsics is the authoritative source.
-    5: {"dirs": (), "files": ("textured_mesh.obj", "textured_mesh.mtl", "texture.png")},
+    5: {
+        "dirs": (),
+        "files": (
+            f"{P5_TEXTURE}/{TEXTURED_MESH_OBJ_FILENAME}",
+            f"{P5_TEXTURE}/{TEXTURED_MESH_MTL_FILENAME}",
+            f"{P5_TEXTURE}/{TEXTURE_PNG_FILENAME}",
+        ),
+    },
     6: {
-        "dirs": ("post_texture_contact_cleanup",),
-        # The cleaned mesh outputs live under the dynamic ``{object_name}/``
-        # subfolder, which is wiped directly in ``cleanup_checkpoint_outputs``.
+        "dirs": (f"{P6_CLEANUP}/{CLEANUP_PROPOSAL_DIRNAME}",),
+        # The cleaned mesh outputs live under the dynamic
+        # ``p6_cleanup/{object_name}/`` subfolder, which is wiped directly in
+        # ``cleanup_checkpoint_outputs``.
         "files": (),
     },
 }
@@ -320,14 +379,15 @@ def cleanup_checkpoint_outputs(
             target.unlink()
             removed_files.append(rel)
 
-    # Stage 6 writes its final deliverables into ``{output_dir}/{object_name}/``
-    # (a subfolder named after the output directory itself). Remove it when
-    # cleaning the "apply" checkpoint or a fallback reset of stage 6.
+    # Stage 6 writes its final deliverables into
+    # ``{output_dir}/p6_cleanup/{object_name}/`` (a subfolder named after the
+    # output directory itself, scoped under the phase 6 directory). Remove it
+    # when cleaning the "apply" checkpoint or a fallback reset of stage 6.
     if int(stage) == 6 and (checkpoint_id in (None, "s6.apply") or used_fallback):
-        final_dir = out / out.name
+        final_dir = cleanup_final_dir(out)
         if final_dir.is_dir():
             shutil.rmtree(final_dir)
-            removed_dirs.append(out.name)
+            removed_dirs.append(str(final_dir.relative_to(out)))
 
     return {
         "stage": int(stage),

@@ -68,7 +68,7 @@ export class PostTextureCleanupReviewController {
     if (this._panel) this._panel.classList.remove('hidden');
     this._setButtonsEnabled(true);
     this._renderProposal();
-    await this._preview.loadStageResult(6, { file: 'textured_mesh.obj' });
+    await this._preview.loadStageResult(6, { file: 'p5_texture/textured_mesh.obj' });
     await this._syncOverlay();
     this._stageCtrl.activateStage(6);
   }

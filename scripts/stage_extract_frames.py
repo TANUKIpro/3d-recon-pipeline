@@ -9,6 +9,7 @@ from typing import Callable
 import cv2
 
 from scripts.config_defaults import _EXTRACT_FPS_FALLBACK
+from scripts.output_layout import frames_dir as _frames_dir
 
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]
@@ -113,7 +114,7 @@ def extract_frames(
     if not video_path.exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
-    frames_dir = Path(output_dir) / "frames"
+    frames_dir = _frames_dir(output_dir)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     cap = cv2.VideoCapture(str(video_path))

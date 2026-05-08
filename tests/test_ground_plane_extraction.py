@@ -155,8 +155,10 @@ class TestExtractGroundPlaneFromMesh(unittest.TestCase):
             )
 
             if result is not None:
-                # Check that output file was written
-                self.assertTrue((tmp / "ground_plane.json").is_file())
+                # Check that output file was written under the new phase dir
+                from scripts.output_layout import ground_plane_path
+
+                self.assertTrue(ground_plane_path(tmp).is_file())
 
                 # Check both key formats present
                 self.assertIn("normal", result)
@@ -352,11 +354,13 @@ class TestHydratePicksUpGroundPlane(unittest.TestCase):
 
     def test_ground_plane_path_set_when_file_exists(self) -> None:
         from scripts.dashboard.state import PipelineSession
+        from scripts.output_layout import ground_plane_path
 
         session = PipelineSession()
         with TemporaryDirectory() as tmpdir:
             out = Path(tmpdir)
-            gp = out / "ground_plane.json"
+            gp = ground_plane_path(out)
+            gp.parent.mkdir(parents=True, exist_ok=True)
             gp.write_text('{"normal":[0,1,0],"d":-0.5}', encoding="utf-8")
             session.hydrate_from_output_dir(out)
             self.assertEqual(session.ground_plane_path, str(gp))

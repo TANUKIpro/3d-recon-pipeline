@@ -17,19 +17,19 @@
 
 前段入力:
 
-- `<output_dir>/frames/*.jpg`
+- `<output_dir>/p1_frames/*.jpg`
 
 主出力:
 
-- `<output_dir>/masks/*.png` (canonical final mask)
-- `<output_dir>/masks_object_raw/*.png`
-- `<output_dir>/masks_ground/*.png` (ground 指定時のみ)
+- `<output_dir>/p3_masks/masks/*.png` (canonical final mask)
+- `<output_dir>/p3_masks/masks_object_raw/*.png`
+- `<output_dir>/p3_masks/masks_ground/*.png` (ground 指定時のみ)
 
 後段利用:
 
-- Stage 4 (`gs2mesh_reconstruct`) が `masks/` を TSDF 用 `left_mask.npy` へ変換
-- Stage 5 (`texture_bake`) が `masks/` を利用
-- Stage 6 (`post_texture_contact_cleanup`) が `masks/` + `masks_ground/` を接地アーティファクト検出に利用
+- Stage 4 (`gs2mesh_reconstruct`) が `p3_masks/masks/` を TSDF 用 `left_mask.npy` へ変換
+- Stage 5 (`texture_bake`) が `p3_masks/masks/` を利用
+- Stage 6 (`post_texture_contact_cleanup`) が `p3_masks/masks/` + `masks_ground/` を接地アーティファクト検出に利用
 
 ## 詳細フロー
 
@@ -49,7 +49,7 @@
 - インタラクティブ点ベースセグメンテーション (SAM2 video predictor)
 - クリック点は正規化座標で管理し、実画像座標に変換して推論
 - final mask は `object_raw AND NOT ground_raw`
-- 後段は常に `masks/` を canonical source of truth として扱う
+- 後段は常に `p3_masks/masks/` を canonical source of truth として扱う
 
 ## パラメータ
 
@@ -69,7 +69,7 @@
 
 - `No JPEG frames ...`: Stage 1/2 の成果物不足
 - `No click points to propagate`: クリック未指定で確定した場合
-- `camera_data.json` と `masks/` の frame index が対応しない: Stage 4 の TSDF マスク生成が停止する
+- `camera_data.json` と `p3_masks/masks/` の frame index が対応しない: Stage 4 の TSDF マスク生成が停止する
 
 ## 参考文献
 

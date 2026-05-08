@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from scripts.dashboard.dependencies import get_state
 from scripts.dashboard.state import PipelineStage
+from scripts.output_layout import cleanup_proposal_dir
 
 router = APIRouter()
 
@@ -20,7 +21,7 @@ async def post_texture_cleanup_proposal():
     proposal_path = (
         Path(session.cleanup_proposal_path)
         if session.cleanup_proposal_path
-        else Path(session.config.output_dir) / "post_texture_contact_cleanup" / "proposal.json"
+        else cleanup_proposal_dir(session.config.output_dir) / "proposal.json"
     )
     if not proposal_path.is_file():
         return JSONResponse({"error": "Cleanup proposal not found"}, status_code=404)

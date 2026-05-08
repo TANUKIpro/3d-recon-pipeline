@@ -12,6 +12,7 @@ from scripts.dashboard.object_store import (
     resolve_output_root,
     validate_object_name,
 )
+from scripts.output_layout import object_mesh_path
 
 router = APIRouter()
 
@@ -106,7 +107,7 @@ async def preview_file(path: str):
 async def preview_crop_obb():
     """Return OBB (center, extent, rotation) for the object mesh."""
     out = get_state().active_output_dir()
-    mesh_path = out / "object_mesh.ply"
+    mesh_path = object_mesh_path(out)
     if not mesh_path.is_file():
         return JSONResponse({"error": "object_mesh.ply not found"}, status_code=404)
     try:

@@ -20,6 +20,14 @@ from scripts.config_defaults import (
     _TEXTURE_SEAM_PAD_ITERS,
 )
 from scripts.mesh_orientation import orient_mesh_outward
+from scripts.output_layout import (
+    colmap_sparse_dir,
+    intrinsics_path as _intrinsics_path,
+    texture_phase_dir,
+    texture_png_path,
+    textured_mesh_mtl_path,
+    textured_mesh_obj_path,
+)
 from scripts.texture.cap_region import _fill_cap_region, _identify_cap_texels, _seed_cap_border
 from scripts.texture.config import (
     _resolve_texture_device,
@@ -105,7 +113,7 @@ def _maybe_load_colmap_intrinsics(
     fine texture detail. Read straight from cameras.bin so the bake is
     independent of intrinsics.json's presence.
     """
-    cameras_bin = output_path / "colmap_sparse" / "0" / "cameras.bin"
+    cameras_bin = colmap_sparse_dir(output_path) / "0" / "cameras.bin"
     if not cameras_bin.exists():
         return None
     try:
@@ -307,7 +315,8 @@ def bake_texture(
     # whenever the schema matches our image resolution instead of re-solving
     # via the grid-search + Nelder-Mead path in _estimate_intrinsics (which
     # dominates the stage's wall-clock).
-    intrinsics = _maybe_load_intrinsics(output_path / "intrinsics.json", img_w, img_h)
+    intrinsics_file = _intrinsics_path(output_path)
+    intrinsics = _maybe_load_intrinsics(intrinsics_file, img_w, img_h)
     if intrinsics is None:
         # Defensive fallback: pull directly from COLMAP cameras.bin if the
         # JSON copy went missing (e.g., a checkpoint reset wiped it).
@@ -317,7 +326,8 @@ def bake_texture(
                 f"  intrinsics.json missing; recovered from COLMAP "
                 f"cameras.bin (source={intrinsics.get('source', 'colmap')})"
             )
-            with open(output_path / "intrinsics.json", "w") as f_out:
+            intrinsics_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(intrinsics_file, "w") as f_out:
                 json.dump(intrinsics, f_out, indent=2)
     elif (
         "dist_coeffs" not in intrinsics
@@ -332,12 +342,12 @@ def bake_texture(
                 "  intrinsics.json upgraded with COLMAP distortion params "
                 f"(model={intrinsics.get('distortion_model', '?')})"
             )
-            with open(output_path / "intrinsics.json", "w") as f_out:
+            with open(intrinsics_file, "w") as f_out:
                 json.dump(intrinsics, f_out, indent=2)
 
     if intrinsics is not None:
         source = intrinsics.get("source", "cached")
-        print(f"Loaded camera intrinsics from {output_path / 'intrinsics.json'} (source={source})")
+        print(f"Loaded camera intrinsics from {intrinsics_file} (source={source})")
         _emit_progress(progress_cb, 52.0, "Camera intrinsics loaded from COLMAP")
     else:
         # Prefer the original colored point cloud when present, but fall back to
@@ -367,7 +377,8 @@ def bake_texture(
         )
         _emit_progress(progress_cb, 52.0, "Camera intrinsics estimated")
 
-        with open(output_path / "intrinsics.json", "w") as f_out:
+        intrinsics_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(intrinsics_file, "w") as f_out:
             json.dump(intrinsics, f_out, indent=2)
 
     K = np.array(intrinsics["K"], dtype=np.float64)
@@ -1023,9 +1034,10 @@ def bake_texture(
 
     # --- Export OBJ + MTL + PNG ---
     basename = "textured_mesh"
-    obj_path = output_path / f"{basename}.obj"
-    mtl_path = output_path / f"{basename}.mtl"
-    tex_path = output_path / "texture.png"
+    texture_phase_dir(output_path).mkdir(parents=True, exist_ok=True)
+    obj_path = textured_mesh_obj_path(output_path)
+    mtl_path = textured_mesh_mtl_path(output_path)
+    tex_path = texture_png_path(output_path)
 
     # Texture PNG (flip V for OBJ convention)
     tex_u8 = np.clip(final_tex * 255, 0, 255).astype(np.uint8)

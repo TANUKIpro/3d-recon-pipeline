@@ -14,20 +14,20 @@
 
 前段入力:
 
-- `<output_dir>/frames/*.jpg` (Stage 1 出力)
+- `<output_dir>/p1_frames/*.jpg` (Stage 1 出力)
 
 主出力:
 
-- `<output_dir>/camera_poses.json` — カメラ外部パラメータ (c2w 4x4 行列)
-- `<output_dir>/intrinsics.json` — カメラ内部パラメータ (fx, fy, cx, cy, K 行列)
-- `<output_dir>/colmap_sparse/` — COLMAP スパース再構成 (バイナリ形式)
-- `<output_dir>/colmap_sparse_points.ply` — スパース点群
+- `<output_dir>/p2_colmap/camera_poses.json` — カメラ外部パラメータ (c2w 4x4 行列)
+- `<output_dir>/p2_colmap/intrinsics.json` — カメラ内部パラメータ (fx, fy, cx, cy, K 行列)
+- `<output_dir>/p2_colmap/colmap_sparse/` — COLMAP スパース再構成 (バイナリ形式)
+- `<output_dir>/p2_colmap/colmap_sparse_points.ply` — スパース点群
 
 後段利用:
 
-- Stage 4 (`gs2mesh_reconstruct`) が `colmap_sparse/` を 3DGS 学習と画像アンディストーションに使用
-- Stage 5 (`texture_bake`) が `camera_poses.json` + `intrinsics.json` を使用
-- Stage 6 (`post_texture_contact_cleanup`) が `camera_poses.json` + `intrinsics.json` を使用
+- Stage 4 (`gs2mesh_reconstruct`) が `p2_colmap/colmap_sparse/` を 3DGS 学習と画像アンディストーションに使用
+- Stage 5 (`texture_bake`) が `p2_colmap/camera_poses.json` + `intrinsics.json` を使用
+- Stage 6 (`post_texture_contact_cleanup`) が `p2_colmap/camera_poses.json` + `intrinsics.json` を使用
 
 ## 詳細フロー
 

@@ -213,7 +213,9 @@ class TestPostTextureCleanupEndpoints(unittest.IsolatedAsyncioTestCase):
             "cleanup_proposal_path": session.cleanup_proposal_path,
             "output_dir": session.config.output_dir,
         }
-        proposal_dir = Path(self.tmpdir.name) / "post_texture_contact_cleanup"
+        from scripts.output_layout import cleanup_proposal_dir
+
+        proposal_dir = cleanup_proposal_dir(self.tmpdir.name)
         proposal_dir.mkdir(parents=True, exist_ok=True)
         self.proposal_path = proposal_dir / "proposal.json"
         self.proposal_path.write_text(

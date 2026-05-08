@@ -25,6 +25,19 @@ from scripts.dashboard.state import (
     StageStatus,
     detect_stage_outputs,
 )
+from scripts.output_layout import (
+    camera_poses_path,
+    colmap_phase_dir,
+    colmap_sparse_dir,
+    frames_dir,
+    intrinsics_path,
+    masks_dir,
+    masks_phase_dir,
+    mesh_phase_dir,
+    object_mesh_path,
+    texture_phase_dir,
+    textured_mesh_obj_path,
+)
 
 from tests.conftest import FIXTURE_DIR
 
@@ -513,9 +526,9 @@ class TestDetectStageOutputs(unittest.TestCase):
     def test_stage1_detection_frames_only(self) -> None:
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "frames").mkdir()
-            (out / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
-            (out / "frames" / "00001.jpg").write_bytes(b"\xff\xd8")
+            frames_dir(out).mkdir(parents=True)
+            (frames_dir(out) / "00000.jpg").write_bytes(b"\xff\xd8")
+            (frames_dir(out) / "00001.jpg").write_bytes(b"\xff\xd8")
             stages, fc, mc = detect_stage_outputs(out)
             self.assertTrue(stages[1])
             self.assertEqual(fc, 2)
@@ -529,8 +542,8 @@ class TestDetectStageOutputs(unittest.TestCase):
             self.assertEqual(mc, 0)
 
             # add masks
-            (out / "masks").mkdir()
-            (out / "masks" / "00000.png").write_bytes(b"\x89PNG")
+            masks_dir(out).mkdir(parents=True)
+            (masks_dir(out) / "00000.png").write_bytes(b"\x89PNG")
             stages, _, mc = detect_stage_outputs(out)
             self.assertTrue(stages[3])
             self.assertEqual(mc, 1)
@@ -543,17 +556,18 @@ class TestHydrateFromOutputDir(unittest.TestCase):
     """hydrate_from_output_dir() path setting, current_stage."""
 
     def _make_stage1_dir(self, base: Path) -> None:
-        (base / "frames").mkdir(parents=True, exist_ok=True)
-        (base / "frames" / "00000.jpg").write_bytes(b"\xff\xd8")
+        frames_dir(base).mkdir(parents=True, exist_ok=True)
+        (frames_dir(base) / "00000.jpg").write_bytes(b"\xff\xd8")
 
     def _make_stage2_files(self, base: Path) -> None:
-        (base / "colmap_sparse").mkdir(parents=True, exist_ok=True)
+        colmap_sparse_dir(base).mkdir(parents=True, exist_ok=True)
+        colmap_phase_dir(base).mkdir(parents=True, exist_ok=True)
         for name in STAGE_OUTPUT_FILES[2]:
-            (base / name).write_text("data", encoding="utf-8")
+            (colmap_phase_dir(base) / name).write_text("data", encoding="utf-8")
 
     def _make_stage3_files(self, base: Path) -> None:
-        (base / "masks").mkdir(parents=True, exist_ok=True)
-        (base / "masks" / "00000.png").write_bytes(b"\x89PNG")
+        masks_dir(base).mkdir(parents=True, exist_ok=True)
+        (masks_dir(base) / "00000.png").write_bytes(b"\x89PNG")
 
     def test_path_setting_frames_dir(self) -> None:
         session = PipelineSession()
@@ -561,7 +575,7 @@ class TestHydrateFromOutputDir(unittest.TestCase):
             out = Path(tmp)
             self._make_stage1_dir(out)
             session.hydrate_from_output_dir(out)
-            self.assertEqual(session.frames_dir, str(out / "frames"))
+            self.assertEqual(session.frames_dir, str(frames_dir(out)))
             self.assertGreater(session.frame_count, 0)
 
     def test_path_setting_no_frames(self) -> None:
@@ -575,9 +589,11 @@ class TestHydrateFromOutputDir(unittest.TestCase):
         session = PipelineSession()
         with TemporaryDirectory() as tmp:
             out = Path(tmp)
-            (out / "object_mesh.ply").write_text("ply\n", encoding="utf-8")
+            mesh_path = object_mesh_path(out)
+            mesh_path.parent.mkdir(parents=True, exist_ok=True)
+            mesh_path.write_text("ply\n", encoding="utf-8")
             session.hydrate_from_output_dir(out)
-            self.assertEqual(session.mesh_ply, str(out / "object_mesh.ply"))
+            self.assertEqual(session.mesh_ply, str(mesh_path))
 
     def test_current_stage_inferred_from_completed(self) -> None:
         session = PipelineSession()
