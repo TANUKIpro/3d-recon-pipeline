@@ -24,9 +24,13 @@ from scripts.config_defaults import (
 )
 from scripts.gs2mesh_config import Gs2meshSettings
 from scripts.output_layout import (
+    camera_poses_path,
+    frame_manifest_path,
     gs2mesh_workspace_dir,
+    intrinsics_path,
     mesh_phase_dir,
     object_mesh_path,
+    sam2_clicks_path,
 )
 
 _GS2MESH_BASE = Path("/opt/gs2mesh")
@@ -36,6 +40,11 @@ _GAUSSIAN_SPLATTING_ACCEL = Path("/opt/gaussian-splatting")
 _GAUSSIAN_SPLATTING_COMPAT = _GAUSSIAN_SPLATTING_ACCEL
 _GS2MESH_GS_LINK = _GS2MESH_BASE / "third_party" / "gaussian-splatting"
 _GS_COMPAT_SITE_PACKAGES = Path("/opt/gs-compat-site")
+_SAM2_PRIMARY_DENSE_FRAMES_DIRNAME = "sam2_primary_dense_frames"
+_SAM2_PRIMARY_DENSE_MASKS_DIRNAME = "sam2_primary_dense_masks"
+_SAM2_PRIMARY_DENSE_OBJECT_RAW_DIRNAME = "sam2_primary_dense_masks_object_raw"
+_SAM2_PRIMARY_DENSE_GROUND_DIRNAME = "sam2_primary_dense_masks_ground"
+_SAM2_PRIMARY_DENSE_VIEWS_FILENAME = "sam2_primary_dense_views.json"
 _RETRYABLE_GS2MESH_FAILURES = frozenset(
     {
         "cuda_illegal_memory_access",
@@ -224,6 +233,7 @@ def _run_gpu_tsdf_with_fallbacks(
     settings: Gs2meshSettings,
     gs2mesh_output: Path,
     stereo_model: str,
+    silhouette_extra_views_path: Path | None,
     report,
 ) -> str:
     from scripts.gpu_tsdf import gpu_tsdf_reconstruct
@@ -319,6 +329,11 @@ def _run_gpu_tsdf_with_fallbacks(
                 mesh_smooth_min_iou=mesh_smooth_min_iou,
                 mask_depth_mode=attempt_settings.mask_depth_mode,
                 silhouette_voxel_resolution=silhouette_voxels,
+                silhouette_extra_views_path=(
+                    None
+                    if silhouette_extra_views_path is None
+                    else str(silhouette_extra_views_path)
+                ),
                 progress_cb=lambda pct, msg: report(80.0 + pct * 15.0, msg),
             )
         except RuntimeError as exc:
@@ -333,6 +348,456 @@ def _run_gpu_tsdf_with_fallbacks(
     raise RuntimeError(
         "GPU TSDF fusion failed after VRAM-reduction retries"
     ) from last_exc
+
+
+def _recompute_sam2_masks_from_clicks(
+    *,
+    frames_dir: str,
+    output_dir: str,
+    progress_callback=None,
+    **kwargs,
+) -> tuple[Path, Path | None] | None:
+    from scripts.stage_sam2_ui import recompute_masks_from_saved_clicks
+
+    return recompute_masks_from_saved_clicks(
+        frames_dir,
+        output_dir,
+        progress_callback=progress_callback,
+        **kwargs,
+    )
+
+
+def _load_json_dict(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else None
+
+
+def _load_frame_manifest(output_dir: str | Path) -> dict | None:
+    return _load_json_dict(frame_manifest_path(output_dir))
+
+
+def _manifest_saved_frames(manifest: dict) -> list[dict]:
+    records = manifest.get("saved_frames", [])
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _saved_source_lookup(manifest: dict) -> dict[int, int]:
+    lookup: dict[int, int] = {}
+    for record in _manifest_saved_frames(manifest):
+        try:
+            saved_idx = int(record["saved_index"])
+            source_idx = int(record["source_frame_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        lookup[saved_idx] = source_idx
+    return lookup
+
+
+def _saved_index_by_source(manifest: dict) -> dict[int, int]:
+    return {
+        source_idx: saved_idx
+        for saved_idx, source_idx in _saved_source_lookup(manifest).items()
+    }
+
+
+def _dense_source_indices(manifest: dict) -> list[int]:
+    sources = sorted(_saved_index_by_source(manifest))
+    if not sources:
+        return []
+    return list(range(sources[0], sources[-1] + 1))
+
+
+def _extract_dense_video_frames(
+    *,
+    manifest: dict,
+    dense_frames_dir: Path,
+) -> list[dict]:
+    import cv2
+    from scripts.stage_extract_frames import _rotation_to_cv2_code
+
+    source_indices = _dense_source_indices(manifest)
+    if not source_indices:
+        return []
+
+    video_path = Path(str(manifest.get("video_path") or ""))
+    if not video_path.is_file():
+        print(
+            "SAM2 primary: dense skipped-frame masks skipped "
+            f"(video not found: {video_path})"
+        )
+        return []
+
+    if dense_frames_dir.exists():
+        shutil.rmtree(dense_frames_dir)
+    dense_frames_dir.mkdir(parents=True, exist_ok=True)
+
+    source_start = int(source_indices[0])
+    source_end = int(source_indices[-1])
+    saved_by_source = _saved_index_by_source(manifest)
+    rotate_code = _rotation_to_cv2_code(int(manifest.get("rotation") or 0))
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        print(f"SAM2 primary: could not open source video: {video_path}")
+        return []
+    try:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, source_start)
+        current_source = source_start
+        dense_idx = 0
+        records: list[dict] = []
+        while current_source <= source_end:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if rotate_code is not None:
+                frame = cv2.rotate(frame, rotate_code)
+            frame_name = f"{dense_idx:05d}.jpg"
+            frame_path = dense_frames_dir / frame_name
+            cv2.imwrite(str(frame_path), frame)
+            saved_idx = saved_by_source.get(current_source)
+            records.append(
+                {
+                    "dense_index": dense_idx,
+                    "dense_name": frame_name,
+                    "source_frame_index": current_source,
+                    "is_extracted": saved_idx is not None,
+                    "saved_index": saved_idx,
+                }
+            )
+            dense_idx += 1
+            current_source += 1
+    finally:
+        cap.release()
+    return records
+
+
+def _matrix4(value: object) -> "np.ndarray | None":
+    import numpy as np
+
+    if not isinstance(value, list):
+        return None
+    matrix = np.asarray(value, dtype=np.float64)
+    return matrix if matrix.shape == (4, 4) else None
+
+
+def _load_pose_keyframes(
+    output_dir: str | Path,
+    manifest: dict,
+) -> list[tuple[int, "np.ndarray"]]:
+    import numpy as np
+
+    pose_path = camera_poses_path(output_dir)
+    if not pose_path.is_file():
+        return []
+    with pose_path.open("r", encoding="utf-8") as f:
+        pose_data = json.load(f)
+
+    saved_to_source = _saved_source_lookup(manifest)
+    keyframes: list[tuple[int, np.ndarray]] = []
+    if isinstance(pose_data, dict) and isinstance(pose_data.get("poses"), list):
+        for saved_idx, matrix_like in enumerate(pose_data["poses"]):
+            source_idx = saved_to_source.get(saved_idx)
+            matrix = _matrix4(matrix_like)
+            if source_idx is not None and matrix is not None:
+                keyframes.append((source_idx, matrix))
+    elif isinstance(pose_data, list):
+        for default_idx, record in enumerate(pose_data):
+            if not isinstance(record, dict):
+                continue
+            frame_idx = None
+            frame_name = record.get("frame_name")
+            if isinstance(frame_name, str):
+                frame_idx = _extract_frame_index_from_text(frame_name)
+            if frame_idx is None:
+                frame_idx = default_idx
+            source_idx = saved_to_source.get(frame_idx)
+            matrix = _matrix4(record.get("transform_matrix"))
+            if source_idx is not None and matrix is not None:
+                keyframes.append((source_idx, matrix))
+
+    by_source: dict[int, np.ndarray] = {}
+    for source_idx, matrix in keyframes:
+        by_source.setdefault(source_idx, matrix)
+    return sorted(by_source.items(), key=lambda item: item[0])
+
+
+def _interpolate_pose(
+    keyframes: list[tuple[int, "np.ndarray"]],
+    source_frame_index: int,
+) -> "np.ndarray | None":
+    import numpy as np
+    from scipy.spatial.transform import Rotation, Slerp
+
+    if not keyframes:
+        return None
+    source_frame_index = int(source_frame_index)
+    for key_source, matrix in keyframes:
+        if source_frame_index == key_source:
+            return matrix.copy()
+    for (lo_source, lo_pose), (hi_source, hi_pose) in zip(keyframes, keyframes[1:]):
+        if lo_source < source_frame_index < hi_source:
+            ratio = (
+                float(source_frame_index - lo_source)
+                / float(max(1, hi_source - lo_source))
+            )
+            rotations = Rotation.from_matrix(
+                np.stack([lo_pose[:3, :3], hi_pose[:3, :3]])
+            )
+            interp_rot = Slerp([0.0, 1.0], rotations)([ratio]).as_matrix()[0]
+            interp_t = (
+                lo_pose[:3, 3] * (1.0 - ratio)
+                + hi_pose[:3, 3] * ratio
+            )
+            result = np.eye(4, dtype=np.float64)
+            result[:3, :3] = interp_rot
+            result[:3, 3] = interp_t
+            return result
+    return None
+
+
+def _load_dense_intrinsics(output_dir: str | Path) -> dict | None:
+    data = _load_json_dict(intrinsics_path(output_dir))
+    if data is None:
+        return None
+    required = ("fx", "fy", "cx", "cy")
+    try:
+        return {key: float(data[key]) for key in required} | {
+            "image_width": float(data.get("image_width") or 0.0),
+            "image_height": float(data.get("image_height") or 0.0),
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _scale_intrinsics_for_shape(
+    intrinsics: dict,
+    image_shape: tuple[int, int],
+) -> dict[str, float]:
+    h, w = image_shape
+    base_w = float(intrinsics.get("image_width") or w)
+    base_h = float(intrinsics.get("image_height") or h)
+    sx = float(w) / max(base_w, 1.0)
+    sy = float(h) / max(base_h, 1.0)
+    return {
+        "fx": float(intrinsics["fx"]) * sx,
+        "fy": float(intrinsics["fy"]) * sy,
+        "cx": float(intrinsics["cx"]) * sx,
+        "cy": float(intrinsics["cy"]) * sy,
+    }
+
+
+def _load_camera_baseline(gs2mesh_output: Path) -> float:
+    camera_data_path = gs2mesh_output / "camera_data.json"
+    try:
+        with camera_data_path.open("r", encoding="utf-8") as f:
+            camera_data = json.load(f)
+        first_left = camera_data[0]["left"]
+        return float(first_left.get("baseline") or 1.0)
+    except (OSError, KeyError, IndexError, TypeError, ValueError):
+        return 1.0
+
+
+def _write_dense_extra_views(
+    *,
+    output_dir: str | Path,
+    manifest: dict,
+    dense_records: list[dict],
+    dense_mask_dir: Path,
+    gs2mesh_output: Path,
+    extra_views_path: Path,
+) -> Path | None:
+    import cv2
+
+    keyframes = _load_pose_keyframes(output_dir, manifest)
+    if len(keyframes) < 2:
+        print("SAM2 primary: dense skipped-frame views skipped (not enough poses)")
+        return None
+    intrinsics = _load_dense_intrinsics(output_dir)
+    if intrinsics is None:
+        print("SAM2 primary: dense skipped-frame views skipped (no intrinsics)")
+        return None
+
+    baseline = _load_camera_baseline(gs2mesh_output)
+    views: list[dict] = []
+    for record in dense_records:
+        if bool(record.get("is_extracted")):
+            continue
+        try:
+            dense_idx = int(record["dense_index"])
+            source_idx = int(record["source_frame_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        pose = _interpolate_pose(keyframes, source_idx)
+        if pose is None:
+            continue
+        mask_path = dense_mask_dir / f"{dense_idx:05d}.png"
+        mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        if mask_img is None or not bool((mask_img > 0).any()):
+            continue
+        scaled = _scale_intrinsics_for_shape(intrinsics, mask_img.shape[:2])
+        views.append(
+            {
+                "source_frame_index": source_idx,
+                "dense_frame_index": dense_idx,
+                "mask_path": str(mask_path),
+                "camera": {
+                    **scaled,
+                    "baseline": baseline,
+                    "extrinsic": pose.tolist(),
+                },
+            }
+        )
+
+    if not views:
+        print("SAM2 primary: dense skipped-frame views skipped (no usable masks)")
+        return None
+
+    extra_views_path.parent.mkdir(parents=True, exist_ok=True)
+    extra_views_path.write_text(
+        json.dumps({"version": 1, "views": views}, indent=2),
+        encoding="utf-8",
+    )
+    print(f"SAM2 primary: added {len(views)} dense skipped-frame visual-hull views")
+    return extra_views_path
+
+
+def _prepare_sam2_primary_dense_extra_views(
+    *,
+    frames_dir: str,
+    output_dir: str,
+    gs2mesh_workdir: Path,
+    gs2mesh_output: Path,
+    report,
+) -> Path | None:
+    del frames_dir  # dense frames are decoded from the original video manifest.
+    manifest = _load_frame_manifest(output_dir)
+    if manifest is None:
+        print("SAM2 primary: frame manifest not found; dense skipped frames disabled")
+        return None
+
+    saved_by_source = _saved_index_by_source(manifest)
+    dense_sources = _dense_source_indices(manifest)
+    skipped_sources = [idx for idx in dense_sources if idx not in saved_by_source]
+    if not skipped_sources:
+        print("SAM2 primary: no frameextract-skipped frames in manifest range")
+        return None
+
+    keyframes = _load_pose_keyframes(output_dir, manifest)
+    if len(keyframes) < 2:
+        print("SAM2 primary: dense skipped-frame views disabled (not enough poses)")
+        return None
+    pose_min = keyframes[0][0]
+    pose_max = keyframes[-1][0]
+    if not any(pose_min < source_idx < pose_max for source_idx in skipped_sources):
+        print("SAM2 primary: dense skipped-frame views disabled (outside pose range)")
+        return None
+
+    if _load_dense_intrinsics(output_dir) is None:
+        print("SAM2 primary: dense skipped-frame views disabled (missing intrinsics)")
+        return None
+
+    dense_frames_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_FRAMES_DIRNAME
+    dense_mask_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_MASKS_DIRNAME
+    dense_object_raw_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_OBJECT_RAW_DIRNAME
+    dense_ground_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_GROUND_DIRNAME
+    for path in (dense_mask_dir, dense_object_raw_dir, dense_ground_dir):
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+    report(77.0, "Extracting dense skipped frames for SAM2 primary")
+    dense_records = _extract_dense_video_frames(
+        manifest=manifest,
+        dense_frames_dir=dense_frames_dir,
+    )
+    if not dense_records:
+        return None
+
+    report(78.0, "Propagating dense SAM2 masks for SAM2 primary")
+
+    def _progress(frame_idx: int, total: int) -> None:
+        total = max(total, 1)
+        ratio = (frame_idx + 1) / total
+        report(
+            78.0 + min(ratio, 1.0),
+            f"Propagating dense SAM2 masks ({frame_idx + 1}/{total})",
+        )
+
+    result = _recompute_sam2_masks_from_clicks(
+        frames_dir=str(dense_frames_dir),
+        output_dir=output_dir,
+        click_output_dir=output_dir,
+        mask_dir=dense_mask_dir,
+        object_mask_raw_dir=dense_object_raw_dir,
+        ground_mask_dir=dense_ground_dir,
+        save_clicks=False,
+        progress_callback=_progress,
+    )
+    if result is None:
+        return None
+
+    extra_views_path = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_VIEWS_FILENAME
+    return _write_dense_extra_views(
+        output_dir=output_dir,
+        manifest=manifest,
+        dense_records=dense_records,
+        dense_mask_dir=dense_mask_dir,
+        gs2mesh_output=gs2mesh_output,
+        extra_views_path=extra_views_path,
+    )
+
+
+def _maybe_refresh_sam2_primary_masks(
+    *,
+    frames_dir: str,
+    output_dir: str,
+    mask_dir: str,
+    gs2mesh_workdir: Path,
+    gs2mesh_output: Path,
+    settings: Gs2meshSettings,
+    report,
+) -> tuple[str, Path | None]:
+    """Recompute saved SAM2 masks only for SAM2-primary geometry mode."""
+    if settings.mask_depth_mode != "replace":
+        return mask_dir, None
+
+    click_path = sam2_clicks_path(output_dir)
+    if not click_path.is_file():
+        print(
+            "SAM2 primary: saved click points not found; "
+            f"using existing masks at {mask_dir}"
+        )
+        return mask_dir, None
+
+    print(f"SAM2 primary: recomputing masks from saved clicks: {click_path}")
+    report(78.0, "Recomputing SAM2 masks for SAM2 primary")
+
+    def _progress(frame_idx: int, total: int) -> None:
+        total = max(total, 1)
+        ratio = (frame_idx + 1) / total
+        report(
+            78.0 + min(ratio, 1.0),
+            f"Recomputing SAM2 masks ({frame_idx + 1}/{total})",
+        )
+
+    result = _recompute_sam2_masks_from_clicks(
+        frames_dir=frames_dir,
+        output_dir=output_dir,
+        progress_callback=_progress,
+    )
+    refreshed_mask_dir = Path(mask_dir) if result is None else result[0]
+
+    extra_views_path = _prepare_sam2_primary_dense_extra_views(
+        frames_dir=frames_dir,
+        output_dir=output_dir,
+        gs2mesh_workdir=gs2mesh_workdir,
+        gs2mesh_output=gs2mesh_output,
+        report=report,
+    )
+    return str(refreshed_mask_dir), extra_views_path
 
 
 def run_gs2mesh(
@@ -554,7 +1019,17 @@ def run_gs2mesh(
     log_vram("after stereo depth subprocess exit")
     cleanup_pytorch_vram()
 
+    silhouette_extra_views_path: Path | None = None
     if use_masks and mask_dir:
+        mask_dir, silhouette_extra_views_path = _maybe_refresh_sam2_primary_masks(
+            frames_dir=frames_dir,
+            output_dir=str(out),
+            mask_dir=mask_dir,
+            gs2mesh_workdir=gs2mesh_workdir,
+            gs2mesh_output=gs2mesh_output,
+            settings=settings,
+            report=_report,
+        )
         _report(79.0, "Preparing SAM2 masks for TSDF fusion")
         _materialize_tsdf_masks(gs2mesh_output, mask_dir)
 
@@ -565,6 +1040,7 @@ def run_gs2mesh(
         settings=settings,
         gs2mesh_output=gs2mesh_output,
         stereo_model=stereo_model,
+        silhouette_extra_views_path=silhouette_extra_views_path,
         report=_report,
     )
 

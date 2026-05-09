@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
@@ -9,6 +10,11 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 from scripts.gs2mesh_config import Gs2meshSettings
+from scripts.output_layout import (
+    camera_poses_path,
+    intrinsics_path,
+    sam2_clicks_path,
+)
 from scripts.stage_gs2mesh_reconstruct import (
     _Gs2meshRuntimeStack,
     _build_gpu_tsdf_attempts,
@@ -16,13 +22,16 @@ from scripts.stage_gs2mesh_reconstruct import (
     _build_pythonpath,
     _build_stereo_runtime_stacks,
     _classify_gs2mesh_failure,
+    _interpolate_pose,
     _is_gpu_tsdf_oom_error,
     _materialize_tsdf_masks,
+    _maybe_refresh_sam2_primary_masks,
     _patch_gaussian_renderer_init,
     _normalize_runtime_profile,
     _patch_gs2mesh_renderer_utils,
     _resolve_camera_frame_index,
     _validate_gs2mesh_stereo_outputs,
+    _write_dense_extra_views,
     run_gs2mesh,
 )
 
@@ -581,6 +590,164 @@ class TestTsdfMaskMaterialization(unittest.TestCase):
 
 
 class TestRunGs2meshMaskIntegration(unittest.TestCase):
+    def test_interpolate_pose_uses_slerp_and_linear_translation(self) -> None:
+        pose0 = np.eye(4, dtype=np.float64)
+        pose2 = np.eye(4, dtype=np.float64)
+        pose2[:3, 3] = [2.0, 4.0, 6.0]
+
+        pose1 = _interpolate_pose([(0, pose0), (2, pose2)], 1)
+
+        self.assertIsNotNone(pose1)
+        np.testing.assert_allclose(pose1[:3, 3], [1.0, 2.0, 3.0])
+        np.testing.assert_allclose(pose1[:3, :3], np.eye(3), atol=1e-7)
+
+    def test_write_dense_extra_views_uses_skipped_masks_and_interpolated_pose(self) -> None:
+        from PIL import Image
+
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            dense_mask_dir = Path(tmp) / "dense_masks"
+            gs2mesh_output = Path(tmp) / "gs2mesh"
+            dense_mask_dir.mkdir(parents=True)
+            gs2mesh_output.mkdir(parents=True)
+            Image.fromarray(np.full((4, 4), 255, dtype=np.uint8)).save(
+                dense_mask_dir / "00001.png"
+            )
+            pose0 = np.eye(4, dtype=np.float64)
+            pose2 = np.eye(4, dtype=np.float64)
+            pose2[:3, 3] = [2.0, 0.0, 0.0]
+            camera_poses_path(out).parent.mkdir(parents=True)
+            camera_poses_path(out).write_text(
+                json.dumps(
+                    [
+                        {
+                            "frame_name": "00000.jpg",
+                            "transform_matrix": pose0.tolist(),
+                        },
+                        {
+                            "frame_name": "00001.jpg",
+                            "transform_matrix": pose2.tolist(),
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            intrinsics_path(out).write_text(
+                json.dumps(
+                    {
+                        "fx": 10.0,
+                        "fy": 12.0,
+                        "cx": 2.0,
+                        "cy": 3.0,
+                        "image_width": 4,
+                        "image_height": 4,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (gs2mesh_output / "camera_data.json").write_text(
+                json.dumps([{"left": {"baseline": 0.1}}]),
+                encoding="utf-8",
+            )
+            manifest = {
+                "saved_frames": [
+                    {"saved_index": 0, "source_frame_index": 0},
+                    {"saved_index": 1, "source_frame_index": 2},
+                ]
+            }
+            dense_records = [
+                {"dense_index": 0, "source_frame_index": 0, "is_extracted": True},
+                {"dense_index": 1, "source_frame_index": 1, "is_extracted": False},
+                {"dense_index": 2, "source_frame_index": 2, "is_extracted": True},
+            ]
+
+            path = _write_dense_extra_views(
+                output_dir=out,
+                manifest=manifest,
+                dense_records=dense_records,
+                dense_mask_dir=dense_mask_dir,
+                gs2mesh_output=gs2mesh_output,
+                extra_views_path=Path(tmp) / "extra_views.json",
+            )
+
+            self.assertIsNotNone(path)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(len(data["views"]), 1)
+            view = data["views"][0]
+            self.assertEqual(view["source_frame_index"], 1)
+            self.assertEqual(view["dense_frame_index"], 1)
+            self.assertAlmostEqual(view["camera"]["extrinsic"][0][3], 1.0)
+
+    def test_refresh_sam2_masks_runs_only_for_replace_with_saved_clicks(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            mask_dir = str(Path(tmp) / "masks")
+            gs2mesh_workdir = Path(tmp) / "work"
+            gs2mesh_output = Path(tmp) / "gs2mesh"
+            sam2_clicks_path(out).parent.mkdir(parents=True)
+            sam2_clicks_path(out).write_text("{}", encoding="utf-8")
+            settings = replace(
+                Gs2meshSettings.from_preset(),
+                mask_depth_mode="replace",
+            )
+            refreshed_dir = Path(tmp) / "refreshed_masks"
+            report = MagicMock()
+
+            with patch(
+                "scripts.stage_gs2mesh_reconstruct._recompute_sam2_masks_from_clicks",
+                return_value=(refreshed_dir, None),
+            ) as mock_recompute:
+                result = _maybe_refresh_sam2_primary_masks(
+                    frames_dir=str(Path(tmp) / "frames"),
+                    output_dir=str(out),
+                    mask_dir=mask_dir,
+                    gs2mesh_workdir=gs2mesh_workdir,
+                    gs2mesh_output=gs2mesh_output,
+                    settings=settings,
+                    report=report,
+                )
+
+            self.assertEqual(result, (str(refreshed_dir), None))
+            mock_recompute.assert_called_once()
+            report.assert_called()
+
+    def test_refresh_sam2_masks_skips_non_replace_and_missing_clicks(self) -> None:
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            mask_dir = str(Path(tmp) / "masks")
+            gs2mesh_workdir = Path(tmp) / "work"
+            gs2mesh_output = Path(tmp) / "gs2mesh"
+            report = MagicMock()
+
+            with patch(
+                "scripts.stage_gs2mesh_reconstruct._recompute_sam2_masks_from_clicks"
+            ) as mock_recompute:
+                crop_result = _maybe_refresh_sam2_primary_masks(
+                    frames_dir=str(Path(tmp) / "frames"),
+                    output_dir=str(out),
+                    mask_dir=mask_dir,
+                    gs2mesh_workdir=gs2mesh_workdir,
+                    gs2mesh_output=gs2mesh_output,
+                    settings=Gs2meshSettings.from_preset(),
+                    report=report,
+                )
+                replace_result = _maybe_refresh_sam2_primary_masks(
+                    frames_dir=str(Path(tmp) / "frames"),
+                    output_dir=str(out),
+                    mask_dir=mask_dir,
+                    gs2mesh_workdir=gs2mesh_workdir,
+                    gs2mesh_output=gs2mesh_output,
+                    settings=replace(
+                        Gs2meshSettings.from_preset(),
+                        mask_depth_mode="replace",
+                    ),
+                    report=report,
+                )
+
+            self.assertEqual(crop_result, (mask_dir, None))
+            self.assertEqual(replace_result, (mask_dir, None))
+            mock_recompute.assert_not_called()
+
     @patch("scripts.stage_gs2mesh_reconstruct.shutil.copy2")
     @patch("scripts.gpu_tsdf.gpu_tsdf_reconstruct", return_value="/tmp/gpu_mesh.ply")
     @patch("scripts.stage_gs2mesh_reconstruct._materialize_tsdf_masks")

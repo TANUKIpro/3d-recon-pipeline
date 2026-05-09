@@ -30,6 +30,7 @@ PHASE_DIRS: tuple[str, ...] = (
 # rename churn stays minimal — only the wrapping phase prefix is added).
 FRAMES_DIR = P1_FRAMES  # Stage 1 has a single artifact, so the phase dir
                         # itself is the frames container (no inner nesting).
+FRAME_MANIFEST_FILENAME = "frame_manifest.json"
 
 COLMAP_SPARSE_DIRNAME = "colmap_sparse"
 COLMAP_WORKSPACE_DIRNAME = "colmap_workspace"
@@ -40,6 +41,7 @@ INTRINSICS_FILENAME = "intrinsics.json"
 MASKS_DIRNAME = "masks"
 MASKS_OBJECT_RAW_DIRNAME = "masks_object_raw"
 MASKS_GROUND_DIRNAME = "masks_ground"
+SAM2_CLICKS_FILENAME = "sam2_clicks.json"
 GROUND_PLANE_FILENAME = "ground_plane.json"
 
 OBJECT_MESH_FILENAME = "object_mesh.ply"
@@ -56,6 +58,10 @@ CLEANUP_PROPOSAL_DIRNAME = "post_texture_contact_cleanup"
 
 def frames_dir(out: str | Path) -> Path:
     return Path(out) / P1_FRAMES
+
+
+def frame_manifest_path(out: str | Path) -> Path:
+    return frames_dir(out) / FRAME_MANIFEST_FILENAME
 
 
 def colmap_phase_dir(out: str | Path) -> Path:
@@ -112,6 +118,10 @@ def masks_object_raw_dir(out: str | Path) -> Path:
 
 def masks_ground_dir(out: str | Path) -> Path:
     return masks_phase_dir(out) / MASKS_GROUND_DIRNAME
+
+
+def sam2_clicks_path(out: str | Path) -> Path:
+    return masks_phase_dir(out) / SAM2_CLICKS_FILENAME
 
 
 def ground_plane_path(out: str | Path) -> Path:

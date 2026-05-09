@@ -1,5 +1,6 @@
 """Stage 1: Extract frames from video as JPEGs."""
 
+import json
 import os
 import subprocess
 import math
@@ -9,7 +10,10 @@ from typing import Callable
 import cv2
 
 from scripts.config_defaults import _EXTRACT_FPS_FALLBACK
-from scripts.output_layout import frames_dir as _frames_dir
+from scripts.output_layout import (
+    frame_manifest_path,
+    frames_dir as _frames_dir,
+)
 
 ProgressCallback = Callable[[float, str | None], None]
 CancelCallback = Callable[[], None]
@@ -144,6 +148,7 @@ def extract_frames(
 
     frame_idx = 0
     saved_idx = 0
+    saved_frames: list[dict[str, int | str]] = []
     expected_reads = total_frames
     if frame_interval > 0 and max_frames > 0:
         expected_reads = min(total_frames, (max_frames - 1) * frame_interval + 1)
@@ -161,6 +166,13 @@ def extract_frames(
                 frame = cv2.rotate(frame, rotate_code)
             frame_path = frames_dir / f"{saved_idx:05d}.jpg"
             cv2.imwrite(str(frame_path), frame)
+            saved_frames.append(
+                {
+                    "saved_index": saved_idx,
+                    "saved_name": frame_path.name,
+                    "source_frame_index": frame_idx,
+                }
+            )
             saved_idx += 1
             if saved_idx >= max_frames:
                 reads = frame_idx + 1
@@ -182,6 +194,21 @@ def extract_frames(
         frame_idx += 1
 
     cap.release()
+    manifest = {
+        "version": 1,
+        "video_path": str(video_path),
+        "total_frames": total_frames,
+        "fps": fps,
+        "rotation": rotation,
+        "frame_interval": frame_interval,
+        "max_frames": max_frames,
+        "saved_frame_count": saved_idx,
+        "saved_frames": saved_frames,
+    }
+    frame_manifest_path(output_dir).write_text(
+        json.dumps(manifest, indent=2),
+        encoding="utf-8",
+    )
     _emit_progress(progress_cb, 100.0, f"Extracted {saved_idx} frames")
     print(f"Extracted {saved_idx} frames to {frames_dir}")
     return frames_dir

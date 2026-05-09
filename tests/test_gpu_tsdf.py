@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import numpy as np
@@ -9,6 +12,7 @@ import numpy as np
 from scripts.gpu_tsdf import (
     _apply_silhouette_depth_fill,
     _carve_visual_hull_occupancy,
+    _load_visual_hull_extra_views,
     _resolve_silhouette_fill_config,
 )
 
@@ -132,6 +136,46 @@ class TestSilhouetteDepthFill(unittest.TestCase):
 
 
 class TestVisualHullOccupancy(unittest.TestCase):
+    def test_loads_extra_visual_hull_views_from_manifest(self) -> None:
+        from PIL import Image
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mask_path = root / "mask.png"
+            Image.fromarray(np.array([[0, 255], [0, 0]], dtype=np.uint8)).save(
+                mask_path
+            )
+            manifest_path = root / "extra_views.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "views": [
+                            {
+                                "mask_path": str(mask_path),
+                                "camera": {
+                                    "extrinsic": np.eye(4).tolist(),
+                                    "fx": 1.0,
+                                    "fy": 1.0,
+                                    "cx": 0.5,
+                                    "cy": 0.5,
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            views = _load_visual_hull_extra_views(
+                manifest_path,
+                mask_dilate_px=0,
+            )
+
+            self.assertEqual(len(views), 1)
+            camera, mask = views[0]
+            self.assertEqual(camera["fx"], 1.0)
+            self.assertTrue(mask[0, 1])
+
     def test_carves_occupancy_from_mask_projection(self) -> None:
         camera = {
             "extrinsic": np.eye(4).tolist(),

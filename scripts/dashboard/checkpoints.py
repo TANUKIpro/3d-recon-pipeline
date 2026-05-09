@@ -25,6 +25,7 @@ from scripts.output_layout import (
     P4_MESH,
     P5_TEXTURE,
     P6_CLEANUP,
+    SAM2_CLICKS_FILENAME,
     TEXTURE_PNG_FILENAME,
     TEXTURED_MESH_MTL_FILENAME,
     TEXTURED_MESH_OBJ_FILENAME,
@@ -120,6 +121,7 @@ _CHECKPOINTS: dict[int, Any] = {
             label="Propagate masks",
             patterns=_patterns(r"propagating masks"),
             cleanup_dirs=(f"{P3_MASKS}/{MASKS_DIRNAME}",),
+            cleanup_files=(f"{P3_MASKS}/{SAM2_CLICKS_FILENAME}",),
         ),
         _checkpoint(
             "s3.verify",
@@ -260,7 +262,10 @@ _STAGE_FALLBACK_RESET: dict[int, dict[str, tuple[str, ...]]] = {
             f"{P3_MASKS}/{MASKS_GROUND_DIRNAME}",
             f"{P3_MASKS}/{MASKS_OBJECT_RAW_DIRNAME}",
         ),
-        "files": (f"{P3_MASKS}/{GROUND_PLANE_FILENAME}",),
+        "files": (
+            f"{P3_MASKS}/{GROUND_PLANE_FILENAME}",
+            f"{P3_MASKS}/{SAM2_CLICKS_FILENAME}",
+        ),
     },
     4: {
         "dirs": (f"{P4_MESH}/{GS2MESH_WORKSPACE_DIRNAME}",),

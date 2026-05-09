@@ -4,6 +4,7 @@ Provides a minimal Gradio UI for click-based object selection,
 then propagates masks to all frames.
 """
 
+import json
 import os
 import threading
 from pathlib import Path
@@ -26,6 +27,7 @@ from scripts.output_layout import (
     masks_ground_dir,
     masks_object_raw_dir,
     masks_phase_dir,
+    sam2_clicks_path,
 )
 from scripts.vram_utils import log_vram
 
@@ -163,6 +165,145 @@ def _clear_saved_masks(session: SAM2Session) -> None:
                 pass
 
 
+def _click_points_payload(
+    points: list[tuple[float, float]],
+    labels: list[int],
+) -> dict[str, list]:
+    """Return a JSON-safe click payload with sanitized coordinates."""
+    if len(points) != len(labels):
+        raise ValueError("SAM2 click point/label counts do not match")
+    return {
+        "click_points": [
+            list(_sanitize_normalized_point(float(nx), float(ny)))
+            for nx, ny in points
+        ],
+        "click_labels": [int(label) for label in labels],
+    }
+
+
+def _save_click_points(session: SAM2Session) -> Path:
+    """Persist accepted SAM2 click points for later mask regeneration."""
+    payload = {
+        "version": 1,
+        "model_type": str(session.model_type),
+        "frames_dir": str(session.frames_dir),
+        "frame_count": len(session.frame_files),
+        "image_width": int(session.img_w),
+        "image_height": int(session.img_h),
+        "object": _click_points_payload(session.click_points, session.click_labels),
+        "ground": _click_points_payload(
+            session.ground_click_points,
+            session.ground_click_labels,
+        ),
+    }
+    path = sam2_clicks_path(session.output_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def _load_click_manifest(output_dir: str | Path) -> dict | None:
+    """Load saved SAM2 click points, if the current output has them."""
+    path = sam2_clicks_path(output_dir)
+    if not path.is_file():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"SAM2 click manifest must be a JSON object: {path}")
+    return data
+
+
+def _restore_click_group(
+    payload: dict,
+) -> tuple[list[tuple[float, float]], list[int]]:
+    raw_points = payload.get("click_points", [])
+    raw_labels = payload.get("click_labels", [])
+    if not isinstance(raw_points, list) or not isinstance(raw_labels, list):
+        raise ValueError("SAM2 click manifest contains invalid click arrays")
+    if len(raw_points) != len(raw_labels):
+        raise ValueError("SAM2 click manifest point/label counts do not match")
+
+    points: list[tuple[float, float]] = []
+    labels: list[int] = []
+    for raw_point, raw_label in zip(raw_points, raw_labels):
+        if not isinstance(raw_point, list | tuple) or len(raw_point) != 2:
+            raise ValueError("SAM2 click manifest contains an invalid point")
+        points.append(
+            _sanitize_normalized_point(float(raw_point[0]), float(raw_point[1]))
+        )
+        labels.append(int(raw_label))
+    return points, labels
+
+
+def _restore_click_points(session: SAM2Session, manifest: dict) -> None:
+    """Restore saved object and ground clicks onto a fresh SAM2 session."""
+    object_payload = manifest.get("object", {})
+    ground_payload = manifest.get("ground", {})
+    if not isinstance(object_payload, dict) or not isinstance(ground_payload, dict):
+        raise ValueError("SAM2 click manifest contains invalid object/ground data")
+
+    session.click_points, session.click_labels = _restore_click_group(
+        object_payload
+    )
+    session.ground_click_points, session.ground_click_labels = (
+        _restore_click_group(ground_payload)
+    )
+
+
+def recompute_masks_from_saved_clicks(
+    frames_dir: str,
+    output_dir: str,
+    *,
+    click_output_dir: str | Path | None = None,
+    model_type: str | None = None,
+    mask_dir: str | Path | None = None,
+    object_mask_raw_dir: str | Path | None = None,
+    ground_mask_dir: str | Path | None = None,
+    save_clicks: bool = True,
+    progress_callback=None,
+) -> tuple[Path, Path | None] | None:
+    """Rebuild all SAM2 masks from saved click points.
+
+    Returns ``None`` when the output predates click persistence.
+    """
+    manifest = _load_click_manifest(
+        output_dir if click_output_dir is None else click_output_dir
+    )
+    if manifest is None:
+        return None
+
+    resolved_model = (
+        model_type
+        or str(manifest.get("model_type") or "").strip()
+        or os.environ.get("SAM2_MODEL", "large")
+    )
+    session = SAM2Session(frames_dir, output_dir, resolved_model)
+    if mask_dir is not None:
+        session.mask_dir = Path(mask_dir)
+        session.mask_dir.mkdir(parents=True, exist_ok=True)
+    if object_mask_raw_dir is not None:
+        session.object_mask_raw_dir = Path(object_mask_raw_dir)
+        session.object_mask_raw_dir.mkdir(parents=True, exist_ok=True)
+    if ground_mask_dir is not None:
+        session.ground_mask_dir = Path(ground_mask_dir)
+        session.ground_mask_dir.mkdir(parents=True, exist_ok=True)
+    _restore_click_points(session, manifest)
+    if not session.click_points:
+        raise ValueError("Saved SAM2 click manifest has no object clicks")
+
+    try:
+        session._load_model()
+        session._init_inference_state()
+        return _propagate_masks(
+            session,
+            progress_callback=progress_callback,
+            save_clicks=save_clicks,
+        )
+    finally:
+        session.release_model()
+
+
 def _mask_to_bool(mask: np.ndarray) -> np.ndarray:
     """Normalize a propagated mask into a boolean array."""
     return np.asarray(mask).astype(bool)
@@ -251,12 +392,15 @@ def _propagate_masks(
     current_object_mask: np.ndarray | None = None,
     current_ground_mask: np.ndarray | None = None,
     progress_callback=None,
+    save_clicks: bool = True,
 ) -> tuple[Path, Path | None]:
     """Propagate SAM2 masks, save raw masks, and compose canonical finals."""
     if not session.click_points:
         raise ValueError("Add at least one click point first")
 
     has_ground = bool(session.ground_click_points)
+    if save_clicks:
+        _save_click_points(session)
     _clear_saved_masks(session)
 
     if current_object_mask is None:

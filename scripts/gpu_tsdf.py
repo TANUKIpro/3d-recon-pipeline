@@ -82,6 +82,7 @@ def gpu_tsdf_reconstruct(
     mesh_smooth_min_iou: float = 0.985,
     mask_depth_mode: str | None = None,
     silhouette_voxel_resolution: int | None = None,
+    silhouette_extra_views_path: str | None = None,
     progress_cb: Callable[[float, str], None] | None = None,
 ) -> str:
     """Run GPU TSDF fusion and return path to cleaned mesh PLY.
@@ -126,6 +127,7 @@ def gpu_tsdf_reconstruct(
             mesh_smooth_min_iou=mesh_smooth_min_iou,
             mask_depth_mode=mask_depth_mode,
             silhouette_voxel_resolution=silhouette_voxel_resolution,
+            silhouette_extra_views_path=silhouette_extra_views_path,
             progress_cb=progress_cb,
         )
     finally:
@@ -406,6 +408,53 @@ def _load_visual_hull_masks(
     return masks
 
 
+def _load_visual_hull_extra_views(
+    extra_views_path: str | Path | None,
+    *,
+    mask_dilate_px: int,
+) -> list[tuple[dict, np.ndarray]]:
+    if extra_views_path is None:
+        return []
+    path = Path(extra_views_path)
+    if not path.is_file():
+        return []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"GPU TSDF: skipped SAM2 extra visual-hull views ({exc})")
+        return []
+
+    records = data.get("views") if isinstance(data, dict) else data
+    if not isinstance(records, list):
+        return []
+
+    views: list[tuple[dict, np.ndarray]] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        camera = record.get("camera")
+        mask_raw = record.get("mask_path")
+        if not isinstance(camera, dict) or not isinstance(mask_raw, str):
+            continue
+        mask_path = Path(mask_raw)
+        if not mask_path.is_absolute():
+            mask_path = path.parent / mask_path
+        mask_img = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
+        if mask_img is None:
+            continue
+        mask = mask_img > 0
+        if not mask.any():
+            continue
+        if not all(key in camera for key in ("fx", "fy", "cx", "cy", "extrinsic")):
+            continue
+        views.append((camera, _dilate_mask(mask, mask_dilate_px)))
+
+    if views:
+        print(f"GPU TSDF: loaded {len(views)} SAM2 extra visual-hull views")
+    return views
+
+
 def _estimate_visual_hull_bounds(
     left_cameras: list[dict],
     masks_by_idx: dict[int, np.ndarray],
@@ -516,6 +565,7 @@ def _build_visual_hull(
     depth_max: float,
     tsdf_scale: float,
     config: _SilhouetteFillConfig,
+    extra_views_path: str | Path | None = None,
 ) -> _VisualHull | None:
     from skimage import measure
 
@@ -527,9 +577,17 @@ def _build_visual_hull(
     if not masks_by_idx:
         print("GPU TSDF: silhouette fill skipped (no left_mask.npy files)")
         return None
+    hull_cameras = list(left_cameras)
+    extra_views = _load_visual_hull_extra_views(
+        extra_views_path,
+        mask_dilate_px=config.mask_dilate_px,
+    )
+    for camera, mask in extra_views:
+        masks_by_idx[len(hull_cameras)] = mask
+        hull_cameras.append(camera)
 
     bounds = _estimate_visual_hull_bounds(
-        left_cameras,
+        hull_cameras,
         masks_by_idx,
         depth_min=depth_min,
         depth_max=depth_max,
@@ -541,7 +599,7 @@ def _build_visual_hull(
 
     bbox_min, bbox_max = bounds
     occupancy, voxel_size = _carve_visual_hull_occupancy(
-        left_cameras,
+        hull_cameras,
         masks_by_idx,
         bbox_min=bbox_min,
         bbox_max=bbox_max,
@@ -715,6 +773,7 @@ def _gpu_tsdf_impl(
     mesh_smooth_min_iou: float,
     mask_depth_mode: str | None,
     silhouette_voxel_resolution: int | None,
+    silhouette_extra_views_path: str | None,
     progress_cb: Callable[[float, str], None] | None,
 ) -> str:
     """Core implementation — called from `gpu_tsdf_reconstruct` inside its
@@ -767,6 +826,7 @@ def _gpu_tsdf_impl(
                 depth_max=depth_max,
                 tsdf_scale=tsdf_scale,
                 config=silhouette_config,
+                extra_views_path=silhouette_extra_views_path,
             )
             if hull is not None:
                 scene = _build_visual_hull_scene(hull)
