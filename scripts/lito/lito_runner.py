@@ -140,3 +140,99 @@ def run_lito_inference(
             print(f"[lito] WARNING: meta JSON unparseable ({exc}); ignoring")
 
     return LitoInferenceResult(out_ply=str(out_ply_path), meta=meta)
+
+
+@dataclass(frozen=True)
+class LitoRenderResult:
+    """Result of a Gaussians multi-view rendering pass."""
+
+    out_dir: str
+    summary: dict
+
+
+def run_lito_render(
+    in_ply_path: str,
+    views_json_path: str,
+    out_dir: str,
+    *,
+    venv_python: str | None = None,
+    bridge_script: str | None = None,
+    device: str = "cuda:0",
+    sh_degree: int | None = None,
+    timeout_s: int | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> LitoRenderResult:
+    """Render Gaussians from many canonical-frame views via the isolated venv.
+
+    The bridge script (`scripts/lito/bridge/lito_render.py`) writes per-view
+    rgb / depth / alpha files plus a summary JSON. clip2mesh's TSDF driver
+    consumes those artefacts in the main image (torch 2.5 / numpy 1.x).
+    """
+    from scripts.config_defaults import (
+        LITO_BRIDGE_SCRIPT,
+        LITO_SUBPROCESS_TIMEOUT_S,
+        LITO_VENV_PYTHON,
+    )
+
+    venv_python = venv_python or LITO_VENV_PYTHON
+    if bridge_script is None:
+        bridge_script = str(Path(LITO_BRIDGE_SCRIPT).with_name("lito_render.py"))
+    timeout_s = timeout_s if timeout_s is not None else LITO_SUBPROCESS_TIMEOUT_S
+
+    if not Path(venv_python).exists():
+        raise LitoSubprocessError(
+            f"lito venv python not found at {venv_python}. "
+            f"Run Phase 0c to provision /opt/ml-lito/.venv."
+        )
+    if not Path(bridge_script).exists():
+        raise LitoSubprocessError(
+            f"lito render bridge script not found at {bridge_script}. "
+            f"Ensure Dockerfile copies scripts/lito/bridge/lito_render.py."
+        )
+
+    out_dir_p = Path(out_dir)
+    out_dir_p.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        venv_python,
+        bridge_script,
+        "--in-ply",
+        in_ply_path,
+        "--views-json",
+        views_json_path,
+        "--out-dir",
+        str(out_dir),
+        "--device",
+        device,
+    ]
+    if sh_degree is not None:
+        cmd.extend(["--sh-degree", str(int(sh_degree))])
+
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    print(f"[lito] render subprocess: {' '.join(cmd)}")
+    try:
+        proc = subprocess.run(cmd, env=env, timeout=timeout_s, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise LitoSubprocessError(
+            f"lito render subprocess timed out after {timeout_s}s"
+        ) from exc
+    if proc.returncode != 0:
+        raise LitoSubprocessError(
+            f"lito render subprocess failed with exit code {proc.returncode}"
+        )
+
+    summary_path = out_dir_p / "summary.json"
+    summary: dict = {}
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text())
+        except json.JSONDecodeError as exc:
+            print(f"[lito] WARNING: render summary unparseable ({exc})")
+    if summary.get("status") and summary["status"] != "ok":
+        raise LitoSubprocessError(
+            f"lito render produced summary error: {summary.get('error', '<none>')}"
+        )
+    return LitoRenderResult(out_dir=str(out_dir), summary=summary)

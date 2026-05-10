@@ -154,10 +154,23 @@ def run_lito(
         f"timings={result.meta.get('timings_s')}"
     )
 
-    # ---- Step 4-5: mesh extraction + alignment (Phase 3-4) ---------------
+    # ---- Step 4: Gaussians → canonical mesh (Phase 3) -------------------
+    from scripts.lito.gaussian_to_mesh import gaussians_to_canonical_mesh
+
+    canonical = gaussians_to_canonical_mesh(
+        canonical_ply_path=str(canonical_ply),
+        workspace=str(workspace),
+    )
+    print(
+        f"[lito] canonical mesh: {canonical.triangle_count} tris, "
+        f"{canonical.vertex_count} verts "
+        f"({canonical.n_views_used} views used, {canonical.n_views_skipped} skipped) "
+        f"→ {canonical.mesh_path}"
+    )
+
+    # ---- Step 5: Sim(3) alignment to COLMAP world (Phase 4) -------------
     raise NotImplementedError(
-        "lito backend Phase 2 reaches Gaussians PLY at "
-        f"{canonical_ply}. Phase 3 (Gaussians→mesh via TSDF) and Phase 4 "
-        "(Sim(3) alignment to COLMAP world) are not yet implemented. "
-        "See .claude/plans/lito_integration.md §6.4 steps 4-5."
+        "lito backend Phase 3 produces canonical-frame mesh at "
+        f"{canonical.mesh_path}. Phase 4 (Sim(3) alignment to COLMAP world) "
+        "is not yet implemented. See .claude/plans/lito_integration.md §6.4 step 5."
     )
