@@ -22,6 +22,7 @@ from scripts.stage_gs2mesh_reconstruct import (
     _build_pythonpath,
     _build_stereo_runtime_stacks,
     _classify_gs2mesh_failure,
+    _evenly_sample_ints,
     _interpolate_pose,
     _is_gpu_tsdf_oom_error,
     _materialize_tsdf_masks,
@@ -590,6 +591,14 @@ class TestTsdfMaskMaterialization(unittest.TestCase):
 
 
 class TestRunGs2meshMaskIntegration(unittest.TestCase):
+    def test_evenly_sample_ints_caps_dense_extra_views(self) -> None:
+        self.assertEqual(
+            _evenly_sample_ints(list(range(10)), 4),
+            [0, 3, 6, 9],
+        )
+        self.assertEqual(_evenly_sample_ints([4, 5, 6], 10), [4, 5, 6])
+        self.assertEqual(_evenly_sample_ints([4, 5, 6], 0), [])
+
     def test_interpolate_pose_uses_slerp_and_linear_translation(self) -> None:
         pose0 = np.eye(4, dtype=np.float64)
         pose2 = np.eye(4, dtype=np.float64)

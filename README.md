@@ -144,6 +144,7 @@ docker compose run --rm --service-ports \
 | `GS2MESH_SILHOUETTE_MIN_VIEWS` | `3` | visual hull 内判定に必要な最小 view 数 |
 | `GS2MESH_SILHOUETTE_CONSENSUS` | `0.85` | 有効 view のうち mask 内である必要がある割合 |
 | `GS2MESH_SILHOUETTE_MASK_DILATE_PX` | `2` | carving 用 mask の dilation 半径 |
+| `GS2MESH_SAM2_PRIMARY_MAX_EXTRA_VIEWS` | `64` | SAM2 primary 時に追加する skipped-frame visual hull view の上限。`0` で追加無効 |
 | **Stage 5** | | |
 | `TEXTURE_SIZE` | `0` (自動) | テクスチャ解像度。`0` は `round(sqrt(W*H))` を自動適用 |
 | `TEXTURE_MAX_SIZE` | `2048` | 自動モード時の上限。`0` で無制限。`TEXTURE_SIZE>0` (manual) はバイパス |

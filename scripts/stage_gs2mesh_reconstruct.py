@@ -21,6 +21,7 @@ from scripts.config_defaults import (
     GS2MESH_MASK_DEPTH_MODES,
     GS2MESH_RUNTIME_PROFILE,
     GS2MESH_RUNTIME_PROFILES,
+    GS2MESH_SAM2_PRIMARY_MAX_EXTRA_VIEWS,
 )
 from scripts.gs2mesh_config import Gs2meshSettings
 from scripts.output_layout import (
@@ -410,16 +411,50 @@ def _dense_source_indices(manifest: dict) -> list[int]:
     return list(range(sources[0], sources[-1] + 1))
 
 
+def _env_int_min(name: str, default: int, *, min_value: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(min_value, int(raw))
+    except ValueError:
+        return default
+
+
+def _evenly_sample_ints(values: list[int], max_count: int) -> list[int]:
+    if max_count <= 0:
+        return []
+    if len(values) <= max_count:
+        return list(values)
+    if max_count == 1:
+        return [values[len(values) // 2]]
+    last = len(values) - 1
+    selected: list[int] = []
+    seen: set[int] = set()
+    for i in range(max_count):
+        src_pos = round(i * last / (max_count - 1))
+        value = values[int(src_pos)]
+        if value not in seen:
+            selected.append(value)
+            seen.add(value)
+    return selected
+
+
 def _extract_dense_video_frames(
     *,
     manifest: dict,
     dense_frames_dir: Path,
+    source_indices: list[int] | None = None,
 ) -> list[dict]:
     import cv2
     from scripts.stage_extract_frames import _rotation_to_cv2_code
 
-    source_indices = _dense_source_indices(manifest)
-    if not source_indices:
+    selected_sources = (
+        _dense_source_indices(manifest)
+        if source_indices is None
+        else sorted({int(idx) for idx in source_indices})
+    )
+    if not selected_sources:
         return []
 
     video_path = Path(str(manifest.get("video_path") or ""))
@@ -434,8 +469,6 @@ def _extract_dense_video_frames(
         shutil.rmtree(dense_frames_dir)
     dense_frames_dir.mkdir(parents=True, exist_ok=True)
 
-    source_start = int(source_indices[0])
-    source_end = int(source_indices[-1])
     saved_by_source = _saved_index_by_source(manifest)
     rotate_code = _rotation_to_cv2_code(int(manifest.get("rotation") or 0))
 
@@ -444,16 +477,15 @@ def _extract_dense_video_frames(
         print(f"SAM2 primary: could not open source video: {video_path}")
         return []
     try:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, source_start)
-        current_source = source_start
-        dense_idx = 0
         records: list[dict] = []
-        while current_source <= source_end:
+        for current_source in selected_sources:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, current_source)
             ret, frame = cap.read()
             if not ret:
-                break
+                continue
             if rotate_code is not None:
                 frame = cv2.rotate(frame, rotate_code)
+            dense_idx = len(records)
             frame_name = f"{dense_idx:05d}.jpg"
             frame_path = dense_frames_dir / frame_name
             cv2.imwrite(str(frame_path), frame)
@@ -467,8 +499,6 @@ def _extract_dense_video_frames(
                     "saved_index": saved_idx,
                 }
             )
-            dense_idx += 1
-            current_source += 1
     finally:
         cap.release()
     return records
@@ -691,13 +721,44 @@ def _prepare_sam2_primary_dense_extra_views(
         return None
     pose_min = keyframes[0][0]
     pose_max = keyframes[-1][0]
-    if not any(pose_min < source_idx < pose_max for source_idx in skipped_sources):
+    eligible_skipped_sources = [
+        source_idx
+        for source_idx in skipped_sources
+        if pose_min < source_idx < pose_max
+    ]
+    if not eligible_skipped_sources:
         print("SAM2 primary: dense skipped-frame views disabled (outside pose range)")
         return None
 
     if _load_dense_intrinsics(output_dir) is None:
         print("SAM2 primary: dense skipped-frame views disabled (missing intrinsics)")
         return None
+
+    max_extra_views = _env_int_min(
+        "GS2MESH_SAM2_PRIMARY_MAX_EXTRA_VIEWS",
+        GS2MESH_SAM2_PRIMARY_MAX_EXTRA_VIEWS,
+        min_value=0,
+    )
+    selected_skipped_sources = _evenly_sample_ints(
+        eligible_skipped_sources,
+        max_extra_views,
+    )
+    if not selected_skipped_sources:
+        print("SAM2 primary: dense skipped-frame views disabled (max extra views is 0)")
+        return None
+    if len(selected_skipped_sources) < len(eligible_skipped_sources):
+        print(
+            "SAM2 primary: capped dense skipped-frame visual-hull views "
+            f"to {len(selected_skipped_sources)}/{len(eligible_skipped_sources)}"
+        )
+    else:
+        print(
+            "SAM2 primary: using "
+            f"{len(selected_skipped_sources)} dense skipped-frame visual-hull views"
+        )
+    selected_sources = sorted(
+        set(saved_by_source) | set(selected_skipped_sources)
+    )
 
     dense_frames_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_FRAMES_DIRNAME
     dense_mask_dir = gs2mesh_workdir / _SAM2_PRIMARY_DENSE_MASKS_DIRNAME
@@ -712,6 +773,7 @@ def _prepare_sam2_primary_dense_extra_views(
     dense_records = _extract_dense_video_frames(
         manifest=manifest,
         dense_frames_dir=dense_frames_dir,
+        source_indices=selected_sources,
     )
     if not dense_records:
         return None
