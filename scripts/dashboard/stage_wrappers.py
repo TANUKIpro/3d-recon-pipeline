@@ -134,15 +134,29 @@ def _stage_lito_reconstruct(
     colmap_sparse_dir: str,
     mask_dir: str | None,
     output_dir: str,
+    accept_research_license: bool = False,
     progress_cb=None,
     cancel_cb=None,
     register_process=None,
     unregister_process=None,
 ) -> str:
-    """Run Stage 4 via the LiTo backend (research-only)."""
+    """Run Stage 4 via the LiTo backend (research-only).
+
+    The lito backend gates itself on CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1
+    (see scripts/stage_lito_reconstruct._ensure_research_license_acknowledged).
+    The dashboard surfaces the acknowledgement as a checkbox; CLI users set the
+    env var directly. When ``accept_research_license`` is true, we set the env
+    var for this process so run_lito proceeds without the interactive prompt.
+    """
     del progress_cb, cancel_cb, register_process, unregister_process
+    import os
+
+    from scripts.config_defaults import LITO_ACCEPT_RESEARCH_LICENSE_ENV
     from scripts.stage_lito_reconstruct import run_lito
     from scripts.vram_utils import cleanup_pytorch_vram
+
+    if accept_research_license:
+        os.environ[LITO_ACCEPT_RESEARCH_LICENSE_ENV] = "1"
 
     try:
         return run_lito(

@@ -360,6 +360,10 @@ def build_pipeline_config(
             RECONSTRUCTOR_CHOICES,
             RECONSTRUCTOR,
         ),
+        lito_accept_research_license=parse_bool(
+            raw.get("lito_accept_research_license"),
+            env_bool("CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE", False, env_map),
+        ),
         gs2mesh_preset=str(gs2mesh_cfg["gs2mesh_preset"]),
         gs2mesh_preset_base=str(gs2mesh_cfg["gs2mesh_preset_base"]),
         gs2mesh_gs_iterations=int(gs2mesh_cfg["gs2mesh_gs_iterations"]),

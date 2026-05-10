@@ -399,6 +399,16 @@
           </details>
           </div><!-- /#cfg-gs2mesh-section -->
           <div id="cfg-lito-section" class="hidden">
+            <div class="form-group">
+              <label class="checkbox-label" for="cfg-lito-accept-license">
+                <input type="checkbox" id="cfg-lito-accept-license">
+                I acknowledge the lito research-only license
+              </label>
+              <div class="config-note">
+                Required to run lito. Model weights are licensed under the Apple ML Research Model License — research use only, no commercial use.
+                See <a href="https://github.com/apple/ml-lito/blob/main/LICENSE_MODEL" target="_blank" rel="noopener">LICENSE_MODEL</a>.
+              </div>
+            </div>
             <div class="config-note">
               lito is a single-image backend. Frame selection picks the highest-scoring frame automatically; no Stage 4 knobs are exposed yet.
             </div>

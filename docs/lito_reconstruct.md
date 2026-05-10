@@ -141,7 +141,15 @@ docker compose build --build-arg LITO_PREFETCH_WEIGHTS=1
 #   docker compose build  # weights are downloaded on first lito invocation
 ```
 
-### 2. Cereal を lito 経路で完走
+### 2a. ダッシュボード経由で実行する場合
+
+ブラウザの Stage 4 設定で **Reconstructor=lito** を選択し、続けて表示
+される **"I acknowledge the lito research-only license"** チェックを
+入れてから Start を押す。チェック自体が同意フラグの代わりとなり、
+ダッシュボードの runner が `CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1`
+を自動でセットする。
+
+### 2b. Cereal を lito 経路で完走 (CLI)
 ```bash
 docker compose run --rm clip2mesh \
   env CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1 \

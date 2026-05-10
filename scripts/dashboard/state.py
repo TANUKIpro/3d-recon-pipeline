@@ -160,6 +160,7 @@ class PipelineConfig:
     colmap_dsp_sift: bool = COLMAP_DSP_SIFT
     colmap_first_octave: int = COLMAP_FIRST_OCTAVE
     reconstructor: str = RECONSTRUCTOR
+    lito_accept_research_license: bool = False
     gs2mesh_preset: str = GS2MESH_PRESET
     gs2mesh_preset_base: str = GS2MESH_PRESET
     gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS

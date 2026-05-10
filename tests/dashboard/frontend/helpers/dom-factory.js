@@ -226,6 +226,7 @@ export function buildConfigPanelDOM() {
         <option value="gs2mesh" selected>gs2mesh</option>
         <option value="lito">lito</option>
       </select>
+      <input type="checkbox" id="cfg-lito-accept-license">
       <div id="cfg-gs2mesh-section"></div>
       <div id="cfg-lito-section" class="hidden"></div>
       <span id="stage-pill-reconstructor">gs2mesh</span>

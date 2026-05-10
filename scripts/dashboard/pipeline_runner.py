@@ -422,6 +422,15 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
 
             # ── Stage 4: Reconstruction (gs2mesh | lito) ─────────
             if backend == "lito":
+                if not bool(getattr(cfg, "lito_accept_research_license", False)):
+                    raise RuntimeError(
+                        "lito backend requires research-only license "
+                        "acknowledgement. Tick the 'I acknowledge the "
+                        "research-only license' checkbox in Stage 4 "
+                        "config (or set "
+                        "CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1 for "
+                        "CLI runs)."
+                    )
                 await _run_stage(
                     session,
                     PipelineStage.GS2MESH_RECONSTRUCT,
@@ -430,6 +439,7 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
                     session.colmap_sparse_path or str(colmap_sparse_dir(output_dir)),
                     session.mask_dir,
                     output_dir,
+                    True,  # accept_research_license
                     label="lito Reconstruction (research-only)",
                 )
             else:

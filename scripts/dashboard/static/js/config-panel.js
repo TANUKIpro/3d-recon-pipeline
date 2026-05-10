@@ -56,6 +56,7 @@ export class ConfigPanel {
 
       // Stage 4: 3D Reconstruction (gs2mesh | lito)
       reconstructor: document.getElementById('cfg-reconstructor'),
+      lito_accept_research_license: document.getElementById('cfg-lito-accept-license'),
       gs2mesh_preset: document.getElementById('cfg-gs2mesh-preset'),
       gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
       gs2mesh_runtime_profile: document.getElementById('cfg-gs2mesh-runtime-profile'),
@@ -192,6 +193,7 @@ export class ConfigPanel {
 
       // Stage 4: 3D Reconstruction (gs2mesh | lito)
       reconstructor: this._inputs.reconstructor?.value || 'gs2mesh',
+      lito_accept_research_license: Boolean(this._inputs.lito_accept_research_license?.checked),
       gs2mesh_preset: this._inputs.gs2mesh_preset?.value || GS2MESH_PRESET_DEFAULT,
       gs2mesh_preset_base: this._gs2meshPresetBase,
       gs2mesh_gs_iterations: this._parsePositiveInt(
@@ -290,6 +292,10 @@ export class ConfigPanel {
           alert('Please select a video file for stage 1 restart.');
           return;
         }
+        if (cfg.reconstructor === 'lito' && !cfg.lito_accept_research_license) {
+          alert('lito requires acknowledging the research-only license. Please tick the checkbox in the Stage 4 config.');
+          return;
+        }
         this.onStart(cfg);
       }
     });
@@ -314,6 +320,11 @@ export class ConfigPanel {
         this._applyReconstructorVisibility();
       });
       this._applyReconstructorVisibility();
+    }
+    if (this._inputs.lito_accept_research_license) {
+      this._inputs.lito_accept_research_license.addEventListener('change', () => {
+        this._applyReconstructorVisibility();
+      });
     }
 
     if (this._inputs.gs2mesh_preset) {
@@ -640,6 +651,9 @@ export class ConfigPanel {
     if (cfg.reconstructor != null && this._inputs.reconstructor) {
       this._setSelectValue(this._inputs.reconstructor, String(cfg.reconstructor));
       this._applyReconstructorVisibility();
+    }
+    if (cfg.lito_accept_research_license != null && this._inputs.lito_accept_research_license) {
+      this._inputs.lito_accept_research_license.checked = Boolean(cfg.lito_accept_research_license);
     }
     this._suppressGs2meshPresetSync = true;
     if (cfg.gs2mesh_preset != null && this._inputs.gs2mesh_preset) {
