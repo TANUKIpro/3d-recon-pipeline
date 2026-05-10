@@ -127,6 +127,45 @@ CDN: `https://ml-site.cdn-apple.com/models/lito/`
 | `LITO_SUBPROCESS_TIMEOUT_S` | `600` | bridge subprocess のタイムアウト |
 | `LITO_ACCEPT_RESEARCH_LICENSE_ENV` | `CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE` | 同意フラグの env 名 |
 
+## 評価ランブック (Phase 5: Cereal で chamfer 比較)
+
+`.claude/plans/lito_integration.md` §14 のベースラインに対し、
+`scripts/eval_chamfer.py` で chamfer distance を計測する。受入基準は
+**chamfer / gt_diagonal ≤ 0.30** (= 既存 gs2mesh ベースラインの 70%
+以内)。
+
+### 1. Docker ビルド + 重み (ユーザー実行)
+```bash
+docker compose build --build-arg LITO_PREFETCH_WEIGHTS=1
+# あるいはビルド時間を短縮したい場合:
+#   docker compose build  # weights are downloaded on first lito invocation
+```
+
+### 2. Cereal を lito 経路で完走
+```bash
+docker compose run --rm clip2mesh \
+  env CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1 \
+  python -m scripts.pipeline \
+    --video /data/input/Cereal.MOV \
+    --reconstructor lito
+```
+SAM2 のインタラクティブ選択は CLI からは行えないため、ダッシュボード
+(`docker compose up dashboard` → ブラウザで `Reconstructor=lito` を
+選択) で実施するか、`p3_masks/` に既存マスクをコピーしてから
+`--skip-to 4` を併用する。
+
+### 3. Chamfer distance を測定
+```bash
+python -m scripts.eval_chamfer \
+  --gt   /home/roboworks/repos/3d-recon-pipeline/data/output/objects/@main/Cereal/p6_cleanup/Cereal/textured_mesh_cleaned.obj \
+  --pred /home/roboworks/repos/3d-recon-pipeline-work/data/output/objects/@<branch>/Cereal/p4_mesh/object_mesh.ply \
+  --align icp \
+  --threshold 0.30 \
+  --out      data/output/objects/@<branch>/Cereal/p4_mesh/chamfer_vs_gs2mesh.json
+```
+exit code 0 = 受入基準クリア、1 = 未達。テクスチャベイク後の
+`p6_cleanup/<obj>/textured_mesh_cleaned.obj` も同様に比較できる。
+
 ## 関連リンク
 
 * 公式: <https://github.com/apple/ml-lito>
