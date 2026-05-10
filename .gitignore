@@ -1,8 +1,10 @@
 .env
 data/input/*
 data/output/*
+data/models/*
 !data/input/.gitkeep
 !data/output/.gitkeep
+!data/models/.gitkeep
 __pycache__/
 *.pyc
 *-mcp
