@@ -168,9 +168,22 @@ def run_lito(
         f"→ {canonical.mesh_path}"
     )
 
-    # ---- Step 5: Sim(3) alignment to COLMAP world (Phase 4) -------------
-    raise NotImplementedError(
-        "lito backend Phase 3 produces canonical-frame mesh at "
-        f"{canonical.mesh_path}. Phase 4 (Sim(3) alignment to COLMAP world) "
-        "is not yet implemented. See .claude/plans/lito_integration.md §6.4 step 5."
+    # ---- Step 5: Sim(3) alignment to COLMAP world (Phase 4) --------------
+    from scripts.lito.colmap_align import align_canonical_mesh_to_world
+
+    alignment = align_canonical_mesh_to_world(
+        canonical_ply_path=str(canonical_ply),
+        canonical_mesh_path=canonical.mesh_path,
+        sparse_dir=sparse_dir,
+        frame_path=selection.frame_path,
+        mask_path=selection.mask_path,
+        out_world_mesh_path=str(mesh_ply),
+        workspace=str(workspace),
     )
+    print(
+        f"[lito] aligned mesh → {alignment.world_mesh_path} "
+        f"scale={alignment.transform.scale:.4f} "
+        f"residual_rms={alignment.transform.residual_rms:.4f} "
+        f"(src={alignment.n_source_points}, tgt={alignment.n_target_points})"
+    )
+    return alignment.world_mesh_path
