@@ -196,9 +196,11 @@ LITO_TSDF_CONFIDENCE_MODE = "opacity_angle"  # | "uniform"
 # Sim(3) alignment to COLMAP world frame.
 LITO_ALIGNMENT_REPROJ_OK_PX = 5.0
 LITO_ALIGNMENT_REPROJ_FAIL_PX = 15.0
-# Subprocess bridge.
+# Subprocess bridge. Bridge scripts live alongside the rest of the
+# clip2mesh source tree so a single COPY layer ships them; the venv
+# Python interprets them via subprocess (no clip2mesh imports cross over).
 LITO_VENV_PYTHON = "/opt/ml-lito/.venv/bin/python"
-LITO_BRIDGE_SCRIPT = "/opt/ml-lito-bridge/lito_infer.py"
+LITO_BRIDGE_SCRIPT = "/app/scripts/lito/bridge/lito_infer.py"
 LITO_SUBPROCESS_TIMEOUT_S = 600
 # Research-license acknowledgement (set 1 to skip interactive prompt).
 LITO_ACCEPT_RESEARCH_LICENSE_ENV = "CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE"

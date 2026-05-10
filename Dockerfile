@@ -156,6 +156,45 @@ RUN mkdir -p /opt/gs2mesh/third_party/DLNR/pretrained \
     && wget -q -O /opt/gs2mesh/third_party/DLNR/pretrained/DLNR_Middlebury.pth \
         https://github.com/David-Zhao-1997/High-frequency-Stereo-Matching-Network/releases/download/v1.0.0/DLNR_Middlebury.pth
 
+# --- Layer 5c: ml-lito (Apple ml-lito, isolated venv) ---
+# LiTo (Apple, ICLR 2026) is an alternative Stage 4 backend selected with
+# --reconstructor=lito. It needs torch 2.9 + CUDA 12.8 + numpy 2.x, all
+# incompatible with the main image, so we keep it in /opt/ml-lito/.venv
+# and call it through the bridge scripts at scripts/lito/bridge/.
+#
+# Build args:
+#   LITO_PREFETCH_WEIGHTS=1   pre-download model checkpoints (≈8 GB)
+#                              into /data/models/lito at build time.
+ARG LITO_PREFETCH_WEIGHTS=0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/apple/ml-lito.git /opt/ml-lito \
+    && python3.11 -m venv /opt/ml-lito/.venv \
+    && /opt/ml-lito/.venv/bin/pip install --upgrade pip wheel setuptools \
+    && /opt/ml-lito/.venv/bin/pip install \
+       torch==2.9.1 torchvision==0.24.1 \
+       --index-url https://download.pytorch.org/whl/cu128 \
+    && /opt/ml-lito/.venv/bin/pip install --no-build-isolation \
+       "git+https://github.com/NVlabs/nvdiffrast.git" \
+       "git+https://github.com/facebookresearch/pytorch3d.git@stable" \
+       gsplat \
+    && /opt/ml-lito/.venv/bin/pip install --no-build-isolation \
+       -e "/opt/ml-lito[geom,vis]" \
+    && /opt/ml-lito/.venv/bin/pip install spz rembg
+
+# Optional: pre-fetch the LiTo model weights into /data/models/lito.
+# When LITO_PREFETCH_WEIGHTS=0 (default) the bridge downloads on first run.
+RUN if [ "$LITO_PREFETCH_WEIGHTS" = "1" ]; then \
+        mkdir -p /data/models/lito && \
+        wget -q -O /data/models/lito/lito_dit_rgba.ckpt \
+             https://ml-site.cdn-apple.com/models/lito/lito_dit_rgba.ckpt && \
+        wget -q -O /data/models/lito/lito_new.ckpt \
+             https://ml-site.cdn-apple.com/models/lito/lito_new.ckpt; \
+    fi
+
 # --- Layer 6: Application code ---
 COPY scripts/ /app/scripts/
 

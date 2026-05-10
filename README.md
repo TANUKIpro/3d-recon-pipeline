@@ -41,6 +41,28 @@ graph TD
 
 環境変数 `VRAM_TIER_OVERRIDE` でティアを手動指定することも可能。
 
+## Stage 4 バックエンド切替
+
+Stage 4 (3D 再構成) は次の 2 つから選択できる:
+
+| backend | 説明 | ライセンス |
+|---------|------|-----------|
+| **gs2mesh** (既定) | 多視点 3DGS + DLNR ステレオ + TSDF Fusion | Apache 2.0 |
+| **lito** | Apple ml-lito の単一画像 image-to-3D + 多視点 TSDF + Sim(3) アラインメント | **研究目的限定** ([LICENSE_MODEL](https://github.com/apple/ml-lito/blob/main/LICENSE_MODEL)) |
+
+```bash
+# 既定 (gs2mesh)
+python -m scripts.pipeline /data/input/video.mp4
+
+# lito (研究目的での利用に限る)
+CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1 \
+  python -m scripts.pipeline /data/input/video.mp4 --reconstructor lito
+```
+
+> ⚠️ lito バックエンドは Apple の研究用ライセンス重みを使用するため、商用利用は不可。詳細とパラメータは `docs/lito_reconstruct.md` 参照。
+
+重み (~8 GB) は `/data/models/lito/` に置く。ビルド時に取り込む場合: `docker compose build --build-arg LITO_PREFETCH_WEIGHTS=1`。
+
 ## セットアップ
 - ここ(https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html#with-apt-ubuntu-debian)を参考に、nvidia-container-toolkitを導入する
 - Dockerランタイムを登録して再起動する
