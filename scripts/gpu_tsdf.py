@@ -826,10 +826,7 @@ def _gpu_tsdf_impl(
     baseline = float(left_cameras[0]["baseline"])
 
     voxel_length = tsdf_voxel / 512.0
-    trunc_multiplier = tsdf_sdf_trunc / voxel_length
     depth_max = baseline * tsdf_max_depth_baselines / tsdf_scale
-
-    device = o3c.Device(tsdf_device)
     print(f"GPU TSDF: using device={tsdf_device}")
 
     # Select frames (dilate = take every N-th frame)
@@ -903,28 +900,18 @@ def _gpu_tsdf_impl(
         print("GPU TSDF: silhouette fill skipped with inverted TSDF masks")
 
     # ------------------------------------------------------------------
-    # Create VoxelBlockGrid — tsdf_device selects CUDA or CPU backend.
-    # Build this after the CPU-side visual hull so CUDA memory is not held
-    # while carving/raycasting setup runs.
+    # Per-frame depth/RGB preparation → TsdfView list
+    # gs2mesh-specific I/O (mask, occlusion, visual-hull fill, baseline
+    # thresholding) lives here in the adapter; the actual VBG fusion is
+    # delegated to scripts.lito.tsdf_core.fuse_tsdf (Phase 1.5 refactor).
     # ------------------------------------------------------------------
-    vbg = o3d.t.geometry.VoxelBlockGrid(
-        attr_names=("tsdf", "weight", "color"),
-        attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
-        attr_channels=((1,), (1,), (3,)),
-        voxel_size=float(voxel_length),
-        block_resolution=16,
-        block_count=block_count,
-        device=device,
-    )
+    from scripts.lito.tsdf_core import TsdfFusionParams, TsdfView, fuse_tsdf
 
-    # ------------------------------------------------------------------
-    # Per-frame integration
-    # ------------------------------------------------------------------
-    integrated_count = 0
-    skipped_count = 0
     fusion_start = 0.16 if silhouette_runtime is not None else 0.0
     fusion_span = 0.64 if silhouette_runtime is not None else 0.80
 
+    views: list[TsdfView] = []
+    skipped_count = 0
     for step_i, cam_idx in enumerate(valid_indices):
         cam = left_cameras[cam_idx]
         cam_dir = root / f"{cam_idx:03d}"
@@ -932,8 +919,8 @@ def _gpu_tsdf_impl(
         if progress_cb:
             pct = step_i / max(n_valid, 1)
             progress_cb(
-                fusion_start + pct * fusion_span,
-                f"GPU TSDF fusion ({step_i + 1}/{n_valid})",
+                fusion_start + pct * fusion_span * 0.5,
+                f"Loading view {step_i + 1}/{n_valid}",
             )
 
         # --- Load RGB & depth ---
@@ -967,9 +954,7 @@ def _gpu_tsdf_impl(
                 depth = depth * occlusion_mask
 
         # --- Depth thresholding (baselines) ---
-        depth = np.where(
-            depth < min_depth_thresh, 0.0, depth,
-        )
+        depth = np.where(depth < min_depth_thresh, 0.0, depth)
 
         if silhouette_runtime is not None and fill_object_mask is not None:
             hull_depth = _render_visual_hull_depth(
@@ -992,22 +977,18 @@ def _gpu_tsdf_impl(
                 silhouette_runtime.filled_pixels += filled_count
                 silhouette_runtime.filled_frames += 1
 
-        # Fast check: skip frame if no valid depth pixels remain after
-        # masking + thresholding.  This avoids Open3D's "No block is
-        # touched" error which aborts the entire integration.
-        valid_depth_count = int(np.count_nonzero(
-            (depth > min_depth_thresh) & (depth < depth_max)
-        ))
+        # Fast check: skip frame if no valid depth pixels remain.
+        valid_depth_count = int(
+            np.count_nonzero((depth > min_depth_thresh) & (depth < depth_max))
+        )
         if valid_depth_count == 0:
             skipped_count += 1
             continue
 
-        # --- Camera matrices ---
         extrinsic = np.array(cam["extrinsic"], dtype=np.float64)
         extrinsic[:3, 3] /= tsdf_scale
-        extrinsic_inv = np.linalg.inv(extrinsic)  # world-to-camera
-
-        intrinsic_np = np.array(
+        T_cw = np.linalg.inv(extrinsic)
+        K = np.array(
             [
                 [cam["fx"], 0.0, cam["cx"]],
                 [0.0, cam["fy"], cam["cy"]],
@@ -1015,55 +996,7 @@ def _gpu_tsdf_impl(
             ],
             dtype=np.float64,
         )
-
-        # Camera matrices stay on CPU (Open3D requirement)
-        intrinsic_t = o3c.Tensor(intrinsic_np)
-        extrinsic_t = o3c.Tensor(extrinsic_inv)
-
-        # Depth & colour → CUDA tensors wrapped as Images.
-        # VoxelBlockGrid requires matching dtype pairs: (float32, float32)
-        # or (uint16, uint8). Since depth is float32, colour must be too.
-        depth_t = o3d.t.geometry.Image(
-            o3c.Tensor(depth, device=device),
-        )
-        color_f = image.astype(np.float32) / 255.0
-        color_t = o3d.t.geometry.Image(
-            o3c.Tensor(color_f, device=device),
-        )
-
-        # Integrate — guard against rare cases where
-        # compute_unique_block_coordinates finds no blocks despite the
-        # NumPy pre-check above (floating-point edge cases).
-        try:
-            frustum_coords = vbg.compute_unique_block_coordinates(
-                depth_t,
-                intrinsic_t,
-                extrinsic_t,
-                depth_scale=tsdf_scale,
-                depth_max=depth_max,
-            )
-            vbg.integrate(
-                frustum_coords,
-                depth_t,
-                color_t,
-                intrinsic_t,
-                intrinsic_t,
-                extrinsic_t,
-                depth_scale=tsdf_scale,
-                depth_max=depth_max,
-                trunc_voxel_multiplier=trunc_multiplier,
-            )
-            integrated_count += 1
-        except RuntimeError as e:
-            if "No block is touched" in str(e):
-                skipped_count += 1
-                print(
-                    f"GPU TSDF: skipping frame {cam_idx} "
-                    f"(no voxel blocks touched, {valid_depth_count} "
-                    f"valid depth pixels)"
-                )
-                continue
-            raise
+        views.append(TsdfView(rgb=image, depth=depth, K=K, T_cw=T_cw))
 
     if silhouette_runtime is not None:
         print(
@@ -1075,10 +1008,10 @@ def _gpu_tsdf_impl(
         )
     if skipped_count > 0:
         print(
-            f"GPU TSDF: integrated {integrated_count}/{n_valid} frames "
+            f"GPU TSDF: prepared {len(views)}/{n_valid} views "
             f"(skipped {skipped_count} with no valid depth)"
         )
-    if integrated_count == 0:
+    if not views:
         raise RuntimeError(
             f"GPU TSDF: all {n_valid} frames skipped — no valid depth "
             f"in range [{min_depth_thresh:.3f}, {depth_max:.2f}]. "
@@ -1086,136 +1019,50 @@ def _gpu_tsdf_impl(
         )
 
     # ------------------------------------------------------------------
-    # Extract mesh
+    # Delegate VBG creation, integration, extraction, and cleaning to the
+    # pure core. Smoothing and decimation remain below until Step 3.
     # ------------------------------------------------------------------
-    if progress_cb:
-        progress_cb(0.85, "Extracting triangle mesh from TSDF volume")
+    fusion_progress_cb = None
+    if progress_cb is not None:
+        fusion_lo = fusion_start + fusion_span * 0.5
+        fusion_hi = 0.92
 
-    mesh = vbg.extract_triangle_mesh()
-    mesh = mesh.to_legacy()
+        def fusion_progress_cb(local_pct: float, detail: str) -> None:
+            mapped = fusion_lo + max(0.0, min(1.0, local_pct)) * (fusion_hi - fusion_lo)
+            progress_cb(mapped, detail)
 
-    # vbg is no longer needed after to_legacy() — drop the big GPU tensor
-    # now so the Open3D pool can release ~8GB before cleaning+saving.
-    del vbg
-
-    # Undo the coordinate scaling applied during integration
-    mesh.scale(tsdf_scale, (0, 0, 0))
-    mesh.orient_triangles()  # Edge-based winding consistency (guards against rare MC artifacts)
-    mesh.compute_vertex_normals()
+    fusion_params = TsdfFusionParams(
+        voxel_size=float(voxel_length),
+        sdf_trunc=float(tsdf_sdf_trunc),
+        depth_min=float(min_depth_thresh),
+        depth_max=float(depth_max),
+        device=tsdf_device,
+        block_count=int(block_count),
+        cleaning_threshold=int(tsdf_cleaning_threshold),
+        tsdf_scale=float(tsdf_scale),
+        smooth_iters=int(mesh_smooth_iters),
+        smooth_lambda=float(mesh_smooth_lambda),
+        smooth_mu=float(mesh_smooth_mu),
+        smooth_min_iou=float(mesh_smooth_min_iou),
+        target_faces=int(mesh_target_faces),
+        decimate_min_iou=float(mesh_min_iou),
+        iou_views=int(mesh_iou_views),
+    )
+    mesh = fuse_tsdf(views, fusion_params, progress_cb=fusion_progress_cb)
+    if mesh is None:
+        raise RuntimeError(
+            f"GPU TSDF: integration produced no output from {len(views)} views"
+        )
 
     n_verts = len(mesh.vertices)
     n_tris = len(mesh.triangles)
-    print(f"GPU TSDF: raw mesh — {n_verts} vertices, {n_tris} triangles")
-
-    # ------------------------------------------------------------------
-    # Clean mesh — remove small connected components
-    # ------------------------------------------------------------------
-    if progress_cb:
-        progress_cb(0.92, "Cleaning mesh (removing small clusters)")
-
-    thres = tsdf_cleaning_threshold / tsdf_scale
-    triangle_clusters, cluster_n_triangles, _ = (
-        mesh.cluster_connected_triangles()
-    )
-    triangle_clusters = np.asarray(triangle_clusters)
-    cluster_n_triangles = np.asarray(cluster_n_triangles)
-    triangles_to_remove = cluster_n_triangles[triangle_clusters] < thres
-    mesh.remove_triangles_by_mask(triangles_to_remove)
-    mesh.remove_unreferenced_vertices()
-
-    n_tris_clean = len(mesh.triangles)
     print(
-        f"GPU TSDF: cleaned mesh — {len(mesh.vertices)} vertices, "
-        f"{n_tris_clean} triangles (removed {n_tris - n_tris_clean})"
+        f"GPU TSDF: final mesh — {n_verts} vertices, {n_tris} triangles"
     )
 
     # ------------------------------------------------------------------
-    # Taubin smoothing (curvature-flow) with silhouette safety net.
-    # The raw TSDF surface carries ~0.5 mm vertex displacement noise; on
-    # cylindrical objects this maps to 1.5–3 px shifts in projected pixel
-    # space, which the texture bake amplifies into per-region speckle in
-    # `region_gc` mode (each locked region samples the same package detail
-    # from a slightly different image location). Taubin's two-pass λ/μ
-    # filter removes high-frequency vertex noise without the volumetric
-    # shrinkage of pure Laplacian smoothing — the IoU gate catches any
-    # lingering shrinkage anyway. Runs before decimation so the simplifier
-    # collapses edges on a coherent surface, not on TSDF stipple.
-    # ------------------------------------------------------------------
-    if mesh_smooth_iters > 0 and n_tris_clean > 0:
-        if progress_cb:
-            progress_cb(0.93, "Smoothing mesh (Taubin)")
-        smoothed, did_smooth = _taubin_smooth_tsdf_mesh(
-            mesh,
-            iters=mesh_smooth_iters,
-            lambda_val=mesh_smooth_lambda,
-            mu_val=mesh_smooth_mu,
-        )
-        if did_smooth:
-            iou_ok, mean_iou = _silhouette_iou_check(
-                original=mesh,
-                simplified=smoothed,
-                left_cameras=left_cameras,
-                tsdf_scale=tsdf_scale,
-                min_iou=mesh_smooth_min_iou,
-                n_views=mesh_iou_views,
-            )
-            if iou_ok:
-                print(
-                    f"GPU TSDF: Taubin smoothing iters={mesh_smooth_iters} "
-                    f"λ={mesh_smooth_lambda:.2f} μ={mesh_smooth_mu:.2f} "
-                    f"silhouette IoU={mean_iou:.4f} ≥ {mesh_smooth_min_iou:.4f} — keeping smoothed mesh"
-                )
-                mesh = smoothed
-            else:
-                print(
-                    f"GPU TSDF: Taubin smoothing IoU={mean_iou:.4f} "
-                    f"< {mesh_smooth_min_iou:.4f} — rolling back to noisy mesh"
-                )
-        else:
-            print("GPU TSDF: Taubin smoothing skipped (empty mesh)")
-
-    # ------------------------------------------------------------------
-    # Decimate (post-MC, color-preserving QEM) with silhouette safety net
-    # ------------------------------------------------------------------
-    if mesh_target_faces > 0 and n_tris_clean > mesh_target_faces:
-        if progress_cb:
-            progress_cb(0.95, "Decimating mesh (quadric edge collapse)")
-        simplified, did_simplify = _decimate_tsdf_mesh(
-            mesh, mesh_target_faces
-        )
-        if did_simplify:
-            n_tris_simp = len(simplified.triangles)
-            n_verts_simp = len(simplified.vertices)
-            print(
-                f"GPU TSDF: decimated mesh — {n_verts_simp} vertices, "
-                f"{n_tris_simp} triangles "
-                f"(target={mesh_target_faces}, "
-                f"reduction={1.0 - n_tris_simp / max(1, n_tris_clean):.1%})"
-            )
-            iou_ok, mean_iou = _silhouette_iou_check(
-                original=mesh,
-                simplified=simplified,
-                left_cameras=left_cameras,
-                tsdf_scale=tsdf_scale,
-                min_iou=mesh_min_iou,
-                n_views=mesh_iou_views,
-            )
-            if iou_ok:
-                print(
-                    f"GPU TSDF: silhouette IoU={mean_iou:.4f} "
-                    f">= {mesh_min_iou:.4f} — keeping decimated mesh"
-                )
-                mesh = simplified
-            else:
-                print(
-                    f"GPU TSDF: silhouette IoU={mean_iou:.4f} "
-                    f"< {mesh_min_iou:.4f} — rolling back to pre-decimation mesh"
-                )
-        else:
-            print("GPU TSDF: decimation produced no reduction, skipping")
-
-    # ------------------------------------------------------------------
-    # Save
+    # Save (smoothing + decimation + IoU rollback now happen inside
+    # tsdf_core.fuse_tsdf, see Phase 1.5 Step 3)
     # ------------------------------------------------------------------
     cleaned_path = root / "gpu_tsdf_cleaned_mesh.ply"
     o3d.io.write_triangle_mesh(str(cleaned_path), mesh)
@@ -1227,171 +1074,3 @@ def _gpu_tsdf_impl(
     return str(cleaned_path)
 
 
-def _taubin_smooth_tsdf_mesh(
-    mesh,
-    *,
-    iters: int,
-    lambda_val: float,
-    mu_val: float,
-):
-    """Apply Taubin λ/μ smoothing to ``mesh``.
-
-    Returns ``(smoothed_mesh, did_smooth)``. The smoothing alternates a
-    Laplacian step with weight ``lambda_val`` (shrinks) and a step with
-    weight ``mu_val`` (typically negative, expands), removing high-frequency
-    vertex noise while keeping the global shape stable. Per-vertex colours
-    are preserved by Open3D so the cap-marker detection in cap_region.py
-    keeps working.
-    """
-    import open3d as o3d  # noqa: F401
-
-    if iters <= 0 or len(mesh.triangles) == 0 or len(mesh.vertices) == 0:
-        return mesh, False
-
-    smoothed = mesh.filter_smooth_taubin(
-        number_of_iterations=int(iters),
-        lambda_filter=float(lambda_val),
-        mu=float(mu_val),
-    )
-    smoothed.remove_degenerate_triangles()
-    smoothed.remove_duplicated_triangles()
-    smoothed.remove_unreferenced_vertices()
-
-    if len(smoothed.triangles) == 0 or len(smoothed.vertices) == 0:
-        return mesh, False
-
-    smoothed.compute_vertex_normals()
-    return smoothed, True
-
-
-def _decimate_tsdf_mesh(mesh, target_faces: int):
-    """Quadric-decimate a TSDF mesh to ``target_faces`` triangles.
-
-    Returns ``(mesh, did_simplify)``. The original mesh is returned
-    unchanged when simplification would not reduce face count, when the
-    output is empty, or when ``target_faces <= 0``.
-
-    Open3D's ``simplify_quadric_decimation`` preserves per-vertex colours
-    (RGB attribute carried through from VoxelBlockGrid), so the cap-face
-    detection in ``scripts/texture/cap_region.py`` keeps working
-    downstream. The cleanup trio mirrors
-    ``scripts/texture/bake.py::_simplify_mesh_for_uv``.
-    """
-    import open3d as o3d  # noqa: F401  (kept for clarity / matching impl style)
-
-    n_tri = len(mesh.triangles)
-    if target_faces <= 0 or n_tri <= target_faces:
-        return mesh, False
-
-    simplified = mesh.simplify_quadric_decimation(
-        target_number_of_triangles=int(target_faces)
-    )
-    simplified.remove_degenerate_triangles()
-    simplified.remove_duplicated_triangles()
-    simplified.remove_unreferenced_vertices()
-
-    if (
-        len(simplified.triangles) == 0
-        or len(simplified.vertices) == 0
-        or len(simplified.triangles) >= n_tri
-    ):
-        return mesh, False
-
-    simplified.compute_vertex_normals()
-    return simplified, True
-
-
-def _silhouette_iou_check(
-    *,
-    original,
-    simplified,
-    left_cameras: list[dict],
-    tsdf_scale: float,
-    min_iou: float,
-    n_views: int,
-) -> tuple[bool, float]:
-    """Validate that ``simplified`` preserves the silhouette of ``original``.
-
-    Rasterises both meshes from ``n_views`` evenly-sampled poses (drawn
-    from ``left_cameras``, the same data used during TSDF integration)
-    and computes the mean per-view foreground IoU. Returns
-    ``(passed, mean_iou)`` where ``passed`` is true iff
-    ``mean_iou >= min_iou``. Any rasterisation failure is treated as a
-    pass with IoU 1.0 (we should not roll back on a tooling glitch).
-    """
-
-    if n_views <= 0 or not left_cameras:
-        return True, 1.0
-
-    import open3d as o3d
-    import open3d.core as o3c
-
-    n_cam = len(left_cameras)
-    step = max(1, n_cam // max(1, n_views))
-    sample_idx = list(range(0, n_cam, step))[:n_views]
-    if not sample_idx:
-        return True, 1.0
-
-    # Modest fixed render resolution — silhouette comparison doesn't need
-    # full image_h × image_w; this keeps the gate at ~100 ms on CUDA.
-    render_w = 512
-    render_h = 512
-
-    def _build_scene(mesh) -> o3d.t.geometry.RaycastingScene:
-        scene = o3d.t.geometry.RaycastingScene()
-        mesh_t = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
-        scene.add_triangles(mesh_t)
-        return scene
-
-    try:
-        scene_o = _build_scene(original)
-        scene_s = _build_scene(simplified)
-    except Exception as exc:  # pragma: no cover — Open3D edge cases
-        print(f"GPU TSDF: silhouette IoU check skipped (scene build failed: {exc})")
-        return True, 1.0
-
-    ious: list[float] = []
-    for cam_idx in sample_idx:
-        cam = left_cameras[cam_idx]
-        try:
-            extrinsic = np.array(cam["extrinsic"], dtype=np.float64)
-            extrinsic[:3, 3] /= tsdf_scale
-            w2c = np.linalg.inv(extrinsic)
-
-            # Rebuild a compact intrinsic for the down-rendered resolution.
-            full_w = float(cam.get("width", render_w))
-            full_h = float(cam.get("height", render_h))
-            sx = render_w / max(1.0, full_w)
-            sy = render_h / max(1.0, full_h)
-            intr = np.array(
-                [
-                    [cam["fx"] * sx, 0.0, cam["cx"] * sx],
-                    [0.0, cam["fy"] * sy, cam["cy"] * sy],
-                    [0.0, 0.0, 1.0],
-                ],
-                dtype=np.float64,
-            )
-
-            rays = scene_o.create_rays_pinhole(
-                intrinsic_matrix=o3c.Tensor(intr),
-                extrinsic_matrix=o3c.Tensor(w2c),
-                width_px=render_w,
-                height_px=render_h,
-            )
-            sil_o = np.isfinite(scene_o.cast_rays(rays)["t_hit"].numpy())
-            sil_s = np.isfinite(scene_s.cast_rays(rays)["t_hit"].numpy())
-        except Exception as exc:  # pragma: no cover
-            print(f"GPU TSDF: silhouette IoU view {cam_idx} skipped: {exc}")
-            continue
-
-        union = np.logical_or(sil_o, sil_s).sum()
-        if union == 0:
-            continue
-        inter = np.logical_and(sil_o, sil_s).sum()
-        ious.append(float(inter) / float(union))
-
-    if not ious:
-        return True, 1.0
-
-    mean_iou = float(sum(ious) / len(ious))
-    return (mean_iou >= min_iou), mean_iou
