@@ -26,10 +26,33 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 import traceback
 from pathlib import Path
+
+# ml-lito's training-time imports (e.g. apple_fsspec, blender_rendering)
+# are not on PyPI / not vendored. Prepend our sibling _lito_shims/ to
+# sys.path so those imports resolve to inference-only stubs.
+# See scripts/lito/bridge/_lito_shims/.
+_SHIMS_DIR = Path(__file__).resolve().parent / "_lito_shims"
+if str(_SHIMS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHIMS_DIR))
+
+# Match lito_infer.py: prefer the real Microsoft TRELLIS clone when
+# present, fall back to the inference-only stub otherwise.
+_REAL_TRELLIS = Path("/opt/ml-lito/third_party/TRELLIS")
+if not _REAL_TRELLIS.exists():
+    os.environ.setdefault("TRELLIS_REPO_DIR", str(_SHIMS_DIR / "trellis_repo"))
+
+# gsplat JIT-compiles a CUDA extension via ninja; ninja ships in the
+# ml-lito venv. Make sure the venv bin is on PATH even when the runner
+# (loaded into the dashboard's uvicorn process) hasn't been refreshed
+# with a venv-PATH env shim.
+_VENV_BIN = "/opt/ml-lito/.venv/bin"
+if Path(_VENV_BIN).exists() and _VENV_BIN not in os.environ.get("PATH", "").split(os.pathsep):
+    os.environ["PATH"] = _VENV_BIN + os.pathsep + os.environ.get("PATH", "")
 
 
 def main() -> int:
@@ -81,7 +104,7 @@ def main() -> int:
         scaling = gs.scaling if gs.scaling is not None else gs.get_scaling()
         quaternion = gs.quaternion if gs.quaternion is not None else gs.get_rotation()
         opacity = gs.opacity if gs.opacity is not None else gs.get_opacity()
-        rgb_sh = gs.get_rgb_sh()
+        rgb_sh = gs.get_rgb_sh
         sh_degree = gs.sh_degree
 
         with open(args.views_json) as fh:
@@ -97,7 +120,9 @@ def main() -> int:
             h, w = int(v["image_size"][0]), int(v["image_size"][1])
 
             with torch.no_grad():
-                rgb, _, depth, alpha = gs_utils.render_3dgs_gsplat(
+                # plibs.gs_utils.render_3dgs_gsplat returns a dict with
+                # premultiplied_rgb / premultiplied_depth / alpha tensors.
+                render_out = gs_utils.render_3dgs_gsplat(
                     H_c2w=H_c2w,
                     intrinsic=K,
                     width_px=w,
@@ -111,6 +136,9 @@ def main() -> int:
                     render_depth=True,
                     depth_mode="expectation",
                 )
+            rgb = render_out["premultiplied_rgb"]
+            depth = render_out["premultiplied_depth"]
+            alpha = render_out["alpha"]
 
             # gsplat returns (h, w, 3) for rgb (premultiplied), (h, w) for depth,
             # (h, w, 1) for alpha. Strip extra trailing dims and move to CPU.

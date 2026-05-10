@@ -183,7 +183,36 @@ RUN git clone --depth 1 https://github.com/apple/ml-lito.git /opt/ml-lito \
        gsplat \
     && /opt/ml-lito/.venv/bin/pip install --no-build-isolation \
        -e "/opt/ml-lito[geom,vis]" \
-    && /opt/ml-lito/.venv/bin/pip install spz rembg
+    && /opt/ml-lito/.venv/bin/pip install hatchling editables \
+    && /opt/ml-lito/.venv/bin/pip install --no-build-isolation \
+       -e /opt/ml-lito/libraries/plibs \
+    && /opt/ml-lito/.venv/bin/pip install spz rembg \
+    && sed -i 's/^from spz import/from .spz import/' \
+       /opt/ml-lito/.venv/lib/python3.11/site-packages/spz/__init__.py \
+    && /opt/ml-lito/.venv/bin/pip install clean-fid open3d ninja \
+       onnxruntime transformers utils3d \
+    && /opt/ml-lito/.venv/bin/pip install spconv-cu120
+
+# ml-lito's LightTokenizationTrainer.__init__ unconditionally constructs
+# Microsoft TRELLIS's sparse-structure pipeline when the LiTo checkpoint
+# declares a voxel_decoder_config (which `lito_dit_rgba.ckpt` does), so
+# inference cannot run without TRELLIS even though the project never
+# trains it. We vendor TRELLIS at the path ml-lito's
+# `add_trellis_to_sys_path` defaults to, and pull the FlexiCubes
+# submodule it depends on.
+#
+# The TRELLIS modules need xformers + spconv at import time. xformers
+# only ships wheels for newer torch — installing it bumps torch to 2.11
+# and torchvision to a matching release; we re-pin torchvision so it
+# stays in sync.
+RUN git clone --depth 1 https://github.com/microsoft/TRELLIS.git \
+        /opt/ml-lito/third_party/TRELLIS \
+    && cd /opt/ml-lito/third_party/TRELLIS \
+    && git submodule update --init --recursive \
+    && /opt/ml-lito/.venv/bin/pip install xformers \
+       --index-url https://download.pytorch.org/whl/cu128 \
+    && /opt/ml-lito/.venv/bin/pip install torchvision \
+       --index-url https://download.pytorch.org/whl/cu128 --upgrade
 
 # Optional: pre-fetch the LiTo model weights into /data/models/lito.
 # When LITO_PREFETCH_WEIGHTS=0 (default) the bridge downloads on first run.

@@ -34,6 +34,30 @@ import time
 import traceback
 from pathlib import Path
 
+# ml-lito's training-time imports (e.g. apple_fsspec, blender_rendering)
+# are not on PyPI / not vendored. Prepend our sibling _lito_shims/ to
+# sys.path so those imports resolve to inference-only stubs.
+# See scripts/lito/bridge/_lito_shims/.
+_SHIMS_DIR = Path(__file__).resolve().parent / "_lito_shims"
+if str(_SHIMS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SHIMS_DIR))
+
+# TRELLIS sparse-structure pipeline: ml-lito loads it unconditionally when
+# the LiTo checkpoint declares a `voxel_decoder_config`. The real
+# Microsoft TRELLIS repo lives at /opt/ml-lito/third_party/TRELLIS in the
+# image; if it's missing for any reason, fall back to the inference-only
+# stub at _lito_shims/trellis_repo so module imports still resolve.
+_REAL_TRELLIS = Path("/opt/ml-lito/third_party/TRELLIS")
+if not _REAL_TRELLIS.exists():
+    os.environ.setdefault("TRELLIS_REPO_DIR", str(_SHIMS_DIR / "trellis_repo"))
+
+# Some downstream JIT compiles (gsplat etc.) need ninja from the venv.
+# Add the venv bin to PATH if the runner didn't already do it (helpful
+# when a long-running uvicorn parent has stale env handling).
+_VENV_BIN = "/opt/ml-lito/.venv/bin"
+if Path(_VENV_BIN).exists() and _VENV_BIN not in os.environ.get("PATH", "").split(os.pathsep):
+    os.environ["PATH"] = _VENV_BIN + os.pathsep + os.environ.get("PATH", "")
+
 LITO_CHECKPOINT_BASE_URL = "https://ml-site.cdn-apple.com/models/lito"
 
 

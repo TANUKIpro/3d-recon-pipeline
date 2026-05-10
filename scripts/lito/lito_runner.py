@@ -105,6 +105,14 @@ def run_lito_inference(
     ]
 
     env = os.environ.copy()
+    env.setdefault("ATTN_BACKEND", "xformers")
+    env.setdefault("SPARSE_ATTN_BACKEND", "xformers")
+    env.setdefault("TORCH_COMPILE_DISABLE", "1")
+    env.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
+    venv_bin = str(Path(venv_python).parent)
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+    shims_dir = str(Path(bridge_script).resolve().parent / "_lito_shims")
+    env["PYTHONPATH"] = shims_dir + os.pathsep + env.get("PYTHONPATH", "")
     if extra_env:
         env.update(extra_env)
 
@@ -209,6 +217,14 @@ def run_lito_render(
         cmd.extend(["--sh-degree", str(int(sh_degree))])
 
     env = os.environ.copy()
+    env.setdefault("ATTN_BACKEND", "xformers")
+    env.setdefault("SPARSE_ATTN_BACKEND", "xformers")
+    env.setdefault("TORCH_COMPILE_DISABLE", "1")
+    env.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
+    venv_bin = str(Path(venv_python).parent)
+    env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+    shims_dir = str(Path(bridge_script).resolve().parent / "_lito_shims")
+    env["PYTHONPATH"] = shims_dir + os.pathsep + env.get("PYTHONPATH", "")
     if extra_env:
         env.update(extra_env)
 
