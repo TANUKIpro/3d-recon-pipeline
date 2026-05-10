@@ -166,6 +166,43 @@ GS2MESH_SILHOUETTE_CONSENSUS = 0.85
 GS2MESH_SILHOUETTE_MASK_DILATE_PX = 2
 GS2MESH_SAM2_PRIMARY_MAX_EXTRA_VIEWS = 64
 
+# --- Stage 4: Reconstructor backend selection -------------
+# Select which 3D reconstruction backend powers Stage 4. "gs2mesh" is the
+# default multi-view 3DGS+TSDF pipeline. "lito" routes Stage 4 through the
+# Apple ml-lito (LiTo, ICLR 2026) single-image-to-3D model. The lito backend
+# is research-purposes-only (model weights licensed under Apple ML Research
+# License) and runs in an isolated venv at /opt/ml-lito/.venv.
+RECONSTRUCTOR = "gs2mesh"
+RECONSTRUCTOR_CHOICES: set[str] = {"gs2mesh", "lito"}
+
+# --- Stage 4 (lito backend): image-to-3D via Apple ml-lito ------------
+LITO_MODEL_NAME = "lito_dit_rgba"
+LITO_CHECKPOINT_DIR = "/data/models/lito"
+LITO_INPUT_RESOLUTION = 518
+LITO_INFERENCE_STEPS = 20
+LITO_CFG_SCALE = 3.0
+# Compound frame-selection score weights (mask_coverage, triangulation, sharpness).
+# Sum should be 1.0; weights normalised at runtime.
+LITO_FRAME_SELECTION_W: tuple[float, float, float] = (0.5, 0.3, 0.2)
+LITO_MANUAL_FRAME_INDEX: int | None = None
+# Quality gates evaluated before invoking LiTo. Failure raises ValueError.
+LITO_GATE_MIN_BBOX_SHORT_PX = 256
+LITO_GATE_MIN_MASK_COVERAGE = 0.05
+LITO_GATE_MAX_MASK_COVERAGE = 0.80
+LITO_GATE_MAX_CONNECTED_COMPONENTS = 1
+# Gaussian → mesh via opacity-weighted multi-view TSDF fusion.
+LITO_TSDF_RENDER_VIEWS = "all_colmap"  # | int (number of synthesised views)
+LITO_TSDF_CONFIDENCE_MODE = "opacity_angle"  # | "uniform"
+# Sim(3) alignment to COLMAP world frame.
+LITO_ALIGNMENT_REPROJ_OK_PX = 5.0
+LITO_ALIGNMENT_REPROJ_FAIL_PX = 15.0
+# Subprocess bridge.
+LITO_VENV_PYTHON = "/opt/ml-lito/.venv/bin/python"
+LITO_BRIDGE_SCRIPT = "/opt/ml-lito-bridge/lito_infer.py"
+LITO_SUBPROCESS_TIMEOUT_S = 600
+# Research-license acknowledgement (set 1 to skip interactive prompt).
+LITO_ACCEPT_RESEARCH_LICENSE_ENV = "CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE"
+
 # --- Stage 5: TextureBake --------------------------------
 TEXTURE_SIZE = 0
 # Cap auto-resolved texture size (sqrt(W·H)). Manual TEXTURE_SIZE>0

@@ -17,7 +17,12 @@ import json
 import time
 from pathlib import Path
 
-from scripts.config_defaults import _VRAM_GATE_MIN_FREE_MB, _VRAM_GATE_STRICT
+from scripts.config_defaults import (
+    RECONSTRUCTOR,
+    RECONSTRUCTOR_CHOICES,
+    _VRAM_GATE_MIN_FREE_MB,
+    _VRAM_GATE_STRICT,
+)
 from scripts.output_layout import (
     camera_poses_path,
     cleanup_final_dir,
@@ -56,6 +61,15 @@ Examples:
         "--post-texture-cleanup-selection-json",
         default="",
         help="JSON file containing {\"decision\": \"apply\"|\"skip\"} for Stage 6 review",
+    )
+    parser.add_argument(
+        "--reconstructor",
+        default=RECONSTRUCTOR,
+        choices=sorted(RECONSTRUCTOR_CHOICES),
+        help=(
+            "Stage 4 backend: gs2mesh (default, multi-view 3DGS+TSDF) or "
+            "lito (Apple ml-lito, research-only, single-image-to-3D)"
+        ),
     )
     args = parser.parse_args()
 
@@ -117,33 +131,47 @@ Examples:
         print(f"  → {mask_path}")
 
     # =====================================================================
-    # Stage 4: gs2mesh Reconstruction
+    # Stage 4: 3D Reconstruction (gs2mesh | lito)
     # =====================================================================
     if skip_to <= 4:
+        backend = args.reconstructor
         print("\n" + "=" * 60)
-        print("Stage 4/6: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
+        if backend == "lito":
+            print("Stage 4/6: lito Reconstruction (Apple ml-lito, research-only)")
+        else:
+            print("Stage 4/6: gs2mesh Reconstruction (3DGS + Stereo + TSDF)")
         print("=" * 60)
         from scripts.vram_tier import detect_tier, uses_cpu_tsdf
 
-        if uses_cpu_tsdf():
+        if backend == "gs2mesh" and uses_cpu_tsdf():
             print(
                 f"[vram-gate] skipping — tier={detect_tier()} uses CPU TSDF"
             )
         else:
             ensure_vram_available(
                 min_free_mb=_VRAM_GATE_MIN_FREE_MB,
-                stage_name="before gs2mesh",
+                stage_name=f"before {backend}",
                 strict=_VRAM_GATE_STRICT,
             )
 
-        from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
+        if backend == "lito":
+            from scripts.stage_lito_reconstruct import run_lito
 
-        mesh_ply = run_gs2mesh(
-            frames_path,
-            sparse_path,
-            mask_path,
-            output_dir,
-        )
+            mesh_ply = run_lito(
+                frames_path,
+                sparse_path,
+                mask_path,
+                output_dir,
+            )
+        else:
+            from scripts.stage_gs2mesh_reconstruct import run_gs2mesh
+
+            mesh_ply = run_gs2mesh(
+                frames_path,
+                sparse_path,
+                mask_path,
+                output_dir,
+            )
         cleanup_pytorch_vram()
         print(f"  → Mesh: {mesh_ply}")
     else:
