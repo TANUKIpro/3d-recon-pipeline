@@ -71,7 +71,7 @@
     <div class="stage-connector stage-connector-main"></div>
     <div class="stage-pill" data-stage="4">
       <span class="stage-dot"></span>
-      <span class="stage-label" data-i18n="stage.gs2mesh">gs2mesh</span>
+      <span class="stage-label" id="stage-pill-reconstructor" data-i18n="stage.gs2mesh">gs2mesh</span>
       <span class="stage-progress">0%</span>
       <span class="stage-time"></span>
     </div>
@@ -153,10 +153,10 @@
         </div>
       </div>
 
-      <!-- Stage 4: gs2mesh Reconstruction -->
+      <!-- Stage 4: 3D Reconstruction (gs2mesh | lito) -->
       <div id="stage-panel-4" class="stage-panel">
         <div class="stage-panel-empty" id="stage-4-empty">
-          <p>Reconstructed mesh will appear here after gs2mesh completes.</p>
+          <p id="stage-4-empty-text">Reconstructed mesh will appear here after Stage 4 completes.</p>
         </div>
         <div id="three-container-4" class="three-container"></div>
       </div>
@@ -328,8 +328,19 @@
           </div>
         </div>
 
-        <!-- Stage 4: gs2mesh Reconstruction -->
+        <!-- Stage 4: 3D Reconstruction (gs2mesh | lito) -->
         <div class="config-section" data-stages="4">
+          <div class="form-group">
+            <label for="cfg-reconstructor">Reconstructor</label>
+            <select id="cfg-reconstructor">
+              <option value="gs2mesh" selected>gs2mesh (3DGS + DLNR + TSDF)</option>
+              <option value="lito">lito — research-only (Apple ml-lito)</option>
+            </select>
+            <div class="config-note" id="cfg-reconstructor-note">
+              gs2mesh is the default multi-view backend. lito uses a single image and is licensed for research purposes only — set <code>CLIP2MESH_ACCEPT_LITO_RESEARCH_LICENSE=1</code> to acknowledge.
+            </div>
+          </div>
+          <div id="cfg-gs2mesh-section">
           <div class="form-group">
             <label for="cfg-gs2mesh-preset">Quality Preset</label>
             <select id="cfg-gs2mesh-preset">
@@ -386,6 +397,12 @@
               </div>
             </div>
           </details>
+          </div><!-- /#cfg-gs2mesh-section -->
+          <div id="cfg-lito-section" class="hidden">
+            <div class="config-note">
+              lito is a single-image backend. Frame selection picks the highest-scoring frame automatically; no Stage 4 knobs are exposed yet.
+            </div>
+          </div>
         </div>
 
         <!-- Stage 5: Texture -->

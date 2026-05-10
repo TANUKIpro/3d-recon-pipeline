@@ -54,7 +54,8 @@ export class ConfigPanel {
       sam2_model: document.getElementById('cfg-sam2-model'),
       ground_plane_enabled: document.getElementById('cfg-ground-plane-enabled'),
 
-      // Stage 4: gs2mesh Reconstruction
+      // Stage 4: 3D Reconstruction (gs2mesh | lito)
+      reconstructor: document.getElementById('cfg-reconstructor'),
       gs2mesh_preset: document.getElementById('cfg-gs2mesh-preset'),
       gs2mesh_gs_iterations: document.getElementById('cfg-gs2mesh-gs-iterations'),
       gs2mesh_runtime_profile: document.getElementById('cfg-gs2mesh-runtime-profile'),
@@ -189,7 +190,8 @@ export class ConfigPanel {
       sam2_model: this._inputs.sam2_model.value,
       ground_plane_enabled: this._inputs.ground_plane_enabled?.checked ?? true,
 
-      // Stage 4: gs2mesh Reconstruction
+      // Stage 4: 3D Reconstruction (gs2mesh | lito)
+      reconstructor: this._inputs.reconstructor?.value || 'gs2mesh',
       gs2mesh_preset: this._inputs.gs2mesh_preset?.value || GS2MESH_PRESET_DEFAULT,
       gs2mesh_preset_base: this._gs2meshPresetBase,
       gs2mesh_gs_iterations: this._parsePositiveInt(
@@ -305,6 +307,13 @@ export class ConfigPanel {
         const display = document.getElementById('cfg-cleanup-lower-half-threshold-value');
         if (display) display.textContent = this._inputs.cleanup_lower_half_threshold.value;
       });
+    }
+
+    if (this._inputs.reconstructor) {
+      this._inputs.reconstructor.addEventListener('change', () => {
+        this._applyReconstructorVisibility();
+      });
+      this._applyReconstructorVisibility();
     }
 
     if (this._inputs.gs2mesh_preset) {
@@ -627,7 +636,11 @@ export class ConfigPanel {
       this._inputs.ground_plane_enabled.checked = cfg.ground_plane_enabled !== false;
     }
 
-    // Stage 4: gs2mesh Reconstruction
+    // Stage 4: 3D Reconstruction (gs2mesh | lito)
+    if (cfg.reconstructor != null && this._inputs.reconstructor) {
+      this._setSelectValue(this._inputs.reconstructor, String(cfg.reconstructor));
+      this._applyReconstructorVisibility();
+    }
     this._suppressGs2meshPresetSync = true;
     if (cfg.gs2mesh_preset != null && this._inputs.gs2mesh_preset) {
       this._setSelectValue(this._inputs.gs2mesh_preset, String(cfg.gs2mesh_preset));
@@ -760,6 +773,22 @@ export class ConfigPanel {
   _markGs2meshPresetCustom() {
     if (this._suppressGs2meshPresetSync || !this._inputs.gs2mesh_preset) return;
     this._inputs.gs2mesh_preset.value = GS2MESH_PRESET_CUSTOM;
+  }
+
+  _applyReconstructorVisibility() {
+    const value = (this._inputs.reconstructor?.value || 'gs2mesh').toLowerCase();
+    const gsSection = document.getElementById('cfg-gs2mesh-section');
+    const litoSection = document.getElementById('cfg-lito-section');
+    if (gsSection) gsSection.classList.toggle('hidden', value !== 'gs2mesh');
+    if (litoSection) litoSection.classList.toggle('hidden', value !== 'lito');
+    const pillLabel = document.getElementById('stage-pill-reconstructor');
+    if (pillLabel) pillLabel.textContent = value === 'lito' ? 'lito' : 'gs2mesh';
+    const stage4Empty = document.getElementById('stage-4-empty-text');
+    if (stage4Empty) {
+      stage4Empty.textContent = value === 'lito'
+        ? 'Reconstructed mesh will appear here after lito completes (research-only).'
+        : 'Reconstructed mesh will appear here after gs2mesh completes.';
+    }
   }
 }
 

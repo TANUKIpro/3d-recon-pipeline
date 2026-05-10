@@ -129,6 +129,32 @@ def _stage_gs2mesh_reconstruct(
     return result
 
 
+def _stage_lito_reconstruct(
+    frames_dir: str,
+    colmap_sparse_dir: str,
+    mask_dir: str | None,
+    output_dir: str,
+    progress_cb=None,
+    cancel_cb=None,
+    register_process=None,
+    unregister_process=None,
+) -> str:
+    """Run Stage 4 via the LiTo backend (research-only)."""
+    del progress_cb, cancel_cb, register_process, unregister_process
+    from scripts.stage_lito_reconstruct import run_lito
+    from scripts.vram_utils import cleanup_pytorch_vram
+
+    try:
+        return run_lito(
+            frames_dir,
+            colmap_sparse_dir,
+            mask_dir,
+            output_dir,
+        )
+    finally:
+        cleanup_pytorch_vram()
+
+
 def _stage_texture_bake(
     mesh_ply: str, poses_path: str, frames_dir: str,
     mask_dir: str, output_dir: str, texture_size: int,

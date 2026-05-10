@@ -39,6 +39,8 @@ from scripts.config_defaults import (
     GROUND_PLANE_ENABLED,
     POST_TEXTURE_CLEANUP_ENABLED,
     CLEANUP_LOWER_HALF_THRESHOLD,
+    RECONSTRUCTOR,
+    RECONSTRUCTOR_CHOICES,
     SAM2_DEFAULT_MODEL,
     TEXTURE_QUALITY_BOOST,
     TEXTURE_SIZE,
@@ -352,6 +354,11 @@ def build_pipeline_config(
         colmap_first_octave=parse_int(
             raw.get("colmap_first_octave"),
             env_int("COLMAP_FIRST_OCTAVE", COLMAP_FIRST_OCTAVE, env_map),
+        ),
+        reconstructor=parse_choice(
+            raw.get("reconstructor") or env_map.get("RECONSTRUCTOR"),
+            RECONSTRUCTOR_CHOICES,
+            RECONSTRUCTOR,
         ),
         gs2mesh_preset=str(gs2mesh_cfg["gs2mesh_preset"]),
         gs2mesh_preset_base=str(gs2mesh_cfg["gs2mesh_preset_base"]),

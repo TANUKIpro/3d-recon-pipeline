@@ -21,6 +21,7 @@ from scripts.dashboard.stage_wrappers import (
     _stage_extract_frames,
     _stage_extract_ground_plane,
     _stage_gs2mesh_reconstruct,
+    _stage_lito_reconstruct,
     _stage_post_texture_contact_cleanup_apply,
     _stage_post_texture_contact_cleanup_prepare,
     _stage_post_texture_contact_cleanup_skip,
@@ -413,28 +414,47 @@ async def run_pipeline(session: PipelineSession, sam2_service: SAM2Service) -> N
             _require_dir(session.frames_dir, "Extracted frames directory", must_have_suffix=".jpg")
             _require_file(session.poses_path, "Camera poses file")
 
-            # VRAM gate: ensure sufficient free VRAM before gs2mesh
+            backend = (cfg.reconstructor or "gs2mesh").lower()
+
+            # VRAM gate: ensure sufficient free VRAM before reconstruction
             with stage_log_scope(int(PipelineStage.GS2MESH_RECONSTRUCT)):
                 await asyncio.to_thread(_vram_gate)
 
-            # ── Stage 4: gs2mesh Reconstruction ──────────────────
-            await _run_stage(
-                session,
-                PipelineStage.GS2MESH_RECONSTRUCT,
-                _stage_gs2mesh_reconstruct,
-                session.frames_dir,
-                session.colmap_sparse_path or str(colmap_sparse_dir(output_dir)),
-                session.mask_dir,
-                output_dir,
-                cfg.to_gs2mesh_settings(),
-            )
+            # ── Stage 4: Reconstruction (gs2mesh | lito) ─────────
+            if backend == "lito":
+                await _run_stage(
+                    session,
+                    PipelineStage.GS2MESH_RECONSTRUCT,
+                    _stage_lito_reconstruct,
+                    session.frames_dir,
+                    session.colmap_sparse_path or str(colmap_sparse_dir(output_dir)),
+                    session.mask_dir,
+                    output_dir,
+                    label="lito Reconstruction (research-only)",
+                )
+            else:
+                await _run_stage(
+                    session,
+                    PipelineStage.GS2MESH_RECONSTRUCT,
+                    _stage_gs2mesh_reconstruct,
+                    session.frames_dir,
+                    session.colmap_sparse_path or str(colmap_sparse_dir(output_dir)),
+                    session.mask_dir,
+                    output_dir,
+                    cfg.to_gs2mesh_settings(),
+                )
             session.mesh_ply = str(object_mesh_path(output_dir))
             _check_cancelled(session)
+            next_msg = (
+                "lito Reconstruction complete. Continue to Texture Bake?"
+                if backend == "lito"
+                else "gs2mesh Reconstruction complete. Continue to Texture Bake?"
+            )
             await _wait_for_next_stage_confirmation(
                 session,
                 PipelineStage.GS2MESH_RECONSTRUCT,
                 PipelineStage.TEXTURE_BAKE,
-                "gs2mesh Reconstruction complete. Continue to Texture Bake?",
+                next_msg,
             )
 
         if start_stage <= int(PipelineStage.TEXTURE_BAKE):

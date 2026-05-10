@@ -23,6 +23,7 @@ from scripts.config_defaults import (
     EXTRACT_MAX_FRAMES,
     GS2MESH_MASK_DEPTH_MODE,
     GS2MESH_PRESET,
+    RECONSTRUCTOR,
     GS2MESH_GS_ITERATIONS,
     GS2MESH_RUNTIME_PROFILE,
     GS2MESH_STEREO_MODEL,
@@ -158,6 +159,7 @@ class PipelineConfig:
     colmap_use_gpu: bool = COLMAP_USE_GPU
     colmap_dsp_sift: bool = COLMAP_DSP_SIFT
     colmap_first_octave: int = COLMAP_FIRST_OCTAVE
+    reconstructor: str = RECONSTRUCTOR
     gs2mesh_preset: str = GS2MESH_PRESET
     gs2mesh_preset_base: str = GS2MESH_PRESET
     gs2mesh_gs_iterations: int = GS2MESH_GS_ITERATIONS

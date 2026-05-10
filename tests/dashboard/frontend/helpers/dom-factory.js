@@ -222,6 +222,14 @@ export function buildConfigPanelDOM() {
       <input type="checkbox" id="cfg-classical-downsample" checked>
       <input type="checkbox" id="cfg-mesh-repair-enabled" checked>
 
+      <select id="cfg-reconstructor">
+        <option value="gs2mesh" selected>gs2mesh</option>
+        <option value="lito">lito</option>
+      </select>
+      <div id="cfg-gs2mesh-section"></div>
+      <div id="cfg-lito-section" class="hidden"></div>
+      <span id="stage-pill-reconstructor">gs2mesh</span>
+      <span id="stage-4-empty-text"></span>
       <select id="cfg-gs2mesh-preset">
         <option value="default" selected>Default</option>
         <option value="high">High</option>
