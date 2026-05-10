@@ -497,6 +497,7 @@ def _carve_visual_hull_occupancy(
     depth_min: float,
     depth_max: float,
     tsdf_scale: float,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> tuple[np.ndarray, float]:
     extent = np.maximum(bbox_max - bbox_min, 1e-6)
     voxel_size = float(np.max(extent)) / float(max(1, voxel_resolution))
@@ -515,8 +516,9 @@ def _carve_visual_hull_occupancy(
     camera_items = list(masks_by_idx.items())
     effective_min_views = max(1, min(int(min_views), len(camera_items)))
     chunk_size = 250_000
+    total_chunks = max(1, (total + chunk_size - 1) // chunk_size)
 
-    for start in range(0, total, chunk_size):
+    for chunk_idx, start in enumerate(range(0, total, chunk_size), start=1):
         end = min(start + chunk_size, total)
         flat_idx = np.arange(start, end, dtype=np.int64)
         ix, iy, iz = np.unravel_index(flat_idx, dims)
@@ -553,6 +555,8 @@ def _carve_visual_hull_occupancy(
             where=valid_counts > 0,
         )
         occupancy[start:end] = enough_views & (inside_ratio >= consensus)
+        if progress_cb:
+            progress_cb(chunk_idx, total_chunks)
 
     return occupancy.reshape(dims), voxel_size
 
@@ -566,9 +570,12 @@ def _build_visual_hull(
     tsdf_scale: float,
     config: _SilhouetteFillConfig,
     extra_views_path: str | Path | None = None,
+    progress_cb: Callable[[float, str], None] | None = None,
 ) -> _VisualHull | None:
     from skimage import measure
 
+    if progress_cb:
+        progress_cb(0.05, "Loading SAM2 visual hull masks")
     masks_by_idx = _load_visual_hull_masks(
         root,
         len(left_cameras),
@@ -578,6 +585,11 @@ def _build_visual_hull(
         print("GPU TSDF: silhouette fill skipped (no left_mask.npy files)")
         return None
     hull_cameras = list(left_cameras)
+    if progress_cb:
+        progress_cb(
+            0.15,
+            f"Loaded SAM2 visual hull masks ({len(masks_by_idx)} views)",
+        )
     extra_views = _load_visual_hull_extra_views(
         extra_views_path,
         mask_dilate_px=config.mask_dilate_px,
@@ -585,7 +597,14 @@ def _build_visual_hull(
     for camera, mask in extra_views:
         masks_by_idx[len(hull_cameras)] = mask
         hull_cameras.append(camera)
+    if progress_cb and extra_views:
+        progress_cb(
+            0.20,
+            f"Loaded SAM2 primary extra visual hull views ({len(extra_views)} views)",
+        )
 
+    if progress_cb:
+        progress_cb(0.25, "Estimating SAM2 visual hull bounds")
     bounds = _estimate_visual_hull_bounds(
         hull_cameras,
         masks_by_idx,
@@ -598,6 +617,18 @@ def _build_visual_hull(
         return None
 
     bbox_min, bbox_max = bounds
+
+    def _carve_progress(chunk_idx: int, total_chunks: int) -> None:
+        if not progress_cb:
+            return
+        ratio = chunk_idx / max(total_chunks, 1)
+        progress_cb(
+            0.30 + min(ratio, 1.0) * 0.55,
+            f"Carving SAM2 visual hull ({chunk_idx}/{total_chunks})",
+        )
+
+    if progress_cb:
+        progress_cb(0.30, "Carving SAM2 visual hull")
     occupancy, voxel_size = _carve_visual_hull_occupancy(
         hull_cameras,
         masks_by_idx,
@@ -609,6 +640,7 @@ def _build_visual_hull(
         depth_min=depth_min,
         depth_max=depth_max,
         tsdf_scale=tsdf_scale,
+        progress_cb=_carve_progress,
     )
     occupied_count = int(np.count_nonzero(occupancy))
     total_voxels = int(occupancy.size)
@@ -619,6 +651,8 @@ def _build_visual_hull(
         )
         return None
 
+    if progress_cb:
+        progress_cb(0.90, "Extracting SAM2 visual hull mesh")
     padded = np.pad(occupancy.astype(np.float32), 1, constant_values=0.0)
     vertices, triangles, _normals, _values = measure.marching_cubes(
         padded,
@@ -817,7 +851,15 @@ def _gpu_tsdf_impl(
     )
     if silhouette_config.enabled and tsdf_use_mask and not tsdf_invert_mask:
         if progress_cb:
-            progress_cb(0.02, "Building SAM2 visual hull")
+            progress_cb(0.02, "Building SAM2 primary visual hull")
+
+        def _visual_hull_progress(local_pct: float, detail: str) -> None:
+            if progress_cb:
+                progress_cb(
+                    0.02 + max(0.0, min(1.0, local_pct)) * 0.13,
+                    detail,
+                )
+
         try:
             hull = _build_visual_hull(
                 root=root,
@@ -827,8 +869,11 @@ def _gpu_tsdf_impl(
                 tsdf_scale=tsdf_scale,
                 config=silhouette_config,
                 extra_views_path=silhouette_extra_views_path,
+                progress_cb=_visual_hull_progress,
             )
             if hull is not None:
+                if progress_cb:
+                    progress_cb(0.15, "Preparing SAM2 primary visual hull scene")
                 scene = _build_visual_hull_scene(hull)
                 silhouette_runtime = _SilhouetteFillRuntime(
                     scene=scene,
@@ -841,6 +886,8 @@ def _gpu_tsdf_impl(
                     f"voxel_size={hull.voxel_size:.6f}, "
                     f"mesh={len(hull.vertices)}v/{len(hull.triangles)}f)"
                 )
+                if progress_cb:
+                    progress_cb(0.16, "SAM2 primary visual hull ready")
             elif silhouette_config.depth_mode == "replace":
                 raise RuntimeError(
                     "SAM2 visual hull replace mode could not build a hull. "
@@ -875,6 +922,8 @@ def _gpu_tsdf_impl(
     # ------------------------------------------------------------------
     integrated_count = 0
     skipped_count = 0
+    fusion_start = 0.16 if silhouette_runtime is not None else 0.0
+    fusion_span = 0.64 if silhouette_runtime is not None else 0.80
 
     for step_i, cam_idx in enumerate(valid_indices):
         cam = left_cameras[cam_idx]
@@ -883,7 +932,7 @@ def _gpu_tsdf_impl(
         if progress_cb:
             pct = step_i / max(n_valid, 1)
             progress_cb(
-                pct * 0.80,
+                fusion_start + pct * fusion_span,
                 f"GPU TSDF fusion ({step_i + 1}/{n_valid})",
             )
 

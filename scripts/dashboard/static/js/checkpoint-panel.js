@@ -92,7 +92,7 @@ const DETAIL_MATCHERS = {
   4: [
     { re: /training 3d gaussian|3dgs training|iteration/i, idx: 0 },
     { re: /stereo depth|dlnr|running gs2mesh/i, idx: 1 },
-    { re: /tsdf|fusion|mesh extraction|collecting output/i, idx: 2 },
+    { re: /tsdf|fusion|mesh extraction|collecting output|SAM2 primary|visual hull|dense SAM2/i, idx: 2 },
     { re: /gs2mesh reconstruction complete|gs2mesh complete/i, idx: 3 },
   ],
   5: [

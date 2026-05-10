@@ -143,7 +143,9 @@ _CHECKPOINTS: dict[int, Any] = {
         _checkpoint(
             "s4.tsdf",
             label="TSDF fusion + mesh extraction",
-            patterns=_patterns(r"tsdf|fusion|mesh extraction|collecting output|GPU TSDF|VoxelBlockGrid"),
+            patterns=_patterns(
+                r"tsdf|fusion|mesh extraction|collecting output|GPU TSDF|VoxelBlockGrid|SAM2 primary|visual hull|dense SAM2"
+            ),
         ),
         _checkpoint(
             "s4.save",

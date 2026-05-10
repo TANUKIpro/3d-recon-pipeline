@@ -204,6 +204,38 @@ class TestVisualHullOccupancy(unittest.TestCase):
         self.assertTrue(bool(occupancy.any()))
         self.assertFalse(bool(occupancy.all()))
 
+    def test_carve_occupancy_reports_chunk_progress(self) -> None:
+        camera = {
+            "extrinsic": np.eye(4).tolist(),
+            "fx": 20.0,
+            "fy": 20.0,
+            "cx": 10.0,
+            "cy": 10.0,
+        }
+        mask = np.zeros((20, 20), dtype=bool)
+        mask[7:13, 7:13] = True
+        progress: list[tuple[int, int]] = []
+
+        _carve_visual_hull_occupancy(
+            [camera],
+            {0: mask},
+            bbox_min=np.array([-0.25, -0.25, 1.0], dtype=np.float64),
+            bbox_max=np.array([0.25, 0.25, 1.4], dtype=np.float64),
+            voxel_resolution=10,
+            min_views=1,
+            consensus=1.0,
+            depth_min=0.5,
+            depth_max=2.0,
+            tsdf_scale=1.0,
+            progress_cb=lambda current, total: progress.append(
+                (current, total)
+            ),
+        )
+
+        self.assertTrue(progress)
+        self.assertEqual(progress[-1][0], progress[-1][1])
+        self.assertGreaterEqual(progress[-1][1], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

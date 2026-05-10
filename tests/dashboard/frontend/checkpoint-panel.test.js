@@ -167,6 +167,19 @@ describe('CheckpointPanel', () => {
       expect(states[1]).toBe('running');
     });
 
+    it('stage 4 SAM2 primary visual hull detail advances to TSDF checkpoint', () => {
+      panel.applyStatusSnapshot({
+        stages: {
+          '4': { status: 'running', detail: 'Carving SAM2 primary visual hull (3/12)' },
+        },
+      });
+      panel.setActiveStage(4);
+      const states = readStates();
+      expect(states[0]).toBe('complete');
+      expect(states[1]).toBe('complete');
+      expect(states[2]).toBe('running');
+    });
+
     it('stage 7 ground-plane detail advances to repair checkpoint', () => {
       panel.applyStatusSnapshot({
         stages: {

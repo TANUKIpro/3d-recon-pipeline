@@ -719,6 +719,7 @@ class TestRunGs2meshMaskIntegration(unittest.TestCase):
             self.assertEqual(result, (str(refreshed_dir), None))
             mock_recompute.assert_called_once()
             report.assert_called()
+            self.assertIn("SAM2 primary", report.call_args_list[0].args[1])
 
     def test_refresh_sam2_masks_skips_non_replace_and_missing_clicks(self) -> None:
         with TemporaryDirectory() as tmp:

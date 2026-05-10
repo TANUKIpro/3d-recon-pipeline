@@ -778,14 +778,14 @@ def _prepare_sam2_primary_dense_extra_views(
     if not dense_records:
         return None
 
-    report(78.0, "Propagating dense SAM2 masks for SAM2 primary")
+    report(78.0, "Propagating dense SAM2 primary masks")
 
     def _progress(frame_idx: int, total: int) -> None:
         total = max(total, 1)
         ratio = (frame_idx + 1) / total
         report(
             78.0 + min(ratio, 1.0),
-            f"Propagating dense SAM2 masks ({frame_idx + 1}/{total})",
+            f"Propagating dense SAM2 primary masks ({frame_idx + 1}/{total})",
         )
 
     result = _recompute_sam2_masks_from_clicks(
@@ -835,14 +835,14 @@ def _maybe_refresh_sam2_primary_masks(
         return mask_dir, None
 
     print(f"SAM2 primary: recomputing masks from saved clicks: {click_path}")
-    report(78.0, "Recomputing SAM2 masks for SAM2 primary")
+    report(78.0, "Recomputing SAM2 primary masks")
 
     def _progress(frame_idx: int, total: int) -> None:
         total = max(total, 1)
         ratio = (frame_idx + 1) / total
         report(
             78.0 + min(ratio, 1.0),
-            f"Recomputing SAM2 masks ({frame_idx + 1}/{total})",
+            f"Recomputing SAM2 primary masks ({frame_idx + 1}/{total})",
         )
 
     result = _recompute_sam2_masks_from_clicks(

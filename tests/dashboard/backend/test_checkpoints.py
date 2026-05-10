@@ -139,6 +139,12 @@ class TestResolveCheckpointId(unittest.TestCase):
         )
         self.assertEqual(result, "s4.train_gs")
 
+    def test_stage4_sam2_primary_visual_hull_pattern(self) -> None:
+        result = resolve_checkpoint_id(
+            4, "Carving SAM2 primary visual hull (3/12)"
+        )
+        self.assertEqual(result, "s4.tsdf")
+
     def test_stage5_export_pattern(self) -> None:
         result = resolve_checkpoint_id(
             5, "Exporting textured mesh"
