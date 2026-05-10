@@ -32,6 +32,8 @@ export class OverviewPanel {
       });
     }
 
+    document.addEventListener('click', () => this._closeMenus());
+
     // Wire sort selector
     this._sortSelect = document.getElementById('overview-sort');
     if (this._sortSelect) {
@@ -68,6 +70,14 @@ export class OverviewPanel {
     if (!this._grid) return;
     for (const card of this._grid.children) {
       card.classList.toggle('overview-card-active', card.dataset.objectName === name);
+    }
+  }
+
+  _closeMenus() {
+    if (!this._grid) return;
+    for (const menu of this._grid.querySelectorAll('.overview-card-menu.open')) {
+      menu.classList.remove('open');
+      menu.querySelector('.overview-menu-trigger')?.setAttribute('aria-expanded', 'false');
     }
   }
 
@@ -126,6 +136,8 @@ export class OverviewPanel {
       thumbWrap.classList.add('overview-thumb-placeholder');
     };
     thumbWrap.appendChild(img);
+    const menu = this._createActionMenu(obj);
+    if (menu) thumbWrap.appendChild(menu);
     card.appendChild(thumbWrap);
 
     // ── Card body ──
@@ -248,6 +260,72 @@ export class OverviewPanel {
     card.appendChild(actions);
 
     return card;
+  }
+
+  _createActionMenu(obj) {
+    if (obj.locked) return null;
+
+    const menu = document.createElement('div');
+    menu.className = 'overview-card-menu';
+    menu.addEventListener('click', (e) => e.stopPropagation());
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'overview-menu-trigger';
+    trigger.title = 'Actions';
+    trigger.setAttribute('aria-label', `Actions for ${obj.name}`);
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    for (let i = 0; i < 3; i++) {
+      trigger.appendChild(document.createElement('span'));
+    }
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = menu.classList.contains('open');
+      this._closeMenus();
+      menu.classList.toggle('open', !wasOpen);
+      trigger.setAttribute('aria-expanded', String(!wasOpen));
+    });
+    menu.appendChild(trigger);
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'overview-menu-dropdown';
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'overview-menu-item overview-menu-danger';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      this._closeMenus();
+      await this._deleteObject(obj.name);
+    });
+    dropdown.appendChild(deleteBtn);
+    menu.appendChild(dropdown);
+
+    return menu;
+  }
+
+  async _deleteObject(name) {
+    const ok = window.confirm(`Delete "${name}" and all output files?`);
+    if (!ok) return;
+
+    try {
+      const res = await fetch(`/api/pipeline/objects/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        window.alert(data.error || `Failed to delete ${name}`);
+        return;
+      }
+
+      this._objects = this._objects.filter((obj) => obj.name !== name);
+      if (this._activeObject === name) this._activeObject = null;
+      this._render();
+      this._stale = false;
+    } catch (e) {
+      window.alert(`Failed to delete ${name}: ${e.message}`);
+    }
   }
 
   _fmtDate(iso) {

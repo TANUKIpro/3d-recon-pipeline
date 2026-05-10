@@ -3,6 +3,8 @@ import { buildOverviewDOM } from './helpers/dom-factory.js';
 import { useFetchMock } from './helpers/fetch-mock.js';
 import { OverviewPanel } from '../../../scripts/dashboard/static/js/overview.js';
 
+const flushPromises = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 describe('OverviewPanel', () => {
   let panel;
   const fetchMock = useFetchMock();
@@ -29,6 +31,10 @@ describe('OverviewPanel', () => {
       artifacts: [],
     },
   ];
+
+  function cardFor(name) {
+    return document.querySelector(`.overview-card[data-object-name="${name}"]`);
+  }
 
   beforeEach(() => {
     buildOverviewDOM();
@@ -57,11 +63,11 @@ describe('OverviewPanel', () => {
     const cards = grid.querySelectorAll('.overview-card');
     expect(cards.length).toBe(2);
 
-    const name = cards[0].querySelector('.overview-card-name');
+    const name = cardFor('coffee-mug').querySelector('.overview-card-name');
     expect(name.textContent).toBe('coffee-mug');
 
-    const dots = cards[0].querySelectorAll('.overview-dot');
-    expect(dots.length).toBe(8);
+    const dots = cardFor('coffee-mug').querySelectorAll('.overview-dot');
+    expect(dots.length).toBe(6);
   });
 
   // 30.3 — Card click → onOpenObject callback
@@ -70,10 +76,10 @@ describe('OverviewPanel', () => {
     panel.onOpenObject = cb;
     await panel.refresh();
 
-    const card = document.querySelector('.overview-card');
+    const card = cardFor('coffee-mug');
     card.click();
 
-    expect(cb).toHaveBeenCalledWith('coffee-mug');
+    expect(cb).toHaveBeenCalledWith('coffee-mug', undefined);
   });
 
   // 30.4 — New button → onNewPipeline callback
@@ -125,5 +131,86 @@ describe('OverviewPanel', () => {
 
     const empty = document.getElementById('overview-empty');
     expect(empty.classList.contains('hidden')).toBe(false);
+  });
+
+  it('shows delete menu for unlocked cards', async () => {
+    await panel.refresh();
+
+    const card = cardFor('coffee-mug');
+
+    expect(card.querySelector('.overview-menu-trigger')).not.toBeNull();
+    expect(card.querySelector('.overview-menu-dropdown')).not.toBeNull();
+  });
+
+  it('menu click does not open object', async () => {
+    const cb = vi.fn();
+    panel.onOpenObject = cb;
+    await panel.refresh();
+
+    document.querySelector('.overview-menu-trigger').click();
+
+    expect(cb).not.toHaveBeenCalled();
+    expect(document.querySelector('.overview-card-menu').classList.contains('open')).toBe(true);
+  });
+
+  it('confirming delete calls endpoint and removes card', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await panel.refresh();
+    fetchMock.clearRoutes();
+    fetchMock.addRoute('/api/pipeline/objects/coffee-mug', (url, options) => {
+      expect(options.method).toBe('DELETE');
+      return fetchMock.jsonResponse({ status: 'deleted', object_name: 'coffee-mug' });
+    });
+
+    cardFor('coffee-mug').querySelector('.overview-menu-trigger').click();
+    await cardFor('coffee-mug').querySelector('.overview-menu-danger').click();
+    await flushPromises();
+
+    const cards = [...document.querySelectorAll('.overview-card')];
+    expect(cards.map((c) => c.dataset.objectName)).toEqual(['chair-01']);
+  });
+
+  it('cancelling delete does not call delete endpoint', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    await panel.refresh();
+    const before = globalThis.fetch.mock.calls.length;
+
+    cardFor('coffee-mug').querySelector('.overview-menu-trigger').click();
+    await cardFor('coffee-mug').querySelector('.overview-menu-danger').click();
+    await flushPromises();
+
+    const deleteCalls = globalThis.fetch.mock.calls.slice(before)
+      .filter((c) => String(c[0]).includes('/api/pipeline/objects/'));
+    expect(deleteCalls.length).toBe(0);
+    expect(document.querySelectorAll('.overview-card').length).toBe(2);
+  });
+
+  it('locked cards do not expose delete menu', async () => {
+    fetchMock.addRoute('/api/pipeline/objects', fetchMock.jsonResponse({
+      objects: [{ ...fakeObjects[0], locked: true, branch: 'other' }],
+      active_object: null,
+    }));
+
+    await panel.refresh();
+
+    expect(document.querySelector('.overview-card-locked')).not.toBeNull();
+    expect(document.querySelector('.overview-menu-trigger')).toBeNull();
+  });
+
+  it('failed delete leaves card visible', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window, 'alert').mockImplementation(() => {});
+    await panel.refresh();
+    fetchMock.clearRoutes();
+    fetchMock.addRoute('/api/pipeline/objects/coffee-mug', fetchMock.jsonResponse({
+      error: 'Cannot delete objects while pipeline is running',
+    }, 409));
+
+    cardFor('coffee-mug').querySelector('.overview-menu-trigger').click();
+    await cardFor('coffee-mug').querySelector('.overview-menu-danger').click();
+    await flushPromises();
+
+    expect(window.alert).toHaveBeenCalledWith('Cannot delete objects while pipeline is running');
+    expect(document.querySelectorAll('.overview-card').length).toBe(2);
   });
 });

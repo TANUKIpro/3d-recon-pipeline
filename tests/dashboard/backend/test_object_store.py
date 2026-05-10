@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
     STAGE_RESET_PATHS,
+    delete_object_dir,
     infer_resume_stage,
     list_objects,
     reset_outputs_from_stage,
@@ -234,6 +235,27 @@ class TestListObjects(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             result = list_objects(Path(tmp), "main")
             self.assertEqual(result, [])
+
+
+class TestDeleteObjectDir(unittest.TestCase):
+    """delete_object_dir removes only validated object directories."""
+
+    def test_deletes_existing_object_dir(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            obj = base / "objects" / "@main" / "test-obj"
+            obj.mkdir(parents=True)
+            (obj / "artifact.txt").write_text("data")
+
+            deleted = delete_object_dir("test-obj", base, "main")
+
+            self.assertEqual(deleted, obj)
+            self.assertFalse(obj.exists())
+
+    def test_missing_object_raises_file_not_found(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                delete_object_dir("missing", Path(tmp), "main")
 
 
 if __name__ == "__main__":

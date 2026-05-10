@@ -184,6 +184,7 @@ app.include_router(_post_texture_cleanup_router)
 from scripts.dashboard.routes.pipeline import (  # noqa: E402, F401
     pipeline_cancel,
     pipeline_confirm_next,
+    pipeline_delete_object,
     pipeline_load_object,
     pipeline_object_info,
     pipeline_objects,

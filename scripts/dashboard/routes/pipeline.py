@@ -16,6 +16,7 @@ from scripts.dashboard.configuration import (
 from scripts.dashboard.dependencies import VIDEO_EXTENSIONS, get_state
 from scripts.dashboard.object_store import (
     OBJECT_META_FILE,
+    delete_object_dir,
     infer_resume_stage,
     list_all_objects,
     list_objects,
@@ -32,7 +33,7 @@ from scripts.dashboard.object_store import (
     write_object_meta,
 )
 from scripts.dashboard.pipeline_runner import broadcast, run_pipeline
-from scripts.dashboard.state import PipelineStage
+from scripts.dashboard.state import PipelineConfig, PipelineStage
 
 router = APIRouter()
 
@@ -128,6 +129,32 @@ async def pipeline_load_object(body: dict | None = None):
             "pipeline_status": session.to_status_dict(),
         }
     )
+
+
+@router.delete("/api/pipeline/objects/{name}")
+async def pipeline_delete_object(name: str):
+    state = get_state()
+    session = state.session
+    if session.running:
+        return JSONResponse({"error": "Cannot delete objects while pipeline is running"}, status_code=409)
+
+    try:
+        obj_name = validate_object_name(name)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+    base_output = resolve_output_root(state.output_dir)
+    try:
+        delete_object_dir(obj_name, base_output, state.branch_slug)
+    except FileNotFoundError:
+        return JSONResponse({"error": "Object not found"}, status_code=404)
+
+    if session.config.object_name == obj_name:
+        session.reset()
+        session.config = PipelineConfig()
+        await broadcast(session, {"type": "status", **session.to_status_dict()})
+
+    return JSONResponse({"status": "deleted", "object_name": obj_name})
 
 
 @router.get("/api/pipeline/video-info")

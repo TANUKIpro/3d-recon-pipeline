@@ -21,6 +21,7 @@ from scripts.dashboard.object_store import (
 from scripts.dashboard.app import (
     pipeline_cancel,
     pipeline_confirm_next,
+    pipeline_delete_object,
     pipeline_load_object,
     pipeline_objects,
     pipeline_object_info,
@@ -684,6 +685,72 @@ class TestPipelineLoadObjectEndpoint(unittest.IsolatedAsyncioTestCase):
         session.running = True
         response = await pipeline_load_object({"name": "test-obj"})
         self.assertEqual(response.status_code, 409)
+
+
+# ── Pipeline delete-object endpoint ───────────────────────────────
+
+
+class TestPipelineDeleteObjectEndpoint(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        state = get_state()
+        self._orig_output_dir = state.output_dir
+        state.output_dir = self._tmp.name
+        self._snapshot = {
+            "running": session.running,
+            "config": session.config,
+        }
+
+    def tearDown(self) -> None:
+        session.running = self._snapshot["running"]
+        session.config = self._snapshot["config"]
+        get_state().output_dir = self._orig_output_dir
+        self._tmp.cleanup()
+
+    @patch("scripts.dashboard.routes.pipeline.broadcast", new_callable=AsyncMock)
+    async def test_delete_success_removes_object_dir(self, mock_broadcast: AsyncMock) -> None:
+        session.running = False
+        slug = get_state().branch_slug
+        obj = Path(self._tmp.name) / "objects" / f"@{slug}" / "test-obj"
+        obj.mkdir(parents=True)
+        (obj / "artifact.txt").write_text("data")
+
+        response = await pipeline_delete_object("test-obj")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(obj.exists())
+        mock_broadcast.assert_not_awaited()
+
+    async def test_delete_invalid_name_returns_400(self) -> None:
+        session.running = False
+        response = await pipeline_delete_object("..")
+        self.assertEqual(response.status_code, 400)
+
+    async def test_delete_missing_returns_404(self) -> None:
+        session.running = False
+        response = await pipeline_delete_object("missing")
+        self.assertEqual(response.status_code, 404)
+
+    async def test_delete_while_running_returns_409(self) -> None:
+        session.running = True
+        response = await pipeline_delete_object("test-obj")
+        self.assertEqual(response.status_code, 409)
+
+    @patch("scripts.dashboard.routes.pipeline.broadcast", new_callable=AsyncMock)
+    async def test_delete_active_object_clears_session(self, mock_broadcast: AsyncMock) -> None:
+        from scripts.dashboard.state import PipelineConfig
+
+        session.running = False
+        slug = get_state().branch_slug
+        obj = Path(self._tmp.name) / "objects" / f"@{slug}" / "active-obj"
+        obj.mkdir(parents=True)
+        session.config = PipelineConfig(object_name="active-obj", output_dir=str(obj))
+
+        response = await pipeline_delete_object("active-obj")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(session.config.object_name, "")
+        mock_broadcast.assert_awaited_once()
 
 
 # ── Pipeline start endpoint ──────────────────────────────────────

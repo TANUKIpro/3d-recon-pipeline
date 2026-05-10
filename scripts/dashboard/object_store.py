@@ -224,6 +224,16 @@ def object_dir(object_name: str, base_output: Path, slug: str) -> Path:
     return branch_objects_root(base_output, slug) / object_name
 
 
+def delete_object_dir(object_name: str, base_output: Path, slug: str) -> Path:
+    """Delete a current-branch object directory and return its former path."""
+    obj_name = validate_object_name(object_name)
+    out = object_dir(obj_name, base_output, slug)
+    if not out.is_dir():
+        raise FileNotFoundError(obj_name)
+    shutil.rmtree(out)
+    return out
+
+
 def list_preview_files(out: Path) -> list[dict[str, Any]]:
     files: list[dict[str, Any]] = []
     if not out.is_dir():
